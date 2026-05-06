@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 
@@ -18,6 +19,12 @@ export default function LoginPage() {
         <Suspense fallback={<FormSkeleton />}>
           <LoginForm />
         </Suspense>
+        <p className="mt-6 text-center text-sm text-slate-500">
+          New to Kanea?{' '}
+          <Link href="/signup" className="font-medium text-indigo-700 hover:underline">
+            Create a workspace
+          </Link>
+        </p>
       </div>
     </main>
   );
