@@ -4,11 +4,20 @@
 ARG APP_NAME=web-app
 ARG APP_PORT=3000
 
-# ---------- Deps ----------
-FROM node:20-alpine AS deps
+# ---------- Builder ----------
+# Single builder stage: copy workspace metadata + lockfile first so the
+# install layer caches on lockfile changes only; then copy the rest of the
+# repo and run the Nx build. Order matters — installing AFTER `COPY . .`
+# avoids any local node_modules overwriting the workspace install.
+FROM node:20-alpine AS builder
+ARG APP_NAME
 WORKDIR /repo
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
+
+# Workspace skeleton — just enough for `pnpm install` to resolve the graph.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY nx.json tsconfig.base.json ./
 COPY apps/web-app/package.json apps/web-app/package.json
@@ -19,16 +28,7 @@ COPY libs ./libs
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
-# ---------- Builder ----------
-FROM node:20-alpine AS builder
-ARG APP_NAME
-WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
-
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production
-
-COPY --from=deps /repo/node_modules ./node_modules
+# Now bring in the rest of the source and build.
 COPY . .
 
 RUN pnpm --filter "@kanea/${APP_NAME}" build
@@ -55,6 +55,5 @@ COPY --from=builder --chown=nextjs:nodejs /repo/apps/${APP_NAME}/.next/static ./
 USER nextjs
 EXPOSE ${APP_PORT}
 
-# Re-bake the path so CMD doesn't rely on a build arg at runtime.
 ENV APP_NAME=${APP_NAME}
 CMD ["sh", "-c", "exec node apps/${APP_NAME}/server.js"]

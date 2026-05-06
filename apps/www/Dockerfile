@@ -4,10 +4,14 @@
 ARG APP_NAME=www
 ARG APP_PORT=3001
 
-# ---------- Deps ----------
-FROM node:20-alpine AS deps
+# ---------- Builder ----------
+FROM node:20-alpine AS builder
+ARG APP_NAME
 WORKDIR /repo
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY nx.json tsconfig.base.json ./
@@ -19,16 +23,6 @@ COPY libs ./libs
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
-# ---------- Builder ----------
-FROM node:20-alpine AS builder
-ARG APP_NAME
-WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
-
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production
-
-COPY --from=deps /repo/node_modules ./node_modules
 COPY . .
 
 RUN pnpm --filter "@kanea/${APP_NAME}" build
