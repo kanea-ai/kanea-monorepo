@@ -9,11 +9,13 @@ from app.api.deps import (
     get_password_hasher,
     get_settings,
     get_token_service,
+    get_workspace_repository,
 )
 from app.application.auth.service import AuthService
 from app.core.config import Settings
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
+from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtTokenService
 
@@ -48,10 +50,17 @@ def test_get_credentials_repository_wraps_session() -> None:
     assert isinstance(repo, SqlAlchemyCredentialsRepository)
 
 
+def test_get_workspace_repository_wraps_session() -> None:
+    session = MagicMock()
+    repo = get_workspace_repository(session)
+    assert isinstance(repo, SqlAlchemyWorkspaceRepository)
+
+
 def test_get_auth_service_wires_dependencies() -> None:
     session = MagicMock()
     config = get_settings()
     service = get_auth_service(
+        workspaces=get_workspace_repository(session),
         members=get_member_repository(session),
         credentials=get_credentials_repository(session),
         hasher=get_password_hasher(),

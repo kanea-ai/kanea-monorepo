@@ -32,5 +32,17 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
+    """Session-per-request with explicit commit/rollback.
+
+    Without an explicit commit() the AsyncSession context manager closes
+    the session in a still-open transaction, which Postgres rolls back —
+    so writes from `await session.flush()` are silently lost. Endpoints
+    that raise propagate the exception after rollback.
+    """
     async with get_sessionmaker()() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

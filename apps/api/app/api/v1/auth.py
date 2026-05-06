@@ -3,10 +3,23 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import AuthServiceDep
-from app.application.auth.schemas import AgentTokenRequest, LoginRequest, TokenResponse
-from app.domain.exceptions import AuthenticationError
+from app.application.auth.schemas import (
+    AgentTokenRequest,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+)
+from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(payload: RegisterRequest, service: AuthServiceDep) -> TokenResponse:
+    try:
+        return await service.register(payload)
+    except EmailAlreadyExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)

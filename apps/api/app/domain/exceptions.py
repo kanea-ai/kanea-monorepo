@@ -9,6 +9,10 @@ class AuthenticationError(DomainError):
     """Raised when supplied credentials cannot be verified."""
 
 
+class EmailAlreadyExistsError(DomainError):
+    """Raised on signup when the email collides with an existing member."""
+
+
 class InvalidMemberTypeError(DomainError):
     """Raised when an operation receives a member of the wrong type."""
 

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_service
 from app.application.auth.schemas import TokenResponse
-from app.domain.exceptions import AuthenticationError
+from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
 from app.main import app
 
 
@@ -31,7 +31,7 @@ def test_login_returns_token(client: TestClient, auth_service: AsyncMock) -> Non
     auth_service.login.return_value = TokenResponse(access_token="jwt", expires_in=3600)
 
     response = client.post(
-        "/auth/login",
+        "/api/v1/auth/login",
         json={"email": "alice@kanea.ai", "password": "hunter2"},  # pragma: allowlist secret
     )
 
@@ -48,7 +48,7 @@ def test_login_invalid_credentials_returns_401(client: TestClient, auth_service:
     auth_service.login.side_effect = AuthenticationError("invalid email or password")
 
     response = client.post(
-        "/auth/login",
+        "/api/v1/auth/login",
         json={"email": "alice@kanea.ai", "password": "hunter2"},  # pragma: allowlist secret
     )
 
@@ -58,7 +58,7 @@ def test_login_invalid_credentials_returns_401(client: TestClient, auth_service:
 
 
 def test_login_validation_error_returns_422(client: TestClient) -> None:
-    response = client.post("/auth/login", json={"email": "not-an-email", "password": ""})
+    response = client.post("/api/v1/auth/login", json={"email": "not-an-email", "password": ""})
     assert response.status_code == 422
 
 
@@ -67,7 +67,9 @@ def test_agent_token_returns_token(client: TestClient, auth_service: AsyncMock) 
         access_token="agent-jwt", expires_in=900
     )
 
-    response = client.post("/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "s3cret"})
+    response = client.post(
+        "/api/v1/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "s3cret"}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -79,12 +81,59 @@ def test_agent_token_returns_token(client: TestClient, auth_service: AsyncMock) 
 def test_agent_token_invalid_returns_401(client: TestClient, auth_service: AsyncMock) -> None:
     auth_service.issue_agent_token.side_effect = AuthenticationError("invalid agent credentials")
 
-    response = client.post("/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "x"})
+    response = client.post(
+        "/api/v1/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "x"}
+    )
 
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid agent credentials"
 
 
 def test_agent_token_validation_error_returns_422(client: TestClient) -> None:
-    response = client.post("/auth/agent-token", json={"agent_id": "not-a-uuid", "secret": "s"})
+    response = client.post(
+        "/api/v1/auth/agent-token", json={"agent_id": "not-a-uuid", "secret": "s"}
+    )
+    assert response.status_code == 422
+
+
+# ---------- register ----------
+
+
+_VALID_REGISTER = {
+    "email": "alice@kanea.ai",
+    "password": "hunter2hunter2",  # pragma: allowlist secret
+    "full_name": "Alice",
+    "workspace_name": "Acme",
+}
+
+
+def test_register_returns_201_with_token(client: TestClient, auth_service: AsyncMock) -> None:
+    auth_service.register.return_value = TokenResponse(access_token="new-jwt", expires_in=3600)
+
+    response = client.post("/api/v1/auth/register", json=_VALID_REGISTER)
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "access_token": "new-jwt",
+        "token_type": "bearer",
+        "expires_in": 3600,
+    }
+    auth_service.register.assert_awaited_once()
+
+
+def test_register_duplicate_email_returns_409(client: TestClient, auth_service: AsyncMock) -> None:
+    auth_service.register.side_effect = EmailAlreadyExistsError(
+        "an account with this email already exists"
+    )
+
+    response = client.post("/api/v1/auth/register", json=_VALID_REGISTER)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "an account with this email already exists"
+
+
+def test_register_validation_error_returns_422(client: TestClient) -> None:
+    # Password under min_length=8 must be rejected before the service is hit.
+    bad = {**_VALID_REGISTER, "password": "short"}  # pragma: allowlist secret
+    response = client.post("/api/v1/auth/register", json=bad)
     assert response.status_code == 422

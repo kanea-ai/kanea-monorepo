@@ -28,3 +28,15 @@ class SqlAlchemyCredentialsRepository:
         stmt = select(CredentialsModel).where(CredentialsModel.member_id == member_id)
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
+
+    async def create(self, credentials: Credentials) -> Credentials:
+        row = CredentialsModel(
+            id=credentials.id,
+            member_id=credentials.member_id,
+            password_hash=credentials.password_hash,
+            agent_secret_hash=credentials.agent_secret_hash,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
