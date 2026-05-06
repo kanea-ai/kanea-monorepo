@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.auth.ports import (
@@ -13,10 +16,15 @@ from app.application.auth.ports import (
     TokenService,
 )
 from app.application.auth.service import AuthService
+from app.application.tasks.ports import TaskRepository
+from app.application.tasks.schemas import Principal
+from app.application.tasks.service import TaskService
 from app.core.config import Settings, settings
+from app.domain.enums import MemberType
 from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
+from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
 
@@ -70,3 +78,63 @@ def get_auth_service(
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+
+def get_task_repository(session: SessionDep) -> TaskRepository:
+    return SqlAlchemyTaskRepository(session)
+
+
+def get_task_service(
+    tasks: Annotated[TaskRepository, Depends(get_task_repository)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
+) -> TaskService:
+    return TaskService(tasks=tasks, members=members)
+
+
+TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
+
+_bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")
+
+
+def get_current_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
+    tokens: Annotated[TokenService, Depends(get_token_service)],
+) -> Principal:
+    if not isinstance(tokens, JwtTokenService):  # pragma: no cover - DI invariant
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="token service does not support decoding",
+        )
+    try:
+        payload = tokens.decode(credentials.credentials)
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    try:
+        member_id = UUID(str(payload["sub"]))
+        workspace_id = UUID(str(payload["workspace_id"]))
+        member_type = MemberType(str(payload["type"]))
+        priority = int(str(payload["priority"]))
+        scope = str(payload["scope"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="malformed token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    return Principal(
+        member_id=member_id,
+        workspace_id=workspace_id,
+        type=member_type,
+        priority=priority,
+        scope=scope,
+    )
+
+
+PrincipalDep = Annotated[Principal, Depends(get_current_principal)]

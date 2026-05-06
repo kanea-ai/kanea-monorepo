@@ -5,8 +5,11 @@ source = app
 [report]
 include =
     app/application/auth/*
+    app/application/tasks/*
     app/api/v1/auth.py
+    app/api/v1/tasks.py
     app/infrastructure/security/*
+    app/infrastructure/repositories/task.py
     app/api/deps.py
 show_missing = True
 skip_covered = False
