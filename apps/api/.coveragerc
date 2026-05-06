@@ -1,0 +1,17 @@
+[run]
+branch = True
+source = app
+
+[report]
+include =
+    app/application/auth/*
+    app/api/v1/auth.py
+    app/infrastructure/security/*
+    app/api/deps.py
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if TYPE_CHECKING:
+    \.\.\.
