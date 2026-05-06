@@ -79,12 +79,22 @@ resource "google_cloud_run_v2_service" "svc" {
   }
 }
 
-# Allow public invocation through the load balancer; the service itself
-# only accepts traffic from the internal LB ingress controller.
+# Allow public invocation through the load balancer for the three public-facing
+# services. admin-panel is intentionally excluded — it stays private and will
+# get a scoped invoker grant (e.g., to an IAP-fronted service account or an
+# authenticated identity) when access requirements are decided.
+locals {
+  public_services = ["web-app", "www", "api"]
+}
+
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  for_each = google_cloud_run_v2_service.svc
-  name     = each.value.name
-  location = each.value.location
+  for_each = toset(local.public_services)
+  name     = google_cloud_run_v2_service.svc[each.key].name
+  location = google_cloud_run_v2_service.svc[each.key].location
   role     = "roles/run.invoker"
   member   = "allUsers"
+
+  # The org-policy override below must exist before this binding can be
+  # written; without it, the API rejects allUsers as a member.
+  depends_on = [google_org_policy_policy.allowed_policy_member_domains]
 }
