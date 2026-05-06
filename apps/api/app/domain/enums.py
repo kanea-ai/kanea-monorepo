@@ -11,5 +11,6 @@ class MemberType(StrEnum):
 class TaskStatus(StrEnum):
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
+    BLOCKED = "BLOCKED"
     DONE = "DONE"
     CANCELLED = "CANCELLED"

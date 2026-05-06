@@ -32,6 +32,13 @@ class DelegateTaskRequest(BaseModel):
     member_id: UUID
 
 
+class UpdateTaskStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: TaskStatus
+    blocked_reason: str | None = None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,6 +51,7 @@ class TaskResponse(BaseModel):
     description: str | None
     assignee_id: UUID | None
     due_at: datetime | None
+    blocked_reason: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -59,6 +67,7 @@ class TaskResponse(BaseModel):
             description=task.description,
             assignee_id=task.assignee_id,
             due_at=task.due_at,
+            blocked_reason=task.blocked_reason,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
