@@ -51,3 +51,18 @@ yarn-error.log*
 
 # Detect-secrets baseline is committed; runtime caches are not
 .secrets.cache
+
+# Terraform / OpenTofu
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Provider lock file is intentionally tracked.
+!**/.terraform.lock.hcl

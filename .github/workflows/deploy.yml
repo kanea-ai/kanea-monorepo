@@ -1,0 +1,127 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Comma-separated subset to deploy (default: all four). e.g. api,web-app'
+        required: false
+        default: 'api,web-app,www,admin-panel'
+
+# OIDC for Workload Identity Federation. `contents: read` so checkout works on
+# protected refs without granting anything else.
+permissions:
+  contents: read
+  id-token: write
+
+# A single concurrency group per ref means a newer push cancels an older
+# in-flight deploy of the same branch. We never want two pipelines racing
+# `gcloud run services update` against the same service.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT: kanea-prod-env
+  GCP_REGION: europe-west1
+  AR_HOST: europe-west1-docker.pkg.dev
+  AR_REPO: kanea
+
+jobs:
+  # ----------------------------------------------------------------------
+  # Compute the deploy matrix once. On push: all four services. On manual:
+  # whatever was passed in the `services` input.
+  # ----------------------------------------------------------------------
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      image_tag: ${{ steps.set.outputs.image_tag }}
+    steps:
+      - id: set
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            services="${{ github.event.inputs.services }}"
+          else
+            services="api,web-app,www,admin-panel"
+          fi
+          # Convert comma list -> JSON array for matrix expansion.
+          matrix_json=$(jq -cn --arg s "$services" '$s | split(",") | map({service: .})')
+          echo "matrix={\"include\":$matrix_json}" >> "$GITHUB_OUTPUT"
+          # Immutable tag = commit SHA. We also push `latest` for humans.
+          echo "image_tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+  # ----------------------------------------------------------------------
+  # Build + push each service image in parallel.
+  # ----------------------------------------------------------------------
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.AR_HOST }} --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:${{ needs.plan.outputs.image_tag }}
+            ${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:latest
+          cache-from: type=registry,ref=${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:buildcache
+          cache-to: type=registry,ref=${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:buildcache,mode=max
+          provenance: false
+
+  # ----------------------------------------------------------------------
+  # Roll the new revision into Cloud Run. `services update --image` matches
+  # the `ignore_changes = [image]` lifecycle on the Tofu-managed service:
+  # Tofu owns the shape, the pipeline owns the tag.
+  # ----------------------------------------------------------------------
+  deploy:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy ${{ matrix.service }} to Cloud Run
+        run: |
+          gcloud run services update "${{ matrix.service }}" \
+            --project="${{ env.GCP_PROJECT }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --image="${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:${{ needs.plan.outputs.image_tag }}" \
+            --quiet
+
+      - name: Show resulting revision
+        run: |
+          gcloud run services describe "${{ matrix.service }}" \
+            --project="${{ env.GCP_PROJECT }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --format='value(status.latestReadyRevisionName,status.url)'
