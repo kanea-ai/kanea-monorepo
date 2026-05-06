@@ -53,7 +53,10 @@ export function KanbanBoard() {
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
-      <div className="grid h-full grid-cols-4 gap-4 p-6">
+      {/* Below md, columns scroll horizontally so each one stays usable
+          (a 4-col grid would crush them at phone widths). At md+ we
+          go back to an even grid. */}
+      <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4 md:grid md:snap-none md:grid-cols-4 md:gap-4 md:overflow-visible md:p-6">
         {COLUMNS.map((col) => (
           <Column key={col.id} id={col.id} label={col.label} tasks={grouped[col.id]} />
         ))}
@@ -64,7 +67,7 @@ export function KanbanBoard() {
 
 function Column({ id, label, tasks }: { id: TaskStatus; label: string; tasks: Task[] }) {
   return (
-    <div className="flex min-h-0 flex-col rounded-lg bg-slate-100 p-3">
+    <div className="flex min-h-0 w-72 shrink-0 snap-start flex-col rounded-lg bg-slate-100 p-3 md:w-auto md:shrink">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">{label}</h2>
         <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">

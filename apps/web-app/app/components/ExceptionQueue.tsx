@@ -16,7 +16,7 @@ export function ExceptionQueue() {
   };
 
   return (
-    <aside className="flex h-full w-96 shrink-0 flex-col border-l border-slate-200 bg-white">
+    <aside className="flex h-72 shrink-0 flex-col border-t border-slate-200 bg-white lg:h-full lg:w-96 lg:border-l lg:border-t-0">
       <header className="border-b border-slate-200 p-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">

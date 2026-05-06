@@ -1,9 +1,15 @@
 // Thin fetch wrapper for the FastAPI backend.
-// Auth: token is read from localStorage on the client; tests/server reads use
-// the empty-string fallback and the route returns 401, which surfaces in
-// React Query's error state.
+//
+// All paths are relative — the LB routes `/api/*` to the api Cloud Run service
+// in production, and `next dev` proxies via the same path during local dev
+// (with the api running on :8000 you can override with NEXT_PUBLIC_API_BASE_URL).
+// Auth token lives in localStorage under `kanea_token`; api401 throws a typed
+// error so callers can redirect to /login.
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+const V1 = '/api/v1';
+
+export const TOKEN_STORAGE_KEY = 'kanea_token';
 
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'BLOCKED' | 'DONE' | 'CANCELLED';
 
@@ -27,9 +33,30 @@ export interface UpdateStatusPayload {
   blocked_reason?: string | null;
 }
 
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public detail: string,
+  ) {
+    super(detail);
+    this.name = 'ApiError';
+  }
+}
+
 function authHeader(): HeadersInit {
   if (typeof window === 'undefined') return {};
-  const token = window.localStorage.getItem('kanea_token');
+  const token = window.localStorage.getItem(TOKEN_STORAGE_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -48,18 +75,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       .json()
       .then((b: { detail?: string }) => b.detail)
       .catch(() => response.statusText);
-    throw new Error(detail || `HTTP ${response.status}`);
+    throw new ApiError(response.status, detail || `HTTP ${response.status}`);
   }
   return response.json() as Promise<T>;
 }
 
+export const authApi = {
+  login: (payload: LoginPayload) =>
+    request<TokenResponse>(`${V1}/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
 export const tasksApi = {
   list: (status?: TaskStatus) => {
     const qs = status ? `?status_filter=${status}` : '';
-    return request<Task[]>(`/tasks${qs}`);
+    return request<Task[]>(`${V1}/tasks${qs}`);
   },
   updateStatus: (id: string, payload: UpdateStatusPayload) =>
-    request<Task>(`/tasks/${id}/status`, {
+    request<Task>(`${V1}/tasks/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
