@@ -12,8 +12,13 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
-app.include_router(auth_router)
-app.include_router(tasks_router)
+# Mount under /api/v1 to match the public surface routed by the LB
+# (`/api/*` → this service, no rewrite). Internal routers keep their own
+# `/auth`, `/tasks` prefixes — so the public path is `/api/v1/auth/login`,
+# `/api/v1/tasks`, etc., which is what the blueprint specifies.
+API_V1_PREFIX = "/api/v1"
+app.include_router(auth_router, prefix=API_V1_PREFIX)
+app.include_router(tasks_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/health", tags=["health"])
