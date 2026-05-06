@@ -82,7 +82,7 @@ def test_delegate_returns_200_with_updated_task(
     task_service.delegate.return_value = _task_response(assignee_id=target_id)
 
     response = client.post(
-        f"/tasks/{uuid4()}/delegate",
+        f"/api/v1/tasks/{uuid4()}/delegate",
         json={"member_id": str(target_id)},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -100,7 +100,7 @@ def test_agent_delegating_to_ceo_returns_403(client: TestClient, task_service: A
     )
 
     response = client.post(
-        f"/tasks/{uuid4()}/delegate",
+        f"/api/v1/tasks/{uuid4()}/delegate",
         json={"member_id": str(uuid4())},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -115,7 +115,7 @@ def test_delegate_unknown_task_returns_404(client: TestClient, task_service: Asy
     task_service.delegate.side_effect = TaskNotFoundError("task not found")
 
     response = client.post(
-        f"/tasks/{uuid4()}/delegate",
+        f"/api/v1/tasks/{uuid4()}/delegate",
         json={"member_id": str(uuid4())},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -126,7 +126,7 @@ def test_delegate_unknown_task_returns_404(client: TestClient, task_service: Asy
 
 def test_delegate_invalid_payload_returns_422(client: TestClient) -> None:
     response = client.post(
-        f"/tasks/{uuid4()}/delegate",
+        f"/api/v1/tasks/{uuid4()}/delegate",
         json={"member_id": "not-a-uuid"},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -135,7 +135,7 @@ def test_delegate_invalid_payload_returns_422(client: TestClient) -> None:
 
 def test_delegate_invalid_task_id_returns_422(client: TestClient) -> None:
     response = client.post(
-        "/tasks/not-a-uuid/delegate",
+        "/api/v1/tasks/not-a-uuid/delegate",
         json={"member_id": str(uuid4())},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -146,7 +146,7 @@ def test_delegate_requires_bearer_token() -> None:
     """Without overriding get_current_principal, missing Authorization is a 403/401."""
     client = TestClient(app)
     response = client.post(
-        f"/tasks/{uuid4()}/delegate",
+        f"/api/v1/tasks/{uuid4()}/delegate",
         json={"member_id": str(uuid4())},
     )
     # FastAPI's HTTPBearer with auto_error=True returns 403 when the header

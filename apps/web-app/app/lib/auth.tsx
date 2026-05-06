@@ -11,12 +11,13 @@ import {
   type ReactNode,
 } from 'react';
 
-import { TOKEN_STORAGE_KEY, authApi, type LoginPayload } from './api';
+import { TOKEN_STORAGE_KEY, authApi, type LoginPayload, type RegisterPayload } from './api';
 
 interface AuthContextValue {
   token: string | null;
   isReady: boolean;
   login: (payload: LoginPayload) => Promise<void>;
+  register: (payload: RegisterPayload) => Promise<void>;
   logout: () => void;
 }
 
@@ -41,13 +42,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.access_token);
   }, []);
 
+  const register = useCallback(async (payload: RegisterPayload) => {
+    const res = await authApi.register(payload);
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, res.access_token);
+    setToken(res.access_token);
+  }, []);
+
   const logout = useCallback(() => {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
     router.replace('/login');
   }, [router]);
 
-  const value = useMemo(() => ({ token, isReady, login, logout }), [token, isReady, login, logout]);
+  const value = useMemo(
+    () => ({ token, isReady, login, register, logout }),
+    [token, isReady, login, register, logout],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

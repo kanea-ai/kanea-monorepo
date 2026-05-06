@@ -38,6 +38,13 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface RegisterPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  workspace_name: string;
+}
+
 export interface TokenResponse {
   access_token: string;
   token_type: string;
@@ -83,6 +90,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const authApi = {
   login: (payload: LoginPayload) =>
     request<TokenResponse>(`${V1}/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  register: (payload: RegisterPayload) =>
+    request<TokenResponse>(`${V1}/auth/register`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

@@ -14,6 +14,7 @@ from app.application.auth.ports import (
     MemberRepository,
     PasswordHasher,
     TokenService,
+    WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
 from app.application.tasks.ports import TaskRepository
@@ -25,6 +26,7 @@ from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
+from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
 
@@ -63,13 +65,19 @@ def get_credentials_repository(session: SessionDep) -> CredentialsRepository:
     return SqlAlchemyCredentialsRepository(session)
 
 
+def get_workspace_repository(session: SessionDep) -> WorkspaceRepository:
+    return SqlAlchemyWorkspaceRepository(session)
+
+
 def get_auth_service(
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
     credentials: Annotated[CredentialsRepository, Depends(get_credentials_repository)],
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
 ) -> AuthService:
     return AuthService(
+        workspaces=workspaces,
         members=members,
         credentials=credentials,
         hasher=hasher,

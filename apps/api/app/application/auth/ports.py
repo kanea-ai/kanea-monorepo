@@ -3,18 +3,25 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import Credentials, Member
+from app.domain.entities import Credentials, Member, Workspace
 
 
 @runtime_checkable
 class MemberRepository(Protocol):
     async def get_by_email(self, email: str) -> Member | None: ...
     async def get_by_id(self, member_id: UUID) -> Member | None: ...
+    async def create(self, member: Member) -> Member: ...
 
 
 @runtime_checkable
 class CredentialsRepository(Protocol):
     async def get_for_member(self, member_id: UUID) -> Credentials | None: ...
+    async def create(self, credentials: Credentials) -> Credentials: ...
+
+
+@runtime_checkable
+class WorkspaceRepository(Protocol):
+    async def create(self, workspace: Workspace) -> Workspace: ...
 
 
 @runtime_checkable

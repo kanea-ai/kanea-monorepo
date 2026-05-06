@@ -35,3 +35,18 @@ class SqlAlchemyMemberRepository:
     async def get_by_id(self, member_id: UUID) -> Member | None:
         row = await self._session.get(MemberModel, member_id)
         return _to_entity(row) if row is not None else None
+
+    async def create(self, member: Member) -> Member:
+        row = MemberModel(
+            id=member.id,
+            workspace_id=member.workspace_id,
+            team_id=member.team_id,
+            type=member.type,
+            name=member.name,
+            email=member.email,
+            priority=member.priority,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)

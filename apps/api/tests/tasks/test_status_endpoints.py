@@ -90,7 +90,7 @@ def test_list_tasks_filters_by_status(client: TestClient, task_service: AsyncMoc
     task_service.list_for_workspace.return_value = [blocked]
 
     response = client.get(
-        "/tasks?status_filter=BLOCKED",
+        "/api/v1/tasks?status_filter=BLOCKED",
         headers={"Authorization": "Bearer dummy"},
     )
 
@@ -107,7 +107,7 @@ def test_list_tasks_filters_by_status(client: TestClient, task_service: AsyncMoc
 def test_list_tasks_without_filter_returns_all(client: TestClient, task_service: AsyncMock) -> None:
     task_service.list_for_workspace.return_value = []
 
-    response = client.get("/tasks", headers={"Authorization": "Bearer dummy"})
+    response = client.get("/api/v1/tasks", headers={"Authorization": "Bearer dummy"})
 
     assert response.status_code == 200
     _, kwargs = task_service.list_for_workspace.call_args
@@ -123,7 +123,7 @@ def test_resolve_blocked_task_returns_in_progress(
     )
 
     response = client.patch(
-        f"/tasks/{uuid4()}/status",
+        f"/api/v1/tasks/{uuid4()}/status",
         json={"status": "IN_PROGRESS"},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -140,7 +140,7 @@ def test_invalid_transition_returns_409(client: TestClient, task_service: AsyncM
     )
 
     response = client.patch(
-        f"/tasks/{uuid4()}/status",
+        f"/api/v1/tasks/{uuid4()}/status",
         json={"status": "IN_PROGRESS"},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -154,7 +154,7 @@ def test_status_update_unknown_task_returns_404(
     task_service.update_status.side_effect = TaskNotFoundError("task not found")
 
     response = client.patch(
-        f"/tasks/{uuid4()}/status",
+        f"/api/v1/tasks/{uuid4()}/status",
         json={"status": "IN_PROGRESS"},
         headers={"Authorization": "Bearer dummy"},
     )
@@ -164,7 +164,7 @@ def test_status_update_unknown_task_returns_404(
 
 def test_status_update_invalid_status_value_returns_422(client: TestClient) -> None:
     response = client.patch(
-        f"/tasks/{uuid4()}/status",
+        f"/api/v1/tasks/{uuid4()}/status",
         json={"status": "NOT_A_STATUS"},
         headers={"Authorization": "Bearer dummy"},
     )
