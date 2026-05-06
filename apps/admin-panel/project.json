@@ -1,0 +1,43 @@
+{
+  "name": "admin-panel",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/admin-panel/app",
+  "tags": ["scope:admin-panel", "type:app", "lang:ts"],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/admin-panel",
+        "command": "next dev --port 3002"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/.next"],
+      "options": {
+        "cwd": "apps/admin-panel",
+        "command": "next build"
+      }
+    },
+    "start": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "cwd": "apps/admin-panel",
+        "command": "next start --port 3002"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default"],
+      "options": {
+        "cwd": "apps/admin-panel",
+        "command": "next lint"
+      }
+    }
+  }
+}

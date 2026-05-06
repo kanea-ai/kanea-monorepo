@@ -1,0 +1,13 @@
+node_modules
+.nx
+.next
+dist
+build
+coverage
+out
+.venv
+__pycache__
+pnpm-lock.yaml
+poetry.lock
+*.tsbuildinfo
+.secrets.baseline
