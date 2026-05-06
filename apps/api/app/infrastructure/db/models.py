@@ -160,6 +160,7 @@ class TaskModel(TimestampMixin, Base):
     )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="tasks")
     creator: Mapped[MemberModel] = relationship(foreign_keys=[created_by_id])

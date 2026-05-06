@@ -31,18 +31,25 @@ def _principal(*, priority: int, workspace_id=None, member_type=MemberType.HUMAN
     )
 
 
-def _task_response(*, assignee_id=None, workspace_id=None) -> TaskResponse:
+def _task_response(
+    *,
+    assignee_id=None,
+    workspace_id=None,
+    status: TaskStatus = TaskStatus.PENDING,
+    blocked_reason: str | None = None,
+) -> TaskResponse:
     now = datetime.now(UTC)
     return TaskResponse(
         id=uuid4(),
         workspace_id=workspace_id or uuid4(),
         created_by_id=uuid4(),
         title="Investigate latency spike",
-        status=TaskStatus.PENDING,
+        status=status,
         priority=3,
         description=None,
         assignee_id=assignee_id,
         due_at=None,
+        blocked_reason=blocked_reason,
         created_at=now,
         updated_at=now,
     )

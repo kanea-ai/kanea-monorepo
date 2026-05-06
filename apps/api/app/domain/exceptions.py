@@ -24,3 +24,7 @@ class DelegationForbiddenError(DomainError):
     (CEO = 1, Agent = 5). A requester may only delegate to members whose
     numerical priority is strictly greater than their own.
     """
+
+
+class InvalidStatusTransitionError(DomainError):
+    """Raised when a status update is not allowed by the workflow rules."""

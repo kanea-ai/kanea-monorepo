@@ -67,5 +67,6 @@ class Task:
     description: str | None = None
     assignee_id: UUID | None = None
     due_at: datetime | None = None
+    blocked_reason: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
