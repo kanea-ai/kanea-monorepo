@@ -10,8 +10,10 @@ ARG APP_NAME
 WORKDIR /repo
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production
+# Do NOT set NODE_ENV=production here — pnpm honors it and would skip
+# devDependencies (tailwindcss, postcss, typescript), which `next build`
+# needs to compile assets. NODE_ENV is set on the runner stage only.
+ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY nx.json tsconfig.base.json ./
