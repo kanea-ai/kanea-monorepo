@@ -48,5 +48,7 @@ USER app
 
 EXPOSE 8080
 
-# Cloud Run sets $PORT; bind 0.0.0.0 so the container is reachable.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
+# Shell form so $PORT is expanded by /bin/sh at container start. Bind to
+# 0.0.0.0 (Cloud Run's healthcheck hits the container IP, not localhost).
+# Default to 8080 if $PORT is somehow unset — Cloud Run always sets it.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
