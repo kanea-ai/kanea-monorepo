@@ -46,4 +46,10 @@ resource "google_vpc_access_connector" "main" {
   min_instances = 2
   max_instances = 5
   machine_type  = "e2-micro"
+
+  # Match the provider's actual default (e2-micro * max_instances=5 → 500
+  # Mbps). Without this, plan shows spurious drift suggesting 300 Mbps and
+  # forces replacement, which would briefly drop egress for all Cloud Run
+  # services routed through this connector.
+  max_throughput = 500
 }
