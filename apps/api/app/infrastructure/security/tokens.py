@@ -51,6 +51,7 @@ class JwtTokenService:
             "exp": int((now + timedelta(seconds=ttl)).timestamp()),
             "workspace_id": str(member.workspace_id),
             "type": member.type.value,
+            "priority": member.priority,
             "scope": scope,
         }
         token = jwt.encode(payload, self._settings.secret, algorithm=self._settings.algorithm)
