@@ -36,8 +36,17 @@ repos:
             poetry\.lock|
             \.secrets\.baseline|
             .*\.min\.(js|css)|
-            .*\.lock
+            .*\.lock|
+            \.env.*
           )$
+
+  # Added: Ruff for ultra-fast Python linting & import sorting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^apps/api/.*\.py$
 
   - repo: https://github.com/psf/black
     rev: 24.10.0
