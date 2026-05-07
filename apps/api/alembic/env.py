@@ -16,7 +16,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# configparser treats `%` as an interpolation operator, and our DATABASE_URL
+# has URL-encoded `%XX` escapes from urlencode(random_password) on the Tofu
+# side. Doubling the percents is the canonical escape; SQLAlchemy still sees
+# the original `%XX` after configparser un-interpolates.
+config.set_main_option("sqlalchemy.url", str(settings.database_url).replace("%", "%%"))
 
 target_metadata = Base.metadata
 
