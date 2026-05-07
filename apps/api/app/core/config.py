@@ -35,5 +35,29 @@ class Settings(BaseSettings):
     # can call this api running on :8000.
     cors_origins: list[str] = []
 
+    # OAuth (Social SSO). Client secrets are pulled from Secret Manager in
+    # prod; locally they live in apps/api/.env (gitignored). When unset, the
+    # corresponding provider is treated as disabled — /oauth/{provider}/login
+    # returns 503 instead of redirecting to a misconfigured authorize URL.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+
+    # Where the api redirects the browser after a successful OAuth callback.
+    # The frontend's /auth/callback route reads `?token=…` and stores it.
+    # Defaults to localhost for dev; in prod, this is https://app.kanea.ai
+    # via env var on the api Cloud Run service.
+    oauth_post_login_redirect: str = "http://localhost:3000/auth/callback"
+
+    # Public base URL the api is reachable at for OAuth providers' redirects.
+    # Used to construct the `redirect_uri` parameter handed to Google/GitHub —
+    # must match what's whitelisted in the provider console exactly.
+    api_base_url: str = "http://localhost:8000"
+
+    # Set Secure on the oauth_state cookie. False in local dev (HTTP),
+    # True in prod where the LB terminates TLS.
+    cookie_secure: bool = False
+
 
 settings = Settings()

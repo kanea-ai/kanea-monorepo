@@ -59,6 +59,18 @@ variable "cloud_run_max_instances" {
   default     = 20
 }
 
+variable "google_oauth_client_id" {
+  type        = string
+  description = "Google OAuth client ID. Not sensitive (visible in URLs anyway). Empty disables Google SSO for the env."
+  default     = ""
+}
+
+variable "github_oauth_client_id" {
+  type        = string
+  description = "GitHub OAuth client ID. Empty disables GitHub SSO for the env."
+  default     = ""
+}
+
 variable "staging_allow_ip" {
   type        = string
   description = "CIDR allowlisted for the staging Cloud Armor policy (deny-all otherwise). Ignored in prod. Default is the RFC 5737 documentation range so a fresh apply never accidentally grants real-world access."

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from app.domain.enums import MemberType, TaskStatus
+from app.domain.enums import MemberType, OAuthProvider, TaskStatus
 
 
 @dataclass(slots=True)
@@ -54,6 +54,10 @@ class Credentials:
     agent_secret_hash: str | None
     created_at: datetime
     updated_at: datetime
+    # OAuth identity. (provider, oauth_id) is globally unique — see
+    # uq_credentials_oauth_provider_oauth_id in migration 0003.
+    oauth_provider: OAuthProvider | None = None
+    oauth_id: str | None = None
 
 
 @dataclass(slots=True)

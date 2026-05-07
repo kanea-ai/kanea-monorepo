@@ -9,6 +9,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.auth.oauth import (
+    GitHubOAuthClient,
+    GoogleOAuthClient,
+    OAuthClient,
+)
 from app.application.auth.ports import (
     CredentialsRepository,
     MemberRepository,
@@ -21,7 +26,7 @@ from app.application.tasks.ports import TaskRepository
 from app.application.tasks.schemas import Principal
 from app.application.tasks.service import TaskService
 from app.core.config import Settings, settings
-from app.domain.enums import MemberType
+from app.domain.enums import MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
@@ -146,3 +151,36 @@ def get_current_principal(
 
 
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
+
+
+def get_oauth_client(provider: OAuthProvider, config: Settings) -> OAuthClient:
+    """Build an OAuth client for the requested provider.
+
+    Returns None-equivalent (raises HTTPException) when the corresponding
+    env vars aren't set — keeps the api boot-able even if only one of the
+    two providers is configured (e.g. GitHub-only local dev).
+    """
+    if provider is OAuthProvider.GOOGLE:
+        if not config.google_oauth_client_id or not config.google_oauth_client_secret:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="google oauth is not configured on this environment",
+            )
+        return GoogleOAuthClient(
+            client_id=config.google_oauth_client_id,
+            client_secret=config.google_oauth_client_secret,
+        )
+    if provider is OAuthProvider.GITHUB:
+        if not config.github_oauth_client_id or not config.github_oauth_client_secret:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="github oauth is not configured on this environment",
+            )
+        return GitHubOAuthClient(
+            client_id=config.github_oauth_client_id,
+            client_secret=config.github_oauth_client_secret,
+        )
+    raise HTTPException(  # pragma: no cover - exhaustive enum
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"unsupported oauth provider: {provider}",
+    )

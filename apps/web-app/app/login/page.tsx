@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 
+import { Divider, OAuthButtons } from '../components/OAuthButtons';
 import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
@@ -15,6 +16,8 @@ export default function LoginPage() {
           <h1 className="text-xl font-semibold text-slate-900">Sign in to Kanea</h1>
           <p className="mt-1 text-sm text-slate-500">Use your workspace credentials.</p>
         </header>
+        <OAuthButtons mode="login" />
+        <Divider />
         {/* Suspense boundary required by Next.js when reading search params on the client. */}
         <Suspense fallback={<FormSkeleton />}>
           <LoginForm />

@@ -14,3 +14,8 @@ class TaskStatus(StrEnum):
     BLOCKED = "BLOCKED"
     DONE = "DONE"
     CANCELLED = "CANCELLED"
+
+
+class OAuthProvider(StrEnum):
+    GOOGLE = "GOOGLE"
+    GITHUB = "GITHUB"
