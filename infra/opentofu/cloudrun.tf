@@ -71,9 +71,21 @@ resource "google_cloud_run_v2_service" "svc" {
   # CD deploys new revisions out-of-band by setting the image tag. Tofu owns
   # the service shape (resources, env, scaling, ingress) but defers to the
   # pipeline on which image tag is currently live.
+  #
+  # `client` and `client_version` are stamped onto the resource by Cloud Run
+  # whenever it's mutated via `gcloud run services update` (i.e. every CD
+  # run). HCL doesn't set them, so without ignoring them Tofu sees drift on
+  # every plan -> rolls a new revision on every apply -> reuses the
+  # currently-live image. If that image happens to be broken (e.g. a
+  # mid-rollout state where the new image hasn't been pushed yet via
+  # gcloud), the spurious roll fails its startup probe and aborts the
+  # workflow before the real `deploy` step has a chance to run. That's
+  # exactly the failure mode that stranded api:0026969f6af5 in production.
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
+      client,
+      client_version,
     ]
   }
 
