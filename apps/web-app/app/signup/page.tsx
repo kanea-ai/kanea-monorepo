@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 
+import { Divider, OAuthButtons } from '../components/OAuthButtons';
 import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
@@ -17,6 +18,8 @@ export default function SignupPage() {
             One account. You become the workspace owner.
           </p>
         </header>
+        <OAuthButtons mode="signup" />
+        <Divider />
         <Suspense fallback={<FormSkeleton />}>
           <SignupForm />
         </Suspense>

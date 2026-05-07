@@ -65,6 +65,76 @@ resource "google_cloud_run_v2_service" "svc" {
           }
         }
       }
+
+      # ---------- OAuth env (api-only) ----------
+      # Plaintext: provider client IDs (not sensitive), API_BASE_URL +
+      # OAUTH_POST_LOGIN_REDIRECT (env-derived URLs), COOKIE_SECURE flag.
+      # Secret Manager: the two client secrets, mounted via secret_key_ref.
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "GOOGLE_OAUTH_CLIENT_ID"
+          value = var.google_oauth_client_id
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name = "GOOGLE_OAUTH_CLIENT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.google_oauth_client_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "GITHUB_OAUTH_CLIENT_ID"
+          value = var.github_oauth_client_id
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name = "GITHUB_OAUTH_CLIENT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.github_oauth_client_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "API_BASE_URL"
+          value = "https://app.${var.domain}"
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "OAUTH_POST_LOGIN_REDIRECT"
+          value = "https://app.${var.domain}/auth/callback"
+        }
+      }
+
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "COOKIE_SECURE"
+          value = "true"
+        }
+      }
     }
   }
 
@@ -87,7 +157,11 @@ resource "google_cloud_run_v2_service" "svc" {
     ]
   }
 
-  depends_on = [google_secret_manager_secret_iam_member.api_db_url_accessor]
+  depends_on = [
+    google_secret_manager_secret_iam_member.api_db_url_accessor,
+    google_secret_manager_secret_iam_member.api_google_oauth_accessor,
+    google_secret_manager_secret_iam_member.api_github_oauth_accessor,
+  ]
 }
 
 # Allow public invocation through the load balancer for the three public-facing

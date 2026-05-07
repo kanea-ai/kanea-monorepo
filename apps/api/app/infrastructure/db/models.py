@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import ENUM as PgEnum  # noqa: N811
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import MemberType, TaskStatus
+from app.domain.enums import MemberType, OAuthProvider, TaskStatus
 from app.infrastructure.db.base import Base, TimestampMixin
 
 member_type_enum = PgEnum(
@@ -31,6 +31,13 @@ member_type_enum = PgEnum(
 task_status_enum = PgEnum(
     TaskStatus,
     name="task_status",
+    values_callable=lambda enum: [member.value for member in enum],
+    create_type=True,
+)
+
+oauth_provider_enum = PgEnum(
+    OAuthProvider,
+    name="oauth_provider",
     values_callable=lambda enum: [member.value for member in enum],
     create_type=True,
 )
@@ -112,8 +119,15 @@ class CredentialsModel(TimestampMixin, Base):
     __tablename__ = "credentials"
     __table_args__ = (
         CheckConstraint(
-            "password_hash IS NOT NULL OR agent_secret_hash IS NOT NULL",
+            (
+                "password_hash IS NOT NULL "
+                "OR agent_secret_hash IS NOT NULL "
+                "OR (oauth_provider IS NOT NULL AND oauth_id IS NOT NULL)"
+            ),
             name="at_least_one_secret",
+        ),
+        UniqueConstraint(
+            "oauth_provider", "oauth_id", name="uq_credentials_oauth_provider_oauth_id"
         ),
     )
 
@@ -126,6 +140,8 @@ class CredentialsModel(TimestampMixin, Base):
     )
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     agent_secret_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oauth_provider: Mapped[OAuthProvider | None] = mapped_column(oauth_provider_enum, nullable=True)
+    oauth_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     member: Mapped[MemberModel] = relationship(back_populates="credentials")
 

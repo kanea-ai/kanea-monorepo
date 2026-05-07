@@ -39,3 +39,13 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class OAuthCallbackRequest(BaseModel):
+    """Internal value object — the auth route hands these to the service
+    after parsing the GET callback's query params."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=2048)
+    redirect_uri: str

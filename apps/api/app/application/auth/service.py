@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from app.application.auth.oauth import OAuthIdentity
 from app.application.auth.ports import (
     CredentialsRepository,
     MemberRepository,
@@ -107,6 +108,71 @@ class AuthService:
             raise AuthenticationError("invalid agent credentials")
 
         token, ttl = self.tokens.issue_agent_token(member)
+        return TokenResponse(access_token=token, expires_in=ttl)
+
+    async def oauth_login(self, identity: OAuthIdentity) -> TokenResponse:
+        """Resolve an OAuth identity to a JWT.
+
+        Resolution order:
+          1) (provider, oauth_id) already known -> log that member in.
+          2) Same email exists on a member -> link the OAuth identity to
+             that member's credentials and log them in.
+          3) Brand new -> provision a Workspace + HUMAN Member (priority=1,
+             owner) + Credentials carrying the OAuth identity, no password.
+        """
+        existing_oauth_creds = await self.credentials.get_by_oauth_identity(
+            identity.provider.value, identity.oauth_id
+        )
+        if existing_oauth_creds is not None:
+            member = await self.members.get_by_id(existing_oauth_creds.member_id)
+            if member is None:  # pragma: no cover - DB invariant
+                raise AuthenticationError("dangling oauth credentials")
+            token, ttl = self.tokens.issue_human_token(member)
+            return TokenResponse(access_token=token, expires_in=ttl)
+
+        existing_member = await self.members.get_by_email(identity.email)
+        if existing_member is not None:
+            if existing_member.type is not MemberType.HUMAN:
+                raise AuthenticationError("email is registered to a non-human member")
+            await self.credentials.link_oauth_identity(
+                existing_member.id, identity.provider.value, identity.oauth_id
+            )
+            token, ttl = self.tokens.issue_human_token(existing_member)
+            return TokenResponse(access_token=token, expires_in=ttl)
+
+        # First-time signup via OAuth — auto-provision a workspace.
+        workspace = await self.workspaces.create(
+            Workspace(
+                id=uuid4(),
+                name=f"{identity.name}'s workspace" if identity.name else "Workspace",
+                slug=_generate_slug(identity.name or "workspace"),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        member = await self.members.create(
+            Member(
+                id=uuid4(),
+                workspace_id=workspace.id,
+                type=MemberType.HUMAN,
+                name=identity.name or identity.email,
+                email=identity.email,
+                priority=OWNER_PRIORITY,
+            )
+        )
+        await self.credentials.create(
+            Credentials(
+                id=uuid4(),
+                member_id=member.id,
+                password_hash=None,
+                agent_secret_hash=None,
+                oauth_provider=identity.provider,
+                oauth_id=identity.oauth_id,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        token, ttl = self.tokens.issue_human_token(member)
         return TokenResponse(access_token=token, expires_in=ttl)
 
     async def _load_agent(self, agent_id: UUID) -> Member:
