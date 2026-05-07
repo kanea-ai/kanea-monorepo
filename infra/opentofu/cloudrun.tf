@@ -45,21 +45,20 @@ resource "google_cloud_run_v2_service" "svc" {
         }
       }
 
-      env {
-        name  = "DATABASE_HOST"
-        value = google_sql_database_instance.main.private_ip_address
-      }
-      env {
-        name  = "DATABASE_NAME"
-        value = google_sql_database.app.name
-      }
-      env {
-        name  = "DATABASE_USER"
-        value = google_sql_user.app.name
-      }
-      env {
-        name  = "DATABASE_PASSWORD"
-        value = random_password.db.result
+      # DATABASE_URL is only injected on the api service. The Next.js
+      # services don't talk to the DB directly — keeping the secret off
+      # their service specs avoids unnecessary IAM grants.
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.db_url.secret_id
+              version = "latest"
+            }
+          }
+        }
       }
     }
   }
@@ -77,6 +76,12 @@ resource "google_cloud_run_v2_service" "svc" {
       template[0].containers[0].image,
     ]
   }
+
+  # Make sure the secret accessor IAM grant is in place before any service
+  # tries to deploy. Only the api service references the secret, but
+  # listing the dep here is harmless for the others and keeps the apply
+  # order obvious.
+  depends_on = [google_secret_manager_secret_iam_member.api_db_url_accessor]
 }
 
 # Allow public invocation through the load balancer for the three public-facing
