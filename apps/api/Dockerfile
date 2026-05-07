@@ -48,6 +48,15 @@ USER app
 
 EXPOSE 8080
 
-# Shell form so $PORT is expanded by /bin/sh at container start. Bind to
-# 0.0.0.0 (Cloud Run's healthcheck hits the container IP, not localhost).
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Run Alembic migrations to head, then start the server. Idempotent —
+# alembic compares against the alembic_version table and no-ops if already
+# at head, so the cost on warm starts is one round-trip. Concurrent cold
+# starts are safe: Alembic takes an advisory lock for the duration of
+# `upgrade`, so other instances queue and then no-op.
+#
+# `exec` replaces the shell with uvicorn so PID 1 is the server itself —
+# Cloud Run's SIGTERM for graceful shutdown reaches uvicorn directly,
+# avoiding a stuck shell that would force a kill at the grace deadline.
+#
+# Shell form so $PORT (set by Cloud Run) is expanded at container start.
+CMD alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}
