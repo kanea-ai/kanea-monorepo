@@ -83,6 +83,20 @@ def test_oauth_login_503_when_provider_unconfigured(client: TestClient) -> None:
     assert "github" in response.json()["detail"]
 
 
+def test_oauth_login_accepts_lowercase_provider(client: TestClient) -> None:
+    """Real-world callbacks come from Google/GitHub with the case we
+    registered as the redirect URI — lowercase. Both cases must work."""
+    response = client.get("/api/v1/auth/oauth/google/login", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+
+
+def test_oauth_login_unknown_provider_returns_404(client: TestClient) -> None:
+    response = client.get("/api/v1/auth/oauth/twitter/login", follow_redirects=False)
+    assert response.status_code == 404
+    assert "twitter" in response.json()["detail"]
+
+
 # ---------- /oauth/{provider}/callback ----------
 
 
