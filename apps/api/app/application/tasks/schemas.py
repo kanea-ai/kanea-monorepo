@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.domain.entities import Task
-from app.domain.enums import MemberType, TaskStatus
+from app.domain.enums import MemberRole, MemberType, TaskStatus
 
 
 @dataclass(slots=True, frozen=True)
@@ -15,8 +15,10 @@ class Principal:
     """Caller identity decoded from a verified JWT.
 
     `priority` is the numerical rank claim — lower means higher rank
-    (CEO = 1, Agent = 5). Stored on the principal so delegation checks
-    do not need to hit the database for the requester.
+    (CEO = 1, Agent = 5). `role` is the workspace role used for RBAC
+    on tenant operations (invites, member management). Stored on the
+    principal so checks don't need to hit the database for every
+    request.
     """
 
     member_id: UUID
@@ -24,6 +26,7 @@ class Principal:
     type: MemberType
     priority: int
     scope: str
+    role: MemberRole = MemberRole.MEMBER
 
 
 class DelegateTaskRequest(BaseModel):

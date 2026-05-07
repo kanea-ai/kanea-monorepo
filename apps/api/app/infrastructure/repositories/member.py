@@ -18,6 +18,7 @@ def _to_entity(row: MemberModel) -> Member:
         name=row.name,
         email=row.email,
         priority=row.priority,
+        role=row.role,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -45,8 +46,18 @@ class SqlAlchemyMemberRepository:
             name=member.name,
             email=member.email,
             priority=member.priority,
+            role=member.role,
         )
         self._session.add(row)
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
+
+    async def list_for_workspace(self, workspace_id: UUID) -> list[Member]:
+        stmt = (
+            select(MemberModel)
+            .where(MemberModel.workspace_id == workspace_id)
+            .order_by(MemberModel.priority, MemberModel.created_at)
+        )
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]

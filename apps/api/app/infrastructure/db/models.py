@@ -18,12 +18,19 @@ from sqlalchemy.dialects.postgresql import ENUM as PgEnum  # noqa: N811
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import MemberType, OAuthProvider, TaskStatus
+from app.domain.enums import MemberRole, MemberType, OAuthProvider, TaskStatus
 from app.infrastructure.db.base import Base, TimestampMixin
 
 member_type_enum = PgEnum(
     MemberType,
     name="member_type",
+    values_callable=lambda enum: [member.value for member in enum],
+    create_type=True,
+)
+
+member_role_enum = PgEnum(
+    MemberRole,
+    name="member_role",
     values_callable=lambda enum: [member.value for member in enum],
     create_type=True,
 )
@@ -105,6 +112,9 @@ class MemberModel(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str | None] = mapped_column(String(254), nullable=True, index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    role: Mapped[MemberRole] = mapped_column(
+        member_role_enum, nullable=False, default=MemberRole.MEMBER
+    )
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="members")
     team: Mapped[TeamModel | None] = relationship(back_populates="members")
@@ -181,3 +191,26 @@ class TaskModel(TimestampMixin, Base):
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="tasks")
     creator: Mapped[MemberModel] = relationship(foreign_keys=[created_by_id])
     assignee: Mapped[MemberModel | None] = relationship(foreign_keys=[assignee_id])
+
+
+class InviteModel(TimestampMixin, Base):
+    __tablename__ = "invites"
+    __table_args__ = (Index("ix_invites_workspace_id_email", "workspace_id", "email"),)
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    invited_by_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    role: Mapped[MemberRole] = mapped_column(member_role_enum, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -2,7 +2,16 @@
 
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 
-import { tasksApi, type Task, type TaskStatus, type UpdateStatusPayload } from './api';
+import {
+  tasksApi,
+  tenantsApi,
+  type InviteCreatePayload,
+  type InviteCreateResponse,
+  type Member,
+  type Task,
+  type TaskStatus,
+  type UpdateStatusPayload,
+} from './api';
 
 export const taskKeys = {
   all: ['tasks'] as const satisfies QueryKey,
@@ -23,6 +32,27 @@ export function useBlockedTasks() {
     queryFn: () => tasksApi.list('BLOCKED'),
     // The Exception Queue should feel responsive — keep it fresh.
     refetchInterval: 15_000,
+  });
+}
+
+// ---------- Tenants ----------
+
+export const tenantKeys = {
+  members: ['tenants', 'members'] as const satisfies QueryKey,
+};
+
+export function useMembers() {
+  return useQuery<Member[]>({
+    queryKey: tenantKeys.members,
+    queryFn: () => tenantsApi.listMembers(),
+  });
+}
+
+export function useCreateInvite() {
+  // No cache invalidation needed — invites don't show in any list yet.
+  // The created invite is shown inline in the response (with the token).
+  return useMutation<InviteCreateResponse, Error, InviteCreatePayload>({
+    mutationFn: (payload) => tenantsApi.createInvite(payload),
   });
 }
 

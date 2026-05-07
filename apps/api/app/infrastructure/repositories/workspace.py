@@ -20,6 +20,10 @@ class SqlAlchemyWorkspaceRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get_by_id(self, workspace_id):  # type: ignore[no-untyped-def]
+        row = await self._session.get(WorkspaceModel, workspace_id)
+        return _to_entity(row) if row is not None else None
+
     async def create(self, workspace: Workspace) -> Workspace:
         row = WorkspaceModel(
             id=workspace.id,
