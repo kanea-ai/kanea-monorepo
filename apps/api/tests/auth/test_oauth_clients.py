@@ -34,6 +34,11 @@ def _stub_async_client(
     def _make_response(payload: dict) -> MagicMock:
         resp = MagicMock()
         resp.json.return_value = payload
+        # `_check_response` (the new wrapper) reads is_error before doing
+        # anything else; default-MagicMocks return a truthy mock there,
+        # which trips the error path on a happy-path test.
+        resp.is_error = False
+        resp.status_code = 200
         resp.raise_for_status.return_value = None
         return resp
 
@@ -165,6 +170,46 @@ async def test_github_fetch_identity_falls_back_to_primary_email(
     assert identity.email == "alice@kanea.ai"
     # Falls back to login when name is missing.
     assert identity.name == "alice"
+
+
+async def test_google_fetch_identity_surfaces_provider_error_body(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When the token-exchange call fails (e.g. invalid_client / redirect
+    URI mismatch), the raised exception must carry the provider's body so
+    Cloud Run logs show *why*, and the message also makes it into the
+    structured app log."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    error_resp = MagicMock()
+    error_resp.is_error = True
+    error_resp.status_code = 401
+    error_resp.text = '{"error":"invalid_client","error_description":"bad secret"}'
+    error_resp.request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+
+    stub = MagicMock()
+    stub.post = AsyncMock(return_value=error_resp)
+
+    @asynccontextmanager
+    async def _client(*_a, **_kw):
+        yield stub
+
+    monkeypatch.setattr("app.application.auth.oauth.httpx.AsyncClient", _client)
+
+    client = GoogleOAuthClient(client_id="cid", client_secret="csec")  # pragma: allowlist secret
+
+    with (
+        caplog.at_level("WARNING", logger="app.application.auth.oauth"),
+        pytest.raises(httpx.HTTPStatusError, match="invalid_client"),
+    ):
+        await client.fetch_identity("c", "https://app/cb")
+
+    # The structured log captures status + body for ops to grep on.
+    assert any("invalid_client" in rec.message for rec in caplog.records)
+    assert any("status=401" in rec.message for rec in caplog.records)
 
 
 async def test_github_fetch_identity_raises_when_no_verified_primary(

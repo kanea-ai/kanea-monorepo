@@ -73,14 +73,30 @@ def _redirect_uri(settings: Settings, provider: OAuthProvider) -> str:
     return f"{base}/api/v1/auth/oauth/{provider.value.lower()}/callback"
 
 
+def _normalize_provider(provider: str) -> OAuthProvider:
+    """The OAuthProvider enum stores values uppercase (matches the DB
+    column), but URLs convention is lowercase — and that's what we
+    register with Google/GitHub as the redirect URI, so that's the case
+    they bounce back with. Accept either by upper-casing before
+    constructing the enum."""
+    try:
+        return OAuthProvider(provider.upper())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"unsupported oauth provider: {provider}",
+        ) from exc
+
+
 @router.get("/oauth/{provider}/login")
 async def oauth_login(
-    provider: OAuthProvider,
+    provider: str,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> RedirectResponse:
-    client = get_oauth_client(provider, settings)
+    provider_enum = _normalize_provider(provider)
+    client = get_oauth_client(provider_enum, settings)
     state = secrets.token_urlsafe(32)
-    redirect_uri = _redirect_uri(settings, provider)
+    redirect_uri = _redirect_uri(settings, provider_enum)
 
     response = RedirectResponse(client.authorize_url(redirect_uri, state))
     response.set_cookie(
@@ -97,7 +113,7 @@ async def oauth_login(
 
 @router.get("/oauth/{provider}/callback")
 async def oauth_callback(
-    provider: OAuthProvider,
+    provider: str,
     request: Request,
     service: AuthServiceDep,
     settings: Annotated[Settings, Depends(get_settings)],
@@ -105,6 +121,7 @@ async def oauth_callback(
     state: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
+    provider_enum = _normalize_provider(provider)
     if error:
         # Provider denied (user cancelled / consent failed). Bounce back
         # to the frontend with the error so it can render a message.
@@ -123,9 +140,9 @@ async def oauth_callback(
             detail="oauth state mismatch — possible CSRF",
         )
 
-    client = get_oauth_client(provider, settings)
+    client = get_oauth_client(provider_enum, settings)
     try:
-        identity = await client.fetch_identity(code, _redirect_uri(settings, provider))
+        identity = await client.fetch_identity(code, _redirect_uri(settings, provider_enum))
     except Exception as exc:  # — provider failures map to 502
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

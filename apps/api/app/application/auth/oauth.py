@@ -12,6 +12,7 @@ Credentials.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlencode
@@ -19,6 +20,31 @@ from urllib.parse import urlencode
 import httpx
 
 from app.domain.enums import OAuthProvider
+
+logger = logging.getLogger(__name__)
+
+
+def _check_response(stage: str, resp: httpx.Response) -> None:
+    """Like raise_for_status, but bakes the response body into the error
+    message and emits a structured warning to the app log. OAuth provider
+    errors are otherwise opaque (httpx default just says "404 Not Found"
+    or "400 Bad Request") — for diagnosis you need the body, which is
+    where Google/GitHub put `redirect_uri_mismatch`, `invalid_client`,
+    rate-limit hints, etc. Truncated to 1KB to bound log spam."""
+    if not resp.is_error:
+        return
+    body = resp.text[:1024]
+    logger.warning(
+        "oauth provider error in %s: status=%s body=%r",
+        stage,
+        resp.status_code,
+        body,
+    )
+    raise httpx.HTTPStatusError(
+        f"{stage} returned {resp.status_code}: {body}",
+        request=resp.request,
+        response=resp,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -46,7 +72,13 @@ class GoogleOAuthClient:
 
     _AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
     _TOKEN = "https://oauth2.googleapis.com/token"
-    _USERINFO = "https://openidconnect.googleapis.com/v1/userinfo"
+    # The universal OAuth2 v3 userinfo endpoint. Doesn't require enabling
+    # the People API or the OpenID Connect API on the GCP project — those
+    # are separate services that can be off by default, which 403'd the
+    # older `openidconnect.googleapis.com/v1/userinfo` URL we used to hit.
+    # This one ships with the standard `openid email profile` scopes we
+    # already request.
+    _USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo"
 
     def authorize_url(self, redirect_uri: str, state: str) -> str:
         params = {
@@ -72,14 +104,14 @@ class GoogleOAuthClient:
                     "grant_type": "authorization_code",
                 },
             )
-            token_resp.raise_for_status()
+            _check_response("google token exchange", token_resp)
             access_token = token_resp.json()["access_token"]
 
             user_resp = await client.get(
                 self._USERINFO,
                 headers={"Authorization": f"Bearer {access_token}"},
             )
-            user_resp.raise_for_status()
+            _check_response("google userinfo", user_resp)
             user = user_resp.json()
 
         return OAuthIdentity(
@@ -123,7 +155,7 @@ class GitHubOAuthClient:
                 },
                 headers={"Accept": "application/json"},
             )
-            token_resp.raise_for_status()
+            _check_response("github token exchange", token_resp)
             access_token = token_resp.json()["access_token"]
 
             headers = {
@@ -131,7 +163,7 @@ class GitHubOAuthClient:
                 "Accept": "application/vnd.github+json",
             }
             user_resp = await client.get(self._USER, headers=headers)
-            user_resp.raise_for_status()
+            _check_response("github user", user_resp)
             user = user_resp.json()
 
             # GitHub user.email may be null when the user keeps it private.
@@ -139,7 +171,7 @@ class GitHubOAuthClient:
             email = user.get("email")
             if not email:
                 emails_resp = await client.get(self._USER_EMAILS, headers=headers)
-                emails_resp.raise_for_status()
+                _check_response("github user emails", emails_resp)
                 primary = next(
                     (e for e in emails_resp.json() if e.get("primary") and e.get("verified")),
                     None,
