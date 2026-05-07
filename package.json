@@ -10,6 +10,11 @@
   "scripts": {
     "build": "nx run-many -t build",
     "dev": "nx run-many -t dev",
+    "dev:db": "docker compose -f docker-compose.local.yml up -d",
+    "dev:db:stop": "docker compose -f docker-compose.local.yml down",
+    "dev:db:logs": "docker compose -f docker-compose.local.yml logs -f postgres",
+    "dev:db:reset": "docker compose -f docker-compose.local.yml down -v",
+    "dev:migrate": "cd apps/api && poetry run alembic upgrade head",
     "lint": "nx run-many -t lint",
     "test": "nx run-many -t test",
     "format": "prettier --write .",
