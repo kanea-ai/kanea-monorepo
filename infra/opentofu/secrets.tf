@@ -12,7 +12,7 @@
 
 locals {
   db_url = format(
-    "postgresql+asyncpg://%s:%s@%s:5432/%s",  # pragma: allowlist secret
+    "postgresql+asyncpg://%s:%s@%s:5432/%s", # pragma: allowlist secret
     google_sql_user.app.name,
     urlencode(random_password.db.result),
     google_sql_database_instance.main.private_ip_address,
@@ -21,7 +21,7 @@ locals {
 }
 
 resource "google_secret_manager_secret" "db_url" {
-  secret_id = "kanea-db-url"
+  secret_id = "kanea-db-url${local.name_suffix}"
 
   replication {
     auto {}
