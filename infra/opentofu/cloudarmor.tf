@@ -15,6 +15,22 @@
 
 locals {
   prod_armor_rules = [
+    # Bypass WAF on OAuth callback paths. The provider-issued `code` is
+    # opaque (e.g. Google's `4/0AVMBsJh…/…`) and routinely false-positives
+    # protocolattack-v33-stable on the slashes — so this fires before the
+    # OWASP rules and short-circuits to allow.
+    #
+    # Safety: these endpoints accept only the code + the state we minted
+    # ourselves at /login (verified against an httponly cookie). No user
+    # input that WAF would help screen.
+    {
+      kind        = "waf"
+      action      = "allow"
+      priority    = 500
+      description = "Bypass WAF on OAuth callbacks"
+      expression  = "request.path.matches('^/api/v1/auth/oauth/[^/]+/callback')"
+      src_ranges  = []
+    },
     {
       kind        = "waf"
       action      = "deny(403)"
