@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
 from app.api.v1.tasks import router as tasks_router
@@ -11,6 +12,19 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+# Cross-origin only matters during local dev — in prod the LB serves the
+# api and the Next.js apps from the same origin, so the request is
+# same-origin and never triggers a CORS preflight. settings.cors_origins
+# is empty by default; populated via env in apps/api/.env.development.
+if settings.cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Mount under /api/v1 to match the public surface routed by the LB
 # (`/api/*` → this service, no rewrite). Internal routers keep their own

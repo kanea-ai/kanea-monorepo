@@ -33,6 +33,9 @@ htmlcov/
 .env
 .env.*
 !.env.example
+# Shared dev defaults are tracked; personal overrides go in
+# .env.development.local (Next.js) or .env (api), both still ignored.
+!.env.development
 
 # IDE
 .vscode/

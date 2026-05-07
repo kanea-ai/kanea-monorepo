@@ -1,0 +1,32 @@
+# Local-only Postgres for the inner dev loop. Matches the major version
+# of Cloud SQL in prod (15) so migrations behave the same way locally.
+# Apps run on the host (not in Docker) so they keep watch/reload.
+#
+#   pnpm dev:db       # bring it up
+#   pnpm dev:db:logs  # follow logs
+#   pnpm dev:db:stop  # tear it down (data persists in the volume)
+#   pnpm dev:db:reset # tear it down AND drop the volume
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: kanea-pg-dev
+    restart: unless-stopped
+    environment:
+      # Matches the api's default DATABASE_URL in app/core/config.py:
+      # postgresql+asyncpg://kanea:kanea@localhost:5432/kanea
+      POSTGRES_USER: kanea
+      POSTGRES_PASSWORD: kanea # pragma: allowlist secret
+      POSTGRES_DB: kanea
+    ports:
+      - '5432:5432'
+    volumes:
+      - kanea_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kanea -d kanea']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  kanea_pg_data:
