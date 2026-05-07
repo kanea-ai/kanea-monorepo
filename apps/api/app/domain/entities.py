@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from app.domain.enums import MemberType, OAuthProvider, TaskStatus
+from app.domain.enums import MemberRole, MemberType, OAuthProvider, TaskStatus
 
 
 @dataclass(slots=True)
@@ -34,6 +34,7 @@ class Member:
     priority: int
     team_id: UUID | None = None
     email: str | None = None
+    role: MemberRole = MemberRole.MEMBER
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -44,6 +45,12 @@ class Member:
     @property
     def is_agent(self) -> bool:
         return self.type is MemberType.AGENT
+
+    @property
+    def can_invite(self) -> bool:
+        """OWNER and ADMIN can invite; MEMBER cannot. Same shape applies
+        to most workspace-management actions."""
+        return self.role in (MemberRole.OWNER, MemberRole.ADMIN)
 
 
 @dataclass(slots=True)
@@ -58,6 +65,22 @@ class Credentials:
     # uq_credentials_oauth_provider_oauth_id in migration 0003.
     oauth_provider: OAuthProvider | None = None
     oauth_id: str | None = None
+
+
+@dataclass(slots=True)
+class Invite:
+    id: UUID
+    workspace_id: UUID
+    invited_by_id: UUID
+    email: str
+    role: MemberRole
+    # SHA-256 hex of the raw token. Plaintext token is returned to the
+    # inviter exactly once; lookups are by hash.
+    token_hash: str
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)

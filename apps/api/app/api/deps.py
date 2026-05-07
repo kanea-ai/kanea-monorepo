@@ -25,10 +25,17 @@ from app.application.auth.service import AuthService
 from app.application.tasks.ports import TaskRepository
 from app.application.tasks.schemas import Principal
 from app.application.tasks.service import TaskService
+from app.application.tenants.ports import (
+    InviteRepository,
+    TenantMemberRepository,
+    WorkspaceReadRepository,
+)
+from app.application.tenants.service import InviteService
 from app.core.config import Settings, settings
-from app.domain.enums import MemberType, OAuthProvider
+from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
+from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
@@ -107,6 +114,46 @@ def get_task_service(
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 
 
+def get_invite_repository(session: SessionDep) -> InviteRepository:
+    return SqlAlchemyInviteRepository(session)
+
+
+def get_tenant_member_repository(session: SessionDep) -> TenantMemberRepository:
+    # Same SQLAlchemy class — different protocol surface (list_for_workspace).
+    return SqlAlchemyMemberRepository(session)
+
+
+def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
+    return SqlAlchemyWorkspaceRepository(session)
+
+
+def get_invite_service(
+    invites: Annotated[InviteRepository, Depends(get_invite_repository)],
+    tenant_members: Annotated[TenantMemberRepository, Depends(get_tenant_member_repository)],
+    workspaces: Annotated[WorkspaceReadRepository, Depends(get_workspace_read_repository)],
+    auth_members: Annotated[MemberRepository, Depends(get_member_repository)],
+    credentials: Annotated[CredentialsRepository, Depends(get_credentials_repository)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+    tokens: Annotated[TokenService, Depends(get_token_service)],
+    config: Annotated[Settings, Depends(get_settings)],
+) -> InviteService:
+    return InviteService(
+        invites=invites,
+        members=tenant_members,
+        workspaces=workspaces,
+        auth_members=auth_members,
+        credentials=credentials,
+        hasher=hasher,
+        tokens=tokens,
+        # Invite links resolve on the SaaS app subdomain — same place the
+        # frontend serves /invite/[token].
+        accept_url_base=config.oauth_post_login_redirect.rsplit("/auth/callback", 1)[0],
+    )
+
+
+InviteServiceDep = Annotated[InviteService, Depends(get_invite_service)]
+
+
 _bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")
 
 
@@ -134,6 +181,10 @@ def get_current_principal(
         member_type = MemberType(str(payload["type"]))
         priority = int(str(payload["priority"]))
         scope = str(payload["scope"])
+        # `role` was added in migration 0004. Tokens minted before the
+        # claim existed default to MEMBER — least-privileged so they
+        # can't perform OWNER/ADMIN actions until they re-auth.
+        role = MemberRole(str(payload.get("role", MemberRole.MEMBER.value)))
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -147,10 +198,25 @@ def get_current_principal(
         type=member_type,
         priority=priority,
         scope=scope,
+        role=role,
     )
 
 
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
+
+
+def require_workspace_admin(principal: PrincipalDep) -> Principal:
+    """RBAC guard: rejects MEMBER and AGENT principals on routes that only
+    workspace owners/admins should hit (invites, team management)."""
+    if principal.role not in (MemberRole.OWNER, MemberRole.ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="workspace owner or admin role required",
+        )
+    return principal
+
+
+WorkspaceAdminDep = Annotated[Principal, Depends(require_workspace_admin)]
 
 
 def get_oauth_client(provider: OAuthProvider, config: Settings) -> OAuthClient:

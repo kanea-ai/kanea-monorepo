@@ -100,6 +100,65 @@ export const authApi = {
     }),
 };
 
+// ---------- Tenants ----------
+
+export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+export type MemberKind = 'HUMAN' | 'AGENT';
+
+export interface Member {
+  id: string;
+  workspace_id: string;
+  name: string;
+  email: string | null;
+  type: MemberKind;
+  role: MemberRole;
+  priority: number;
+}
+
+export interface InviteCreatePayload {
+  email: string;
+  role: 'ADMIN' | 'MEMBER';
+}
+
+export interface InviteCreateResponse {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: MemberRole;
+  expires_at: string;
+  accept_url: string;
+  // Raw token — exposed once on creation, never afterward.
+  token: string;
+}
+
+export interface InvitePreview {
+  workspace_name: string;
+  email: string;
+  role: MemberRole;
+  expires_at: string;
+}
+
+export interface InviteAcceptPayload {
+  full_name: string;
+  password: string;
+}
+
+export const tenantsApi = {
+  listMembers: () => request<Member[]>(`${V1}/tenants/members`),
+  createInvite: (payload: InviteCreatePayload) =>
+    request<InviteCreateResponse>(`${V1}/tenants/invites`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  previewInvite: (token: string) =>
+    request<InvitePreview>(`${V1}/tenants/invites/${encodeURIComponent(token)}`),
+  acceptInvite: (token: string, payload: InviteAcceptPayload) =>
+    request<TokenResponse>(`${V1}/tenants/invites/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
 export const tasksApi = {
   list: (status?: TaskStatus) => {
     const qs = status ? `?status_filter=${status}` : '';

@@ -32,3 +32,19 @@ class DelegationForbiddenError(DomainError):
 
 class InvalidStatusTransitionError(DomainError):
     """Raised when a status update is not allowed by the workflow rules."""
+
+
+class ForbiddenError(DomainError):
+    """Raised when the requester lacks the role required for the action."""
+
+
+class InviteNotFoundError(DomainError):
+    """Raised when an invite token doesn't match any record."""
+
+
+class InviteExpiredError(DomainError):
+    """Raised when the invite has passed its TTL."""
+
+
+class InviteAlreadyAcceptedError(DomainError):
+    """Raised when the invite has already been accepted; tokens are single-use."""
