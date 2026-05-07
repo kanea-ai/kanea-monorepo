@@ -1,6 +1,13 @@
 # Global External Application Load Balancer (EXTERNAL_MANAGED scheme),
-# fronting Cloud Run via serverless NEGs. URL map sends /api/* to the
-# Python Cloud Run; everything else goes to the web-app Cloud Run.
+# fronting Cloud Run via serverless NEGs. Hostname-based routing:
+#
+#   kanea.ai      / www.kanea.ai  -> www       (marketing, default)
+#   app.kanea.ai                  -> web-app   (SaaS dashboard)
+#   *           / /api/*          -> api       (FastAPI), regardless of host
+#
+# Subdomain isolation (vs path-based /app/*) keeps Next.js configs clean
+# (no basePath/assetPrefix threading) and gives the SaaS app its own
+# cookie/localStorage origin.
 
 resource "google_compute_region_network_endpoint_group" "neg" {
   for_each = google_cloud_run_v2_service.svc
@@ -33,16 +40,37 @@ resource "google_compute_backend_service" "svc" {
 }
 
 resource "google_compute_url_map" "main" {
-  name            = "kanea-url-map${local.name_suffix}"
-  default_service = google_compute_backend_service.svc["web-app"].id
+  name = "kanea-url-map${local.name_suffix}"
 
+  # Anything that doesn't match a host_rule below falls through to www.
+  # Marketing site is the safe public default.
+  default_service = google_compute_backend_service.svc["www"].id
+
+  # Apex + www subdomain → marketing site, with /api/* still hitting the api.
   host_rule {
     hosts        = [var.domain, "www.${var.domain}"]
-    path_matcher = "main"
+    path_matcher = "marketing"
   }
 
   path_matcher {
-    name            = "main"
+    name            = "marketing"
+    default_service = google_compute_backend_service.svc["www"].id
+
+    path_rule {
+      paths   = ["/api", "/api/*"]
+      service = google_compute_backend_service.svc["api"].id
+    }
+  }
+
+  # SaaS subdomain → web-app, with /api/* hitting the api so the api
+  # client at `${origin}/api/v1/...` works without cross-origin requests.
+  host_rule {
+    hosts        = ["app.${var.domain}"]
+    path_matcher = "app"
+  }
+
+  path_matcher {
+    name            = "app"
     default_service = google_compute_backend_service.svc["web-app"].id
 
     path_rule {
@@ -52,6 +80,8 @@ resource "google_compute_url_map" "main" {
   }
 }
 
+# Original cert covers the marketing surface (apex + www). Untouched by
+# this PR so prod TLS for kanea.ai / www.kanea.ai is uninterrupted.
 resource "google_compute_managed_ssl_certificate" "main" {
   name = "kanea-managed-cert${local.name_suffix}"
 
@@ -60,10 +90,25 @@ resource "google_compute_managed_ssl_certificate" "main" {
   }
 }
 
+# Separate cert for the SaaS subdomain. Created independently rather than
+# adding `app.${var.domain}` to the existing SAN list — Google managed
+# certs are immutable on `domains`, so a SAN change forces destroy+create.
+# Two-cert + both-attached avoids that recreate.
+resource "google_compute_managed_ssl_certificate" "app" {
+  name = "kanea-managed-cert-app${local.name_suffix}"
+
+  managed {
+    domains = ["app.${var.domain}"]
+  }
+}
+
 resource "google_compute_target_https_proxy" "main" {
   name             = "kanea-https-proxy${local.name_suffix}"
   url_map          = google_compute_url_map.main.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.main.id]
+  ssl_certificates = [
+    google_compute_managed_ssl_certificate.main.id,
+    google_compute_managed_ssl_certificate.app.id,
+  ]
 }
 
 resource "google_compute_global_address" "lb" {
