@@ -4,7 +4,7 @@ resource "random_password" "db" {
 }
 
 resource "google_sql_database_instance" "main" {
-  name             = "kanea-pg-15"
+  name             = "kanea-pg-15${local.name_suffix}"
   region           = var.region
   database_version = "POSTGRES_15"
 
@@ -12,9 +12,9 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier              = var.db_tier
-    availability_type = "REGIONAL"
+    availability_type = var.db_availability_type
     disk_type         = "PD_SSD"
-    disk_size         = 50
+    disk_size         = var.db_disk_size
     disk_autoresize   = true
 
     ip_configuration {
@@ -39,7 +39,9 @@ resource "google_sql_database_instance" "main" {
     }
   }
 
-  deletion_protection = true
+  # Prod is delete-protected; staging isn't (cheaper to recreate from a
+  # broken state than to manually unlock and retry).
+  deletion_protection = local.is_prod
 }
 
 resource "google_sql_database" "app" {

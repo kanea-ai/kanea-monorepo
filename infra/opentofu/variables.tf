@@ -1,3 +1,12 @@
+variable "environment" {
+  type        = string
+  description = "Target environment for this apply: 'prod' or 'staging'."
+  validation {
+    condition     = contains(["prod", "staging"], var.environment)
+    error_message = "environment must be one of: prod, staging."
+  }
+}
+
 variable "project_id" {
   type    = string
   default = "kanea-prod-env"
@@ -19,6 +28,21 @@ variable "db_tier" {
   default = "db-custom-2-7680"
 }
 
+variable "db_availability_type" {
+  type        = string
+  description = "REGIONAL (HA, prod) or ZONAL (single-zone, staging). Per Cloud SQL pricing this is the dominant cost lever."
+  default     = "REGIONAL"
+  validation {
+    condition     = contains(["REGIONAL", "ZONAL"], var.db_availability_type)
+    error_message = "db_availability_type must be REGIONAL or ZONAL."
+  }
+}
+
+variable "db_disk_size" {
+  type    = number
+  default = 50
+}
+
 variable "db_name" {
   type    = string
   default = "kanea"
@@ -27,6 +51,18 @@ variable "db_name" {
 variable "db_user" {
   type    = string
   default = "kanea_app"
+}
+
+variable "cloud_run_max_instances" {
+  type        = number
+  description = "Per-service max scaling. Cap aggressively in non-prod envs to keep cost predictable."
+  default     = 20
+}
+
+variable "staging_allow_ip" {
+  type        = string
+  description = "CIDR allowlisted for the staging Cloud Armor policy (deny-all otherwise). Ignored in prod. Default is the RFC 5737 documentation range so a fresh apply never accidentally grants real-world access."
+  default     = "203.0.113.42/32"
 }
 
 # Bootstrap placeholder. Cloud Run requires an image to create the service so

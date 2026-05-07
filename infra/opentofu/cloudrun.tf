@@ -1,11 +1,16 @@
 locals {
   services = ["api", "web-app", "admin-panel", "www"]
+
+  # Service names suffixed per env so api-staging and api can coexist.
+  # In prod, `name_suffix` is empty so the existing service `api` is
+  # preserved (no state churn).
+  service_name = { for s in local.services : s => "${s}${local.name_suffix}" }
 }
 
 resource "google_service_account" "run" {
   for_each     = toset(local.services)
-  account_id   = "run-${each.key}"
-  display_name = "Cloud Run SA for ${each.key}"
+  account_id   = "run-${each.key}${local.name_suffix}"
+  display_name = "Cloud Run SA for ${each.key} (${var.environment})"
 }
 
 resource "google_project_iam_member" "run_sql_client" {
@@ -18,7 +23,7 @@ resource "google_project_iam_member" "run_sql_client" {
 resource "google_cloud_run_v2_service" "svc" {
   for_each = toset(local.services)
 
-  name     = each.key
+  name     = local.service_name[each.key]
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
 
@@ -27,7 +32,7 @@ resource "google_cloud_run_v2_service" "svc" {
 
     scaling {
       min_instance_count = 0
-      max_instance_count = 20
+      max_instance_count = var.cloud_run_max_instances
     }
 
     vpc_access {
@@ -70,17 +75,10 @@ resource "google_cloud_run_v2_service" "svc" {
 
   # CD deploys new revisions out-of-band by setting the image tag. Tofu owns
   # the service shape (resources, env, scaling, ingress) but defers to the
-  # pipeline on which image tag is currently live.
-  #
-  # `client` and `client_version` are stamped onto the resource by Cloud Run
-  # whenever it's mutated via `gcloud run services update` (i.e. every CD
-  # run). HCL doesn't set them, so without ignoring them Tofu sees drift on
-  # every plan -> rolls a new revision on every apply -> reuses the
-  # currently-live image. If that image happens to be broken (e.g. a
-  # mid-rollout state where the new image hasn't been pushed yet via
-  # gcloud), the spurious roll fails its startup probe and aborts the
-  # workflow before the real `deploy` step has a chance to run. That's
-  # exactly the failure mode that stranded api:0026969f6af5 in production.
+  # pipeline on which image tag is currently live. `client`/`client_version`
+  # are stamped onto the resource by Cloud Run on every `gcloud run services
+  # update`; ignoring them prevents Tofu from rolling spurious revisions on
+  # the existing image (which can be broken mid-rollout).
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
@@ -89,17 +87,12 @@ resource "google_cloud_run_v2_service" "svc" {
     ]
   }
 
-  # Make sure the secret accessor IAM grant is in place before any service
-  # tries to deploy. Only the api service references the secret, but
-  # listing the dep here is harmless for the others and keeps the apply
-  # order obvious.
   depends_on = [google_secret_manager_secret_iam_member.api_db_url_accessor]
 }
 
 # Allow public invocation through the load balancer for the three public-facing
 # services. admin-panel is intentionally excluded — it stays private and will
-# get a scoped invoker grant (e.g., to an IAP-fronted service account or an
-# authenticated identity) when access requirements are decided.
+# get a scoped invoker grant when access requirements are decided.
 locals {
   public_services = ["web-app", "www", "api"]
 }
@@ -112,6 +105,8 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   member   = "allUsers"
 
   # The org-policy override below must exist before this binding can be
-  # written; without it, the API rejects allUsers as a member.
+  # written. It only exists in prod state (count-gated), so for staging the
+  # binding still works because the override is project-scoped — once prod
+  # has applied it, both envs benefit.
   depends_on = [google_org_policy_policy.allowed_policy_member_domains]
 }

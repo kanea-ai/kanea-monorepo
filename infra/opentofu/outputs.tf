@@ -1,10 +1,19 @@
+output "environment" {
+  value = var.environment
+}
+
 output "lb_ip" {
   value       = google_compute_global_address.lb.address
-  description = "Anycast IP for the global external Application LB."
+  description = "Anycast IP for the global external Application LB. Point the env's domain at this."
 }
 
 output "cloud_run_urls" {
   value = { for k, s in google_cloud_run_v2_service.svc : k => s.uri }
+}
+
+output "cloud_run_service_names" {
+  value       = local.service_name
+  description = "Per-env service names. CD pipeline reads this to know which Cloud Run service to roll an image onto."
 }
 
 output "cloudsql_private_ip" {
@@ -20,14 +29,13 @@ output "artifact_registry_path" {
   description = "Base path for image tags: <region>-docker.pkg.dev/<project>/<repo>"
 }
 
-# Values the GitHub Actions workflow needs. Set as repo-level Actions Variables
-# (not secrets — these aren't sensitive) on the kanea-ai/kanea-monorepo repo.
+# WIF outputs only meaningful in prod (those resources only exist there).
 output "wif_provider" {
-  value       = google_iam_workload_identity_pool_provider.github.name
-  description = "Full WIF provider resource name. Use as `workload_identity_provider` in google-github-actions/auth."
+  value       = local.is_prod ? google_iam_workload_identity_pool_provider.github[0].name : null
+  description = "Full WIF provider resource name. Prod-only; staging shares the same provider."
 }
 
 output "wif_service_account" {
-  value       = google_service_account.github_deployer.email
-  description = "Service account the workflow impersonates via WIF."
+  value       = local.deployer_sa_email
+  description = "Service account the workflow impersonates via WIF (shared across envs)."
 }

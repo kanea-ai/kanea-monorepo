@@ -1,28 +1,28 @@
 resource "google_compute_network" "vpc" {
-  name                    = "kanea-vpc"
+  name                    = "kanea-vpc${local.name_suffix}"
   auto_create_subnetworks = false
 }
 
 resource "google_compute_subnetwork" "app" {
-  name          = "kanea-app-subnet"
+  name          = "kanea-app-subnet${local.name_suffix}"
   region        = var.region
   network       = google_compute_network.vpc.id
-  ip_cidr_range = "10.10.0.0/24"
+  ip_cidr_range = local.app_subnet_cidr
 
   private_ip_google_access = true
 }
 
 # /28 reserved for the Serverless VPC Access connector.
 resource "google_compute_subnetwork" "vpc_connector" {
-  name          = "kanea-vpc-connector-subnet"
+  name          = "kanea-vpc-connector-subnet${local.name_suffix}"
   region        = var.region
   network       = google_compute_network.vpc.id
-  ip_cidr_range = "10.10.8.0/28"
+  ip_cidr_range = local.vpc_connector_subnet_cidr
 }
 
 # Private Service Access range for Cloud SQL.
 resource "google_compute_global_address" "private_services" {
-  name          = "kanea-private-services"
+  name          = "kanea-private-services${local.name_suffix}"
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = 16
@@ -36,7 +36,9 @@ resource "google_service_networking_connection" "private_vpc" {
 }
 
 resource "google_vpc_access_connector" "main" {
-  name   = "kanea-vpc-connector"
+  # `vpc_connector_name` is special-cased in locals because connector names
+  # cap at 25 chars (`kanea-vpc-connector-staging` is 27).
+  name   = local.vpc_connector_name
   region = var.region
 
   subnet {

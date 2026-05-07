@@ -2,13 +2,19 @@ name: deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
       services:
         description: 'Comma-separated subset to deploy (default: all four). e.g. api,web-app'
         required: false
         default: 'api,web-app,www,admin-panel'
+      environment:
+        description: 'Target environment (only honored on workflow_dispatch).'
+        required: false
+        type: choice
+        default: 'staging'
+        options: [staging, prod]
 
 # OIDC for Workload Identity Federation. `contents: read` so checkout works on
 # protected refs without granting anything else.
@@ -16,9 +22,9 @@ permissions:
   contents: read
   id-token: write
 
-# A single concurrency group per ref means a newer push cancels an older
-# in-flight deploy of the same branch. We never want two pipelines racing
-# `gcloud run services update` against the same service.
+# Concurrency keyed by branch — newer pushes cancel older in-flight runs of
+# the same branch so two pipelines can't race against the same env's Cloud
+# Run services or Tofu state lock.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -31,30 +37,61 @@ env:
 
 jobs:
   # ----------------------------------------------------------------------
-  # Compute the deploy matrix once. On push: all four services. On manual:
-  # whatever was passed in the `services` input.
+  # Compute deploy target + matrix once. Branch decides env:
+  #   refs/heads/main → prod
+  #   refs/heads/dev  → staging
+  # workflow_dispatch uses the `environment` input.
+  #
+  # `service_suffix` is `""` for prod (existing service names preserved)
+  # and `-staging` for staging — matches `local.name_suffix` in
+  # infra/opentofu so Cloud Run names line up between Tofu and gcloud.
   # ----------------------------------------------------------------------
   plan:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       image_tag: ${{ steps.set.outputs.image_tag }}
+      target_env: ${{ steps.set.outputs.target_env }}
+      service_suffix: ${{ steps.set.outputs.service_suffix }}
+      backend_prefix: ${{ steps.set.outputs.backend_prefix }}
     steps:
       - id: set
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             services="${{ github.event.inputs.services }}"
+            target_env="${{ github.event.inputs.environment }}"
           else
             services="api,web-app,www,admin-panel"
+            case "${{ github.ref_name }}" in
+              main) target_env="prod" ;;
+              dev)  target_env="staging" ;;
+              *)    echo "::error::unexpected ref ${{ github.ref_name }}"; exit 1 ;;
+            esac
           fi
-          # Convert comma list -> JSON array for matrix expansion.
+
+          # Backend prefix: prod stays at the historical path so existing
+          # state isn't moved; staging gets its own subdir.
+          if [[ "$target_env" == "prod" ]]; then
+            service_suffix=""
+            backend_prefix="terraform/state"
+          else
+            service_suffix="-${target_env}"
+            backend_prefix="terraform/state/${target_env}"
+          fi
+
           matrix_json=$(jq -cn --arg s "$services" '$s | split(",") | map({service: .})')
           echo "matrix={\"include\":$matrix_json}" >> "$GITHUB_OUTPUT"
-          # Immutable tag = commit SHA. We also push `latest` for humans.
           echo "image_tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "target_env=$target_env" >> "$GITHUB_OUTPUT"
+          echo "service_suffix=$service_suffix" >> "$GITHUB_OUTPUT"
+          echo "backend_prefix=$backend_prefix" >> "$GITHUB_OUTPUT"
+
+          echo "→ deploying to: $target_env (service suffix '$service_suffix', state prefix '$backend_prefix')"
 
   # ----------------------------------------------------------------------
-  # Build + push each service image in parallel.
+  # Build + push each service image in parallel. Image tagged by commit
+  # SHA so prod and staging deploys of the same commit reuse the same
+  # image; the AR repo is shared between envs.
   # ----------------------------------------------------------------------
   build:
     needs: plan
@@ -71,10 +108,6 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
-          # Surface a short-lived OAuth2 token so docker/login-action can write
-          # it into ~/.docker/config.json. Without this, buildx's
-          # docker-container driver can't invoke the host `gcloud` cred helper
-          # and pushes fail with "error getting credentials".
           token_format: access_token
 
       - uses: google-github-actions/setup-gcloud@v2
@@ -105,13 +138,13 @@ jobs:
           provenance: false
 
   # ----------------------------------------------------------------------
-  # Apply the OpenTofu config. Runs in parallel with `build` (image
-  # builds and infra changes are independent), and `deploy` gates on
-  # both. Tofu's GCS state lock plus the workflow-level concurrency
-  # group means concurrent applies on the same ref serialize.
+  # Apply the OpenTofu config for the target env. Backend prefix and
+  # tfvars file are env-specific. Runs in parallel with `build` — they
+  # don't depend on each other; `deploy` gates on both.
   # ----------------------------------------------------------------------
   deploy-infra:
-    name: Tofu apply
+    name: Tofu apply (${{ needs.plan.outputs.target_env }})
+    needs: plan
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -130,20 +163,26 @@ jobs:
         with:
           tofu_version: 1.8.0
 
-      - name: Tofu init
-        run: tofu init -input=false
+      - name: Tofu init (backend prefix=${{ needs.plan.outputs.backend_prefix }})
+        run: |
+          tofu init \
+            -input=false \
+            -reconfigure \
+            -backend-config="prefix=${{ needs.plan.outputs.backend_prefix }}"
 
-      # `-lock-timeout=300s` so concurrent runs on the same ref wait
-      # rather than fail outright if one is mid-apply when the next
-      # tries to start (the workflow concurrency group cancels older
-      # in-flight runs but the lock can briefly outlive the cancel).
-      - name: Tofu apply
-        run: tofu apply -auto-approve -input=false -no-color -lock-timeout=300s
+      - name: Tofu apply (env=${{ needs.plan.outputs.target_env }})
+        run: |
+          tofu apply \
+            -auto-approve \
+            -input=false \
+            -no-color \
+            -lock-timeout=300s \
+            -var-file="envs/${{ needs.plan.outputs.target_env }}.tfvars"
 
   # ----------------------------------------------------------------------
-  # Roll the new revision into Cloud Run. `services update --image` matches
-  # the `ignore_changes = [image]` lifecycle on the Tofu-managed service:
-  # Tofu owns the shape, the pipeline owns the tag.
+  # Roll the new revision into Cloud Run. Service name = base name + env
+  # suffix (e.g. `api-staging` for staging, `api` for prod) so the right
+  # service in the right env gets the new image.
   # ----------------------------------------------------------------------
   deploy:
     needs: [plan, build, deploy-infra]
@@ -160,9 +199,9 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy ${{ matrix.service }} to Cloud Run
+      - name: Deploy ${{ matrix.service }}${{ needs.plan.outputs.service_suffix }} to Cloud Run
         run: |
-          gcloud run services update "${{ matrix.service }}" \
+          gcloud run services update "${{ matrix.service }}${{ needs.plan.outputs.service_suffix }}" \
             --project="${{ env.GCP_PROJECT }}" \
             --region="${{ env.GCP_REGION }}" \
             --image="${{ env.AR_HOST }}/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ matrix.service }}:${{ needs.plan.outputs.image_tag }}" \
@@ -170,7 +209,7 @@ jobs:
 
       - name: Show resulting revision
         run: |
-          gcloud run services describe "${{ matrix.service }}" \
+          gcloud run services describe "${{ matrix.service }}${{ needs.plan.outputs.service_suffix }}" \
             --project="${{ env.GCP_PROJECT }}" \
             --region="${{ env.GCP_REGION }}" \
             --format='value(status.latestReadyRevisionName,status.url)'
