@@ -105,12 +105,48 @@ jobs:
           provenance: false
 
   # ----------------------------------------------------------------------
+  # Apply the OpenTofu config. Runs in parallel with `build` (image
+  # builds and infra changes are independent), and `deploy` gates on
+  # both. Tofu's GCS state lock plus the workflow-level concurrency
+  # group means concurrent applies on the same ref serialize.
+  # ----------------------------------------------------------------------
+  deploy-infra:
+    name: Tofu apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/opentofu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.0
+
+      - name: Tofu init
+        run: tofu init -input=false
+
+      # `-lock-timeout=300s` so concurrent runs on the same ref wait
+      # rather than fail outright if one is mid-apply when the next
+      # tries to start (the workflow concurrency group cancels older
+      # in-flight runs but the lock can briefly outlive the cancel).
+      - name: Tofu apply
+        run: tofu apply -auto-approve -input=false -no-color -lock-timeout=300s
+
+  # ----------------------------------------------------------------------
   # Roll the new revision into Cloud Run. `services update --image` matches
   # the `ignore_changes = [image]` lifecycle on the Tofu-managed service:
   # Tofu owns the shape, the pipeline owns the tag.
   # ----------------------------------------------------------------------
   deploy:
-    needs: [plan, build]
+    needs: [plan, build, deploy-infra]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
