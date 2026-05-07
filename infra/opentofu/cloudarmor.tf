@@ -5,14 +5,15 @@
 #   prod    : OWASP pre-configured WAF rules + per-IP rate-based ban + default allow
 #   staging : allow only var.staging_allow_ip + default deny
 #
-# A single resource address (`google_compute_security_policy.edge`) is kept
-# across envs so prod state isn't disrupted; the rule set switches via
-# env-keyed locals + a `dynamic "rule"` block.
+# We deliberately avoid a ternary like `is_prod ? prod_rules : staging_rules`
+# at the local level: Tofu's type-inference for object literals takes the
+# concrete attribute types from the values present, so a list whose elements
+# all have `expression = null` ends up with attribute type `null` (not
+# `string`), which doesn't unify with prod's list. Instead, we keep two
+# independently-typed lists and emit two `dynamic "rule"` blocks gated by
+# `for` filters — each block only ever sees its own list shape.
 
 locals {
-  # Every rule has the same shape so the two lists share a Tofu tuple type.
-  # `expression` is set on WAF rules and null elsewhere; `src_ranges` is
-  # set on src_ip / rate_limit rules and null on WAF rules.
   prod_armor_rules = [
     {
       kind        = "waf"
@@ -20,7 +21,7 @@ locals {
       priority    = 1000
       description = "OWASP: SQL injection"
       expression  = "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -28,7 +29,7 @@ locals {
       priority    = 1100
       description = "OWASP: cross-site scripting"
       expression  = "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -36,7 +37,7 @@ locals {
       priority    = 1200
       description = "OWASP: local file inclusion"
       expression  = "evaluatePreconfiguredWaf('lfi-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -44,7 +45,7 @@ locals {
       priority    = 1300
       description = "OWASP: remote file inclusion"
       expression  = "evaluatePreconfiguredWaf('rfi-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -52,7 +53,7 @@ locals {
       priority    = 1400
       description = "OWASP: remote code execution"
       expression  = "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -60,7 +61,7 @@ locals {
       priority    = 1500
       description = "OWASP: scanner detection"
       expression  = "evaluatePreconfiguredWaf('scannerdetection-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -68,7 +69,7 @@ locals {
       priority    = 1600
       description = "OWASP: protocol attack"
       expression  = "evaluatePreconfiguredWaf('protocolattack-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "waf"
@@ -76,14 +77,14 @@ locals {
       priority    = 1700
       description = "OWASP: session fixation"
       expression  = "evaluatePreconfiguredWaf('sessionfixation-v33-stable', {'sensitivity': 1})"
-      src_ranges  = null
+      src_ranges  = []
     },
     {
       kind        = "rate_limit"
       action      = "rate_based_ban"
       priority    = 2000
       description = "Per-IP rate limit: 600 req/min, 10 min ban"
-      expression  = null
+      expression  = ""
       src_ranges  = ["*"]
     },
     {
@@ -91,31 +92,27 @@ locals {
       action      = "allow"
       priority    = 2147483647
       description = "Default allow"
-      expression  = null
+      expression  = ""
       src_ranges  = ["*"]
     },
   ]
 
+  # Staging rules don't need a WAF expression — drop the field entirely
+  # rather than fight Tofu's null-typing.
   staging_armor_rules = [
     {
-      kind        = "src_ip"
       action      = "allow"
       priority    = 1000
       description = "Allow developer IP (override via -var staging_allow_ip=…)"
-      expression  = null
       src_ranges  = [var.staging_allow_ip]
     },
     {
-      kind        = "src_ip"
       action      = "deny(403)"
       priority    = 2147483647
       description = "Default deny — staging is closed by default"
-      expression  = null
       src_ranges  = ["*"]
     },
   ]
-
-  armor_rules = local.is_prod ? local.prod_armor_rules : local.staging_armor_rules
 }
 
 resource "google_compute_security_policy" "edge" {
@@ -124,17 +121,17 @@ resource "google_compute_security_policy" "edge" {
     "Staging: deny-all except ${var.staging_allow_ip}."
   )
 
+  # ---------- Prod rules (only emitted when is_prod) ----------
   dynamic "rule" {
-    for_each = local.armor_rules
+    for_each = [for r in local.prod_armor_rules : r if local.is_prod]
     content {
       action      = rule.value.action
       priority    = rule.value.priority
       description = rule.value.description
 
       match {
-        # WAF rules use a CEL expression; the rest use SRC_IPS_V1 with
-        # a CIDR list. The block shape is exclusive — exactly one of
-        # `expr` or `versioned_expr+config` is set per rule.
+        # WAF rules use a CEL expression; src_ip / rate_limit rules use
+        # SRC_IPS_V1 with a CIDR list. Exactly one shape is set per rule.
         dynamic "expr" {
           for_each = rule.value.kind == "waf" ? [1] : []
           content {
@@ -163,6 +160,23 @@ resource "google_compute_security_policy" "edge" {
             count        = 600
             interval_sec = 60
           }
+        }
+      }
+    }
+  }
+
+  # ---------- Staging rules (only emitted when !is_prod) ----------
+  dynamic "rule" {
+    for_each = [for r in local.staging_armor_rules : r if !local.is_prod]
+    content {
+      action      = rule.value.action
+      priority    = rule.value.priority
+      description = rule.value.description
+
+      match {
+        versioned_expr = "SRC_IPS_V1"
+        config {
+          src_ip_ranges = rule.value.src_ranges
         }
       }
     }
