@@ -183,6 +183,11 @@ export const tasksApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  rate: (id: string, payload: RateTaskPayload) =>
+    request<TaskRating>(`${V1}/tasks/${id}/rate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 
 // ---------- Agents ----------
@@ -192,12 +197,33 @@ export interface Agent {
   workspace_id: string;
   name: string;
   priority: number;
+  model: string | null;
   created_at: string;
+}
+
+export interface AgentStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  accuracy_percent: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+export interface AgentDetail extends Agent {
+  stats: AgentStats;
 }
 
 export interface CreateAgentPayload {
   name: string;
   priority?: number;
+  model?: string | null;
+}
+
+export interface UpdateAgentPayload {
+  name?: string;
+  priority?: number;
+  model?: string | null;
 }
 
 export interface CreateAgentResponse extends Agent {
@@ -208,9 +234,43 @@ export interface CreateAgentResponse extends Agent {
 
 export const agentsApi = {
   list: () => request<Agent[]>(`${V1}/agents`),
+  get: (id: string) => request<AgentDetail>(`${V1}/agents/${id}`),
   create: (payload: CreateAgentPayload) =>
     request<CreateAgentResponse>(`${V1}/agents`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  update: (id: string, payload: UpdateAgentPayload) =>
+    request<Agent>(`${V1}/agents/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  // Returns 204 (no body). request<T> would JSON-parse — handle inline.
+  remove: async (id: string): Promise<void> => {
+    const response = await fetch(`${API_BASE}${V1}/agents/${id}`, {
+      method: 'DELETE',
+      headers: { ...authHeader() },
+    });
+    if (!response.ok) {
+      const detail = await response
+        .json()
+        .then((b: { detail?: string }) => b.detail)
+        .catch(() => response.statusText);
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    }
+  },
 };
+
+export interface RateTaskPayload {
+  score: number;
+  feedback?: string | null;
+}
+
+export interface TaskRating {
+  task_id: string;
+  rated_by_id: string;
+  rated_member_id: string | null;
+  score: number;
+  feedback: string | null;
+  created_at: string;
+}

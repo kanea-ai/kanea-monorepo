@@ -35,6 +35,10 @@ class Member:
     team_id: UUID | None = None
     email: str | None = None
     role: MemberRole = MemberRole.MEMBER
+    # Underlying LLM model identifier for AGENT-typed members. Free-form
+    # so the user can label however they want ("claude-opus-4-7", "gpt-5",
+    # "Custom: agent-pipeline-v2", etc.). Null on humans.
+    model: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -95,5 +99,41 @@ class Task:
     assignee_id: UUID | None = None
     due_at: datetime | None = None
     blocked_reason: str | None = None
+    completed_at: datetime | None = None
+    # Running total of LLM tokens an agent has spent on this task. Agents
+    # report it back through the status-update endpoint so it accumulates
+    # across iterations.
+    tokens_used: int = 0
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskRating:
+    """A 0-100 score the issue creator leaves for the assignee after a
+    task lands in DONE. One rating per task (the primary key constraint
+    enforces it). Drives `accuracy_percent` on agent stats."""
+
+    id: UUID
+    task_id: UUID
+    rated_by_id: UUID
+    rated_member_id: UUID | None  # null after the rated member is deleted
+    score: int  # 0-100, validated at the schema layer
+    feedback: str | None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True, frozen=True)
+class AgentStats:
+    """Materialised at request time from queries against tasks +
+    task_ratings. Computed in one or two SQL aggregations rather than
+    Python-side iteration so it scales to workspaces with thousands of
+    tasks."""
+
+    assigned_count: int
+    completed_count: int
+    avg_resolution_seconds: float | None
+    accuracy_percent: float | None
+    last_activity_at: datetime | None
+    total_tokens_used: int

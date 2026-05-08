@@ -5,20 +5,25 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from app.application.auth.ports import MemberRepository
-from app.application.tasks.ports import TaskRepository
+from app.application.tasks.ports import TaskRatingRepository, TaskRepository
 from app.application.tasks.schemas import (
     CreateTaskRequest,
     DelegateTaskRequest,
     Principal,
+    RateTaskRequest,
+    TaskRatingResponse,
     TaskResponse,
     UpdateTaskStatusRequest,
 )
-from app.domain.entities import Member, Task
+from app.domain.entities import Member, Task, TaskRating
 from app.domain.enums import TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
+    RatingForbiddenError,
+    TaskAlreadyRatedError,
     TaskNotFoundError,
+    TaskNotInDoneStateError,
 )
 
 # Allowed status transitions. Any transition not listed here is rejected.
@@ -36,6 +41,10 @@ _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
 class TaskService:
     tasks: TaskRepository
     members: MemberRepository
+    # Optional so existing call-sites that don't construct ratings (tests,
+    # legacy DI paths) keep working. The rate_task() entry-point checks
+    # for None and raises a clear error if it's invoked without one.
+    ratings: TaskRatingRepository | None = None
 
     async def delegate(
         self,
@@ -110,8 +119,51 @@ class TaskService:
             task_id=task.id,
             status=request.status,
             blocked_reason=blocked_reason,
+            tokens_used=request.tokens_used,
         )
         return TaskResponse.from_entity(updated)
+
+    async def rate_task(
+        self,
+        task_id: UUID,
+        request: RateTaskRequest,
+        requester: Principal,
+    ) -> TaskRatingResponse:
+        """Issuer-only post-completion rating. Score backs the
+        accuracy_percent stat on the assignee's agent dashboard."""
+        if self.ratings is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("rate_task called without a ratings repository")
+
+        task = await self._load_task(task_id, requester)
+
+        if task.created_by_id != requester.member_id:
+            # Only the issuer rates. Assignees can't self-rate.
+            raise RatingForbiddenError("only the task creator can rate the work")
+        if task.status is not TaskStatus.DONE:
+            raise TaskNotInDoneStateError("task must be DONE before it can be rated")
+        if await self.ratings.get_for_task(task.id) is not None:
+            raise TaskAlreadyRatedError("task already rated; ratings are single-shot")
+
+        rating = await self.ratings.create(
+            TaskRating(
+                id=uuid4(),
+                task_id=task.id,
+                rated_by_id=requester.member_id,
+                rated_member_id=task.assignee_id,
+                score=request.score,
+                feedback=request.feedback,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        return TaskRatingResponse(
+            task_id=rating.task_id,
+            rated_by_id=rating.rated_by_id,
+            rated_member_id=rating.rated_member_id,
+            score=rating.score,
+            feedback=rating.feedback,
+            created_at=rating.created_at,
+        )
 
     async def _load_task(self, task_id: UUID, requester: Principal) -> Task:
         task = await self.tasks.get_by_id(task_id)

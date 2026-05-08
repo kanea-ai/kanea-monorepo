@@ -8,6 +8,8 @@ from app.api.deps import PrincipalDep, TaskServiceDep
 from app.application.tasks.schemas import (
     CreateTaskRequest,
     DelegateTaskRequest,
+    RateTaskRequest,
+    TaskRatingResponse,
     TaskResponse,
     UpdateTaskStatusRequest,
 )
@@ -15,7 +17,10 @@ from app.domain.enums import TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
+    RatingForbiddenError,
+    TaskAlreadyRatedError,
     TaskNotFoundError,
+    TaskNotInDoneStateError,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -114,4 +119,30 @@ async def update_task_status(
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InvalidStatusTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{task_id}/rate",
+    response_model=TaskRatingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rate_task(
+    task_id: UUID,
+    payload: RateTaskRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskRatingResponse:
+    """Issuer rates the assignee's work after the task lands in DONE.
+    One rating per task; the score (0-100) feeds the assignee's
+    accuracy stat on the agent dashboard."""
+    try:
+        return await service.rate_task(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RatingForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except TaskNotInDoneStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except TaskAlreadyRatedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

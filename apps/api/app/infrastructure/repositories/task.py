@@ -22,7 +22,9 @@ def _to_entity(row: TaskModel) -> Task:
         description=row.description,
         assignee_id=row.assignee_id,
         due_at=row.due_at,
+        completed_at=row.completed_at,
         blocked_reason=row.blocked_reason,
+        tokens_used=row.tokens_used,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -64,12 +66,27 @@ class SqlAlchemyTaskRepository:
         *,
         status: TaskStatus,
         blocked_reason: str | None,
+        tokens_used: int | None = None,
     ) -> Task:
         row = await self._session.get(TaskModel, task_id)
         if row is None:
             raise TaskNotFoundError("task not found")
         row.status = status
         row.blocked_reason = blocked_reason
+        if tokens_used is not None:
+            # Cumulative — agents report the *total* spent so far, not a
+            # delta. Keeps the contract idempotent under retries.
+            row.tokens_used = tokens_used
+        # Stamp completion when transitioning into DONE; clear it if the
+        # task is reopened (DONE -> elsewhere isn't currently legal per
+        # _ALLOWED_TRANSITIONS, but defensive).
+        if status is TaskStatus.DONE:
+            from datetime import UTC
+            from datetime import datetime as _dt
+
+            row.completed_at = _dt.now(UTC)
+        else:
+            row.completed_at = None
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
@@ -86,6 +103,8 @@ class SqlAlchemyTaskRepository:
             assignee_id=task.assignee_id,
             due_at=task.due_at,
             blocked_reason=task.blocked_reason,
+            tokens_used=task.tokens_used,
+            completed_at=task.completed_at,
         )
         self._session.add(row)
         await self._session.flush()

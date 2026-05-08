@@ -40,6 +40,33 @@ class UpdateTaskStatusRequest(BaseModel):
 
     status: TaskStatus
     blocked_reason: str | None = None
+    # Cumulative tokens spent on the task so far. Agents bump this when
+    # they mark DONE (or BLOCKED, etc.) so the workspace can see how
+    # expensive each task was. Optional — omit to leave the value alone.
+    tokens_used: int | None = Field(default=None, ge=0)
+
+
+class RateTaskRequest(BaseModel):
+    """Issuer's rating of the assignee's work on a DONE task. score is a
+    0-100 percentage capturing the work's quality, supervision required,
+    loops, and other subjective factors. feedback is optional free-form
+    context for future fine-tuning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: int = Field(ge=0, le=100)
+    feedback: str | None = Field(default=None, max_length=10_000)
+
+
+class TaskRatingResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: UUID
+    rated_by_id: UUID
+    rated_member_id: UUID | None
+    score: int
+    feedback: str | None
+    created_at: datetime
 
 
 class CreateTaskRequest(BaseModel):

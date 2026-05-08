@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
 import { ApiError, type Agent, type CreateAgentResponse } from '../../lib/api';
@@ -57,6 +58,7 @@ function CreateAgentSection() {
   const createAgent = useCreateAgent();
   const [name, setName] = useState('');
   const [priority, setPriority] = useState<number>(5);
+  const [model, setModel] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [lastCreated, setLastCreated] = useState<CreateAgentResponse | null>(null);
 
@@ -64,10 +66,16 @@ function CreateAgentSection() {
     e.preventDefault();
     setError(null);
     try {
-      const created = await createAgent.mutateAsync({ name, priority });
+      const trimmed = model.trim();
+      const created = await createAgent.mutateAsync({
+        name,
+        priority,
+        model: trimmed === '' ? null : trimmed,
+      });
       setLastCreated(created);
       setName('');
       setPriority(5);
+      setModel('');
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to create agent');
     }
@@ -84,7 +92,7 @@ function CreateAgentSection() {
       </header>
 
       <form
-        className="grid gap-3 px-4 py-4 sm:grid-cols-[1fr_120px_auto] sm:items-end"
+        className="grid gap-3 px-4 py-4 sm:grid-cols-[1fr_1fr_120px_auto] sm:items-end"
         onSubmit={onSubmit}
       >
         <Field label="Name" htmlFor="agent_name">
@@ -96,6 +104,17 @@ function CreateAgentSection() {
             maxLength={120}
             onChange={(e) => setName(e.target.value)}
             placeholder="researcher-bot"
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </Field>
+        <Field label="Model" htmlFor="agent_model" hint="Optional.">
+          <input
+            id="agent_model"
+            type="text"
+            value={model}
+            maxLength={120}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="claude-opus-4-7"
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </Field>
@@ -199,16 +218,21 @@ function KeyRow({
 
 function AgentRow({ agent }: { agent: Agent }) {
   return (
-    <li className="flex items-center justify-between gap-3 px-3 py-2.5">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-slate-900">{agent.name}</p>
-        <p className="mt-0.5 truncate text-xs text-slate-500">
-          ID: <code className="font-mono">{agent.id}</code>
-        </p>
-      </div>
-      <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800">
-        P{agent.priority}
-      </span>
+    <li className="hover:bg-slate-50">
+      <Link
+        href={`/agents/${agent.id}`}
+        className="flex items-center justify-between gap-3 px-3 py-2.5"
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-slate-900">{agent.name}</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">
+            {agent.model ?? <span className="italic">No model set</span>}
+          </p>
+        </div>
+        <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800">
+          P{agent.priority}
+        </span>
+      </Link>
     </li>
   );
 }

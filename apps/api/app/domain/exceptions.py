@@ -48,3 +48,28 @@ class InviteExpiredError(DomainError):
 
 class InviteAlreadyAcceptedError(DomainError):
     """Raised when the invite has already been accepted; tokens are single-use."""
+
+
+class AgentNotFoundError(DomainError):
+    """Raised when an agent ID doesn't resolve to an AGENT-typed member in the
+    requester's workspace. Returned as a 404 — same shape as truly-missing so
+    cross-tenant probing reveals nothing."""
+
+
+class AgentHasCreatedTasksError(DomainError):
+    """Raised when DELETE /agents/{id} is attempted but the agent created tasks
+    that other members still own. Returned as 409 with guidance."""
+
+
+class TaskNotInDoneStateError(DomainError):
+    """Raised when rating a task that hasn't transitioned to DONE."""
+
+
+class TaskAlreadyRatedError(DomainError):
+    """Raised when a second rating is attempted on a task. Tokens are
+    single-shot — re-rating is a separate UX we haven't designed yet."""
+
+
+class RatingForbiddenError(DomainError):
+    """Raised when the rater isn't the task creator. Only the issuing party
+    can rate the work — assignees can't self-rate or rate peers."""

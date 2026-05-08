@@ -211,6 +211,7 @@ async def test_resolve_blocked_clears_blocked_reason(
         task_id=blocked.id,
         status=TaskStatus.IN_PROGRESS,
         blocked_reason=None,
+        tokens_used=None,
     )
 
 
@@ -231,6 +232,7 @@ async def test_blocking_a_task_persists_reason(service: TaskService, task_repo: 
         task_id=in_progress.id,
         status=TaskStatus.BLOCKED,
         blocked_reason="missing creds",
+        tokens_used=None,
     )
 
 

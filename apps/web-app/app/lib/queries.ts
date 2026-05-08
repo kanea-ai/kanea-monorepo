@@ -7,14 +7,18 @@ import {
   tasksApi,
   tenantsApi,
   type Agent,
+  type AgentDetail,
   type CreateAgentPayload,
   type CreateAgentResponse,
   type CreateTaskPayload,
   type InviteCreatePayload,
   type InviteCreateResponse,
   type Member,
+  type RateTaskPayload,
   type Task,
+  type TaskRating,
   type TaskStatus,
+  type UpdateAgentPayload,
   type UpdateStatusPayload,
 } from './api';
 
@@ -77,6 +81,7 @@ export function useCreateTask() {
 
 export const agentKeys = {
   all: ['agents'] as const satisfies QueryKey,
+  detail: (id: string) => ['agents', id] as const satisfies QueryKey,
 };
 
 export function useAgents() {
@@ -86,11 +91,55 @@ export function useAgents() {
   });
 }
 
+export function useAgent(id: string) {
+  return useQuery<AgentDetail>({
+    queryKey: agentKeys.detail(id),
+    queryFn: () => agentsApi.get(id),
+    // Stats refresh fairly often — agents pick up tasks throughout the
+    // day, so a 30s background refresh keeps the dashboard meaningful
+    // without spamming the api.
+    refetchInterval: 30_000,
+  });
+}
+
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation<CreateAgentResponse, Error, CreateAgentPayload>({
     mutationFn: (payload) => agentsApi.create(payload),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+    },
+  });
+}
+
+export function useUpdateAgent(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Agent, Error, UpdateAgentPayload>({
+    mutationFn: (payload) => agentsApi.update(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+      qc.invalidateQueries({ queryKey: agentKeys.detail(id) });
+    },
+  });
+}
+
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => agentsApi.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+    },
+  });
+}
+
+export function useRateTask() {
+  const qc = useQueryClient();
+  return useMutation<TaskRating, Error, { id: string; payload: RateTaskPayload }>({
+    mutationFn: ({ id, payload }) => tasksApi.rate(id, payload),
+    onSuccess: () => {
+      // Ratings drive agent stats — bust the agent caches so the
+      // accuracy_percent reflects the new rating on next render.
       qc.invalidateQueries({ queryKey: agentKeys.all });
     },
   });

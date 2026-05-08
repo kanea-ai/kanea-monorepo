@@ -24,7 +24,7 @@ from app.application.auth.ports import (
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
-from app.application.tasks.ports import TaskRepository
+from app.application.tasks.ports import TaskRatingRepository, TaskRepository
 from app.application.tasks.schemas import Principal
 from app.application.tasks.service import TaskService
 from app.application.tenants.ports import (
@@ -40,6 +40,7 @@ from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRep
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
+from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
@@ -106,11 +107,16 @@ def get_task_repository(session: SessionDep) -> TaskRepository:
     return SqlAlchemyTaskRepository(session)
 
 
+def get_task_rating_repository(session: SessionDep) -> TaskRatingRepository:
+    return SqlAlchemyTaskRatingRepository(session)
+
+
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    ratings: Annotated[TaskRatingRepository, Depends(get_task_rating_repository)],
 ) -> TaskService:
-    return TaskService(tasks=tasks, members=members)
+    return TaskService(tasks=tasks, members=members, ratings=ratings)
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]

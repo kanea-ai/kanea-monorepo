@@ -115,6 +115,7 @@ class MemberModel(TimestampMixin, Base):
     role: Mapped[MemberRole] = mapped_column(
         member_role_enum, nullable=False, default=MemberRole.MEMBER
     )
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="members")
     team: Mapped[TeamModel | None] = relationship(back_populates="members")
@@ -186,7 +187,9 @@ class TaskModel(TimestampMixin, Base):
     )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="tasks")
     creator: Mapped[MemberModel] = relationship(foreign_keys=[created_by_id])
@@ -214,3 +217,31 @@ class InviteModel(TimestampMixin, Base):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskRatingModel(TimestampMixin, Base):
+    __tablename__ = "task_ratings"
+    __table_args__ = (
+        CheckConstraint("score >= 0 AND score <= 100", name="score_range"),
+        Index("ix_task_ratings_rated_member_id", "rated_member_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    rated_by_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    rated_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
