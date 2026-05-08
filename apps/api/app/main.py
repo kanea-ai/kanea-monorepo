@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.agents import router as agents_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.tenants import router as tenants_router
@@ -35,6 +36,7 @@ API_V1_PREFIX = "/api/v1"
 app.include_router(auth_router, prefix=API_V1_PREFIX)
 app.include_router(tasks_router, prefix=API_V1_PREFIX)
 app.include_router(tenants_router, prefix=API_V1_PREFIX)
+app.include_router(agents_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/health", tags=["health"])

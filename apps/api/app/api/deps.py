@@ -9,6 +9,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.agents.ports import AgentMemberRepository
+from app.application.agents.service import AgentService
 from app.application.auth.oauth import (
     GitHubOAuthClient,
     GoogleOAuthClient,
@@ -152,6 +154,28 @@ def get_invite_service(
 
 
 InviteServiceDep = Annotated[InviteService, Depends(get_invite_service)]
+
+
+def get_agent_member_repository(session: SessionDep) -> AgentMemberRepository:
+    # Same SQLAlchemy class — different protocol (list_agents_for_workspace).
+    return SqlAlchemyMemberRepository(session)
+
+
+def get_agent_service(
+    members_for_listing: Annotated[AgentMemberRepository, Depends(get_agent_member_repository)],
+    auth_members: Annotated[MemberRepository, Depends(get_member_repository)],
+    credentials: Annotated[CredentialsRepository, Depends(get_credentials_repository)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+) -> AgentService:
+    return AgentService(
+        members_for_listing=members_for_listing,
+        auth_members=auth_members,
+        credentials=credentials,
+        hasher=hasher,
+    )
+
+
+AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
 
 
 _bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")

@@ -73,3 +73,21 @@ class SqlAlchemyTaskRepository:
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
+
+    async def create(self, task: Task) -> Task:
+        row = TaskModel(
+            id=task.id,
+            workspace_id=task.workspace_id,
+            created_by_id=task.created_by_id,
+            title=task.title,
+            status=task.status,
+            priority=task.priority,
+            description=task.description,
+            assignee_id=task.assignee_id,
+            due_at=task.due_at,
+            blocked_reason=task.blocked_reason,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)

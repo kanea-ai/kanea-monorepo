@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.entities import Task
 from app.domain.enums import MemberRole, MemberType, TaskStatus
@@ -40,6 +40,20 @@ class UpdateTaskStatusRequest(BaseModel):
 
     status: TaskStatus
     blocked_reason: str | None = None
+
+
+class CreateTaskRequest(BaseModel):
+    """Inputs accepted on POST /tasks. workspace_id and created_by_id are
+    derived from the authenticated principal — not user-supplied — so a
+    member can never create a task in a workspace they don't belong to."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    priority: int = Field(default=0, ge=0, le=1000)
+    assignee_id: UUID | None = None
+    due_at: datetime | None = None
 
 
 class TaskResponse(BaseModel):

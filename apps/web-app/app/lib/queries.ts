@@ -3,8 +3,13 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 
 import {
+  agentsApi,
   tasksApi,
   tenantsApi,
+  type Agent,
+  type CreateAgentPayload,
+  type CreateAgentResponse,
+  type CreateTaskPayload,
   type InviteCreatePayload,
   type InviteCreateResponse,
   type Member,
@@ -53,6 +58,41 @@ export function useCreateInvite() {
   // The created invite is shown inline in the response (with the token).
   return useMutation<InviteCreateResponse, Error, InviteCreatePayload>({
     mutationFn: (payload) => tenantsApi.createInvite(payload),
+  });
+}
+
+export function useCreateTask() {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, CreateTaskPayload>({
+    mutationFn: (payload) => tasksApi.create(payload),
+    // Drop the lists from cache so the new task appears in the board /
+    // dashboard / blocked views without a manual refresh.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+// ---------- Agents ----------
+
+export const agentKeys = {
+  all: ['agents'] as const satisfies QueryKey,
+};
+
+export function useAgents() {
+  return useQuery<Agent[]>({
+    queryKey: agentKeys.all,
+    queryFn: () => agentsApi.list(),
+  });
+}
+
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation<CreateAgentResponse, Error, CreateAgentPayload>({
+    mutationFn: (payload) => agentsApi.create(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+    },
   });
 }
 

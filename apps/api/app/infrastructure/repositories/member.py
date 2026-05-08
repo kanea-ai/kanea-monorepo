@@ -61,3 +61,17 @@ class SqlAlchemyMemberRepository:
         )
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
+
+    async def list_agents_for_workspace(self, workspace_id: UUID) -> list[Member]:
+        from app.domain.enums import MemberType
+
+        stmt = (
+            select(MemberModel)
+            .where(
+                MemberModel.workspace_id == workspace_id,
+                MemberModel.type == MemberType.AGENT,
+            )
+            .order_by(MemberModel.priority, MemberModel.created_at)
+        )
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]

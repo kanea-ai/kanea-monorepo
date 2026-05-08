@@ -33,6 +33,14 @@ export interface UpdateStatusPayload {
   blocked_reason?: string | null;
 }
 
+export interface CreateTaskPayload {
+  title: string;
+  description?: string | null;
+  priority?: number;
+  assignee_id?: string | null;
+  due_at?: string | null;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;
@@ -164,9 +172,45 @@ export const tasksApi = {
     const qs = status ? `?status_filter=${status}` : '';
     return request<Task[]>(`${V1}/tasks${qs}`);
   },
+  get: (id: string) => request<Task>(`${V1}/tasks/${id}`),
+  create: (payload: CreateTaskPayload) =>
+    request<Task>(`${V1}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updateStatus: (id: string, payload: UpdateStatusPayload) =>
     request<Task>(`${V1}/tasks/${id}/status`, {
       method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+};
+
+// ---------- Agents ----------
+
+export interface Agent {
+  id: string;
+  workspace_id: string;
+  name: string;
+  priority: number;
+  created_at: string;
+}
+
+export interface CreateAgentPayload {
+  name: string;
+  priority?: number;
+}
+
+export interface CreateAgentResponse extends Agent {
+  // Plaintext API key. Surfaced exactly once on creation; subsequent
+  // GETs return the safe Agent shape only — bcrypt-hashed on persist.
+  api_key: string;
+}
+
+export const agentsApi = {
+  list: () => request<Agent[]>(`${V1}/agents`),
+  create: (payload: CreateAgentPayload) =>
+    request<CreateAgentResponse>(`${V1}/agents`, {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
 };

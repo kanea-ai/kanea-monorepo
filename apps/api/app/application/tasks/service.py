@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import datetime
+from uuid import UUID, uuid4
 
 from app.application.auth.ports import MemberRepository
 from app.application.tasks.ports import TaskRepository
 from app.application.tasks.schemas import (
+    CreateTaskRequest,
     DelegateTaskRequest,
     Principal,
     TaskResponse,
@@ -56,6 +58,39 @@ class TaskService:
     ) -> list[TaskResponse]:
         rows = await self.tasks.list_by_workspace(requester.workspace_id, status=status)
         return [TaskResponse.from_entity(row) for row in rows]
+
+    async def get_by_id(self, task_id: UUID, requester: Principal) -> TaskResponse:
+        task = await self._load_task(task_id, requester)
+        return TaskResponse.from_entity(task)
+
+    async def create(self, request: CreateTaskRequest, requester: Principal) -> TaskResponse:
+        # If an assignee is supplied, it must belong to the same workspace.
+        # The hierarchy rule (only delegate down) is enforced for explicit
+        # delegation; on initial create we allow any same-workspace member
+        # to be the first assignee — including yourself, including agents.
+        if request.assignee_id is not None:
+            assignee = await self.members.get_by_id(request.assignee_id)
+            if assignee is None or assignee.workspace_id != requester.workspace_id:
+                raise TaskNotFoundError("assignee not found")
+
+        now = datetime.utcnow()
+        created = await self.tasks.create(
+            Task(
+                id=uuid4(),
+                workspace_id=requester.workspace_id,
+                created_by_id=requester.member_id,
+                title=request.title,
+                status=TaskStatus.PENDING,
+                priority=request.priority,
+                description=request.description,
+                assignee_id=request.assignee_id,
+                due_at=request.due_at,
+                blocked_reason=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return TaskResponse.from_entity(created)
 
     async def update_status(
         self,
