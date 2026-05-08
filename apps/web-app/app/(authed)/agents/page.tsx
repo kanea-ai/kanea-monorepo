@@ -261,16 +261,29 @@ function Field({
   hint?: string;
   children: React.ReactNode;
 }) {
+  // Hint moved next to the label as a hover-tooltip icon. Putting it
+  // below the input as a paragraph made fields with a hint taller than
+  // ones without, so `sm:items-end` left them visibly misaligned.
   return (
     <div>
-      <label
-        htmlFor={htmlFor}
-        className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
-      >
-        {label}
-      </label>
+      <div className="mb-1 flex items-center gap-1">
+        <label
+          htmlFor={htmlFor}
+          className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+        >
+          {label}
+        </label>
+        {hint ? (
+          <span
+            title={hint}
+            aria-label={hint}
+            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold text-slate-500"
+          >
+            ?
+          </span>
+        ) : null}
+      </div>
       {children}
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
     </div>
   );
 }

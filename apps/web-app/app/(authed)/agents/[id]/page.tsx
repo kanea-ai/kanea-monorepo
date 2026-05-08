@@ -1,17 +1,19 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { ApiError, type AgentStats } from '../../../lib/api';
-import { useAgent, useDeleteAgent, useUpdateAgent } from '../../../lib/queries';
+import { ApiError, type AgentStats, type HealthStatus } from '../../../lib/api';
+import { agentKeys, useAgent, useDeleteAgent, useUpdateAgent } from '../../../lib/queries';
 
 export default function AgentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
-  const { data: agent, isLoading, isError, error } = useAgent(id);
+  const qc = useQueryClient();
+  const { data: agent, isLoading, isError, error, isFetching } = useAgent(id);
   const deleteAgent = useDeleteAgent();
 
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -45,11 +47,23 @@ export default function AgentDetailPage() {
           <Link href="/agents" className="text-xs text-slate-500 hover:text-slate-700">
             ← Agents
           </Link>
-          <h1 className="mt-1 text-xl font-semibold text-slate-900">{agent.name}</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold text-slate-900">{agent.name}</h1>
+            <HealthPill status={agent.health_status} lastSeenAt={agent.last_seen_at} />
+          </div>
           <p className="text-xs text-slate-500">
             Created {new Date(agent.created_at).toLocaleString()}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => qc.invalidateQueries({ queryKey: agentKeys.detail(id) })}
+          disabled={isFetching}
+          title="Re-check the agent's last-seen timestamp. The agent itself stamps last_seen_at via /me/heartbeat or on every JWT exchange."
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isFetching ? 'Pinging…' : 'Ping'}
+        </button>
       </header>
 
       <StatsGrid stats={agent.stats} />
@@ -268,6 +282,30 @@ function EditForm({
   );
 }
 
+function HealthPill({ status, lastSeenAt }: { status: HealthStatus; lastSeenAt: string | null }) {
+  const tone =
+    status === 'ONLINE'
+      ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+      : status === 'IDLE'
+        ? 'border-amber-300 bg-amber-50 text-amber-800'
+        : 'border-slate-300 bg-slate-100 text-slate-600';
+  const dot =
+    status === 'ONLINE' ? 'bg-emerald-500' : status === 'IDLE' ? 'bg-amber-500' : 'bg-slate-400';
+  const tooltip = lastSeenAt
+    ? `Last seen ${formatRelative(lastSeenAt)} (${new Date(lastSeenAt).toLocaleString()})`
+    : 'Never seen — agent has not authenticated yet.';
+  return (
+    <span
+      title={tooltip}
+      aria-label={tooltip}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {status}
+    </span>
+  );
+}
+
 function accuracyTone(percent: number): 'good' | 'bad' | 'default' {
   if (percent >= 80) return 'good';
   if (percent < 60) return 'bad';
@@ -307,16 +345,29 @@ function Field({
   hint?: string;
   children: React.ReactNode;
 }) {
+  // Hint rendered next to the label as an info-icon tooltip rather
+  // than below the input — keeps every Field the same height inside
+  // the grid so inputs stay aligned regardless of which carry hints.
   return (
     <div>
-      <label
-        htmlFor={htmlFor}
-        className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
-      >
-        {label}
-      </label>
+      <div className="mb-1 flex items-center gap-1">
+        <label
+          htmlFor={htmlFor}
+          className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+        >
+          {label}
+        </label>
+        {hint ? (
+          <span
+            title={hint}
+            aria-label={hint}
+            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold text-slate-500"
+          >
+            ?
+          </span>
+        ) : null}
+      </div>
       {children}
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
     </div>
   );
 }

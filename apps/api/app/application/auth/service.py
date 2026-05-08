@@ -107,6 +107,11 @@ class AuthService:
         if not self.hasher.verify(request.secret, creds.agent_secret_hash):
             raise AuthenticationError("invalid agent credentials")
 
+        # Free presence signal: every successful key-exchange is a
+        # heartbeat. Agents that never call the explicit /me/heartbeat
+        # still surface as ONLINE for their JWT TTL window.
+        await self.members.heartbeat(member.id)
+
         token, ttl = self.tokens.issue_agent_token(member)
         return TokenResponse(access_token=token, expires_in=ttl)
 

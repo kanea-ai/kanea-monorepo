@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from app.api.deps import AgentServiceDep, PrincipalDep
+from app.api.deps import AgentScopeDep, AgentServiceDep, PrincipalDep
 from app.application.agents.schemas import (
     AgentDetailResponse,
     AgentResponse,
@@ -46,6 +46,23 @@ async def list_agents(
     service: AgentServiceDep,
 ) -> list[AgentResponse]:
     return await service.list_agents(principal)
+
+
+@router.post(
+    "/me/heartbeat",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def agent_heartbeat(
+    principal: AgentScopeDep,
+    service: AgentServiceDep,
+) -> Response:
+    """Agent-only liveness ping. Stamps members.last_seen_at = now() so
+    the workspace UI can show ONLINE/IDLE/STALE for this agent. 403 for
+    human callers — only an agent JWT (scope='agent') may report its
+    own presence."""
+    await service.heartbeat(principal)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

@@ -107,4 +107,9 @@ class AgentDetailResponse(BaseModel):
     priority: int
     model: str | None
     created_at: datetime
+    # Most recent contact from the agent. Null until the agent calls
+    # /api/v1/auth/agent-token at least once. Surfaces as a health pill
+    # in the UI: ONLINE (≤5min) / IDLE (≤1h) / STALE (>1h or never).
+    last_seen_at: datetime | None
+    health_status: str
     stats: AgentStatsResponse

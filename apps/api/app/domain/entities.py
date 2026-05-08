@@ -39,6 +39,11 @@ class Member:
     # so the user can label however they want ("claude-opus-4-7", "gpt-5",
     # "Custom: agent-pipeline-v2", etc.). Null on humans.
     model: str | None = None
+    # Last time this member touched the api — stamped on agent JWT
+    # issuance and on POST /api/v1/agents/me/heartbeat. Drives the
+    # derived health_status pill on the agent detail view. Null on
+    # humans (we only surface it for agents).
+    last_seen_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

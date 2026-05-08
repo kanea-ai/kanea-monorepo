@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from app.application.agents.ports import AgentMemberRepository
@@ -26,6 +26,32 @@ from app.domain.exceptions import (
     AgentHasCreatedTasksError,
     AgentNotFoundError,
 )
+
+# Health-status thresholds. ONLINE ≤ 5 min, IDLE ≤ 1 h, STALE otherwise.
+# Tuned for an LLM agent loop that pings every 30-90s while working —
+# anything older than 5 min means the loop is paused or the agent
+# crashed; older than an hour means it's effectively offline.
+_ONLINE_WINDOW = timedelta(minutes=5)
+_IDLE_WINDOW = timedelta(hours=1)
+
+
+def derive_health_status(last_seen_at: datetime | None) -> str:
+    """Maps last_seen_at -> 'ONLINE'|'IDLE'|'STALE'. Pure so it's cheap
+    to test; called from get_agent_detail at request time rather than
+    persisted on the row (which would require a clock-driven sweep)."""
+    if last_seen_at is None:
+        return "STALE"
+    # Tolerate naïve datetimes coming back from the DB by assuming UTC —
+    # SQLAlchemy with timezone=True should always yield aware values, but
+    # belt-and-braces for migration-era rows.
+    if last_seen_at.tzinfo is None:
+        last_seen_at = last_seen_at.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - last_seen_at
+    if delta <= _ONLINE_WINDOW:
+        return "ONLINE"
+    if delta <= _IDLE_WINDOW:
+        return "IDLE"
+    return "STALE"
 
 
 @dataclass(slots=True)
@@ -100,8 +126,16 @@ class AgentService:
             priority=agent.priority,
             model=agent.model,
             created_at=agent.created_at,
+            last_seen_at=agent.last_seen_at,
+            health_status=derive_health_status(agent.last_seen_at),
             stats=AgentStatsResponse.from_entity(stats),
         )
+
+    async def heartbeat(self, principal: Principal) -> None:
+        """Stamp last_seen_at on the calling agent's row. The router
+        already enforces scope==agent so we trust the principal here;
+        any human-issued JWT would be rejected before reaching us."""
+        await self.members_for_listing.heartbeat(principal.member_id)
 
     async def update_agent(
         self, agent_id: UUID, request: UpdateAgentRequest, principal: Principal

@@ -249,6 +249,21 @@ def require_workspace_admin(principal: PrincipalDep) -> Principal:
 WorkspaceAdminDep = Annotated[Principal, Depends(require_workspace_admin)]
 
 
+def require_agent_scope(principal: PrincipalDep) -> Principal:
+    """Routes that only an agent's own JWT may hit (e.g. self-heartbeat).
+    Humans get 403 — they shouldn't be able to spoof an agent's
+    presence signal. Agent JWTs carry scope='agent'."""
+    if principal.scope != "agent" or principal.type is not MemberType.AGENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="agent scope required",
+        )
+    return principal
+
+
+AgentScopeDep = Annotated[Principal, Depends(require_agent_scope)]
+
+
 def get_oauth_client(provider: OAuthProvider, config: Settings) -> OAuthClient:
     """Build an OAuth client for the requested provider.
 

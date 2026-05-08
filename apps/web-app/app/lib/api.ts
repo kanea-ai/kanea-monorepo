@@ -210,7 +210,13 @@ export interface AgentStats {
   total_tokens_used: number;
 }
 
+export type HealthStatus = 'ONLINE' | 'IDLE' | 'STALE';
+
 export interface AgentDetail extends Agent {
+  // ISO timestamp of the agent's last contact (heartbeat or token
+  // exchange). Null until the agent has authenticated at least once.
+  last_seen_at: string | null;
+  health_status: HealthStatus;
   stats: AgentStats;
 }
 

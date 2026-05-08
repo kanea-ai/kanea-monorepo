@@ -116,6 +116,7 @@ class MemberModel(TimestampMixin, Base):
         member_role_enum, nullable=False, default=MemberRole.MEMBER
     )
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="members")
     team: Mapped[TeamModel | None] = relationship(back_populates="members")

@@ -22,6 +22,7 @@ def _to_entity(row: MemberModel) -> Member:
         priority=row.priority,
         role=row.role,
         model=row.model,
+        last_seen_at=row.last_seen_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -96,6 +97,16 @@ class SqlAlchemyMemberRepository:
 
             raise AgentNotFoundError("agent not found")
         await self._session.delete(row)
+        await self._session.flush()
+
+    async def heartbeat(self, member_id: UUID) -> None:
+        """Stamp last_seen_at = now() on the member row. No-ops silently
+        if the row is missing — heartbeats are best-effort signals, not
+        commands; the caller's auth has already validated the principal."""
+        row = await self._session.get(MemberModel, member_id)
+        if row is None:
+            return
+        row.last_seen_at = datetime.now(UTC)
         await self._session.flush()
 
     async def list_for_workspace(self, workspace_id: UUID) -> list[Member]:
