@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { ApiError, type AgentStats, type HealthStatus } from '../../../lib/api';
+import { Field, formatRelative, HealthPill } from '../../../components/AgentUI';
+import { ConfirmDialog } from '../../../components/ConfirmDialog';
+import { ApiError, type AgentStats } from '../../../lib/api';
 import { agentKeys, useAgent, useDeleteAgent, useUpdateAgent } from '../../../lib/queries';
 
 export default function AgentDetailPage() {
@@ -13,11 +15,13 @@ export default function AgentDetailPage() {
   const id = params.id;
   const router = useRouter();
   const qc = useQueryClient();
-  const { data: agent, isLoading, isError, error, isFetching } = useAgent(id);
+  const { data: agent, isLoading, isError, error } = useAgent(id);
   const deleteAgent = useDeleteAgent();
 
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [pinging, setPinging] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState(false);
 
   if (isLoading) {
     return <p className="p-6 text-sm text-slate-500">Loading agent…</p>;
@@ -29,42 +33,58 @@ export default function AgentDetailPage() {
   }
   if (!agent) return null;
 
+  const onPing = async () => {
+    // Explicit refetch (rather than just invalidate) so the pending
+    // state is deterministic — invalidate alone returns immediately
+    // when the cache is fresh, and the button would flicker.
+    setPinging(true);
+    try {
+      await qc.refetchQueries({ queryKey: agentKeys.detail(id) });
+    } finally {
+      setPinging(false);
+    }
+  };
+
+  const onCopyId = async () => {
+    await navigator.clipboard.writeText(id);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 1500);
+  };
+
   const onDelete = async () => {
     setDeleteError(null);
     try {
       await deleteAgent.mutateAsync(id);
+      setConfirmOpen(false);
       router.replace('/agents');
     } catch (err) {
       setDeleteError(err instanceof ApiError ? err.detail : 'Failed to delete agent');
-      setConfirmDelete(false);
+      setConfirmOpen(false);
     }
   };
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Link href="/agents" className="text-xs text-slate-500 hover:text-slate-700">
-            ← Agents
-          </Link>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold text-slate-900">{agent.name}</h1>
-            <HealthPill status={agent.health_status} lastSeenAt={agent.last_seen_at} />
-          </div>
-          <p className="text-xs text-slate-500">
-            Created {new Date(agent.created_at).toLocaleString()}
-          </p>
+      <header>
+        <Link href="/agents" className="text-xs text-slate-500 hover:text-slate-700">
+          ← Agents
+        </Link>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-semibold text-slate-900">{agent.name}</h1>
         </div>
-        <button
-          type="button"
-          onClick={() => qc.invalidateQueries({ queryKey: agentKeys.detail(id) })}
-          disabled={isFetching}
-          title="Re-check the agent's last-seen timestamp. The agent itself stamps last_seen_at via /me/heartbeat or on every JWT exchange."
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isFetching ? 'Pinging…' : 'Ping'}
-        </button>
+        <p className="text-xs text-slate-500">
+          Created {new Date(agent.created_at).toLocaleString()}
+        </p>
       </header>
+
+      <StatusCard
+        status={agent.health_status}
+        lastSeenAt={agent.last_seen_at}
+        pinging={pinging}
+        onPing={onPing}
+      />
+
+      <IdentityCard id={id} copied={copiedId} onCopy={onCopyId} />
 
       <StatsGrid stats={agent.stats} />
 
@@ -81,41 +101,14 @@ export default function AgentDetailPage() {
             the agent created tasks that other members own.
           </p>
         </header>
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          {confirmDelete ? (
-            <>
-              <span className="text-sm text-slate-700">Delete this agent permanently?</span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  disabled={deleteAgent.isPending}
-                  className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  Keep
-                </button>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  disabled={deleteAgent.isPending}
-                  className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-60"
-                >
-                  {deleteAgent.isPending ? 'Deleting…' : 'Delete agent'}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="text-sm text-slate-700">Permanent — no soft-delete.</span>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
-              >
-                Delete agent
-              </button>
-            </>
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setConfirmOpen(true)}
+            className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+          >
+            Delete agent
+          </button>
         </div>
         {deleteError ? (
           <p role="alert" className="px-4 pb-3 text-sm text-red-600">
@@ -123,7 +116,83 @@ export default function AgentDetailPage() {
           </p>
         ) : null}
       </section>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Delete this agent?"
+        message={`"${agent.name}" will be permanently removed. Any in-flight tasks will be unassigned. This cannot be undone.`}
+        confirmLabel="Delete agent"
+        cancelLabel="Cancel"
+        pending={deleteAgent.isPending}
+        onConfirm={onDelete}
+        onCancel={() => setConfirmOpen(false)}
+        tone="danger"
+      />
     </div>
+  );
+}
+
+function StatusCard({
+  status,
+  lastSeenAt,
+  pinging,
+  onPing,
+}: {
+  status: 'ONLINE' | 'IDLE' | 'STALE';
+  lastSeenAt: string | null;
+  pinging: boolean;
+  onPing: () => void;
+}) {
+  const lastSeenLabel = lastSeenAt ? `Last seen ${formatRelative(lastSeenAt)}` : 'Never seen';
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col items-center gap-3 px-4 py-5 text-center">
+        <HealthPill status={status} lastSeenAt={lastSeenAt} />
+        <p className="text-xs text-slate-500">{lastSeenLabel}</p>
+        <button
+          type="button"
+          onClick={onPing}
+          disabled={pinging}
+          className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span
+            className={`h-2 w-2 rounded-full bg-white/90 ${pinging ? 'animate-ping' : ''}`}
+            aria-hidden
+          />
+          {pinging ? 'Pinging…' : 'Ping agent'}
+        </button>
+        <p className="max-w-md text-[11px] text-slate-500">
+          Re-checks the agent&apos;s last-seen timestamp. Agents stamp it on every JWT exchange and
+          on calls to <code className="font-mono">/api/v1/agents/me/heartbeat</code>.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function IdentityCard({ id, copied, onCopy }: { id: string; copied: boolean; onCopy: () => void }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <header className="border-b border-slate-100 px-4 py-3">
+        <h2 className="text-sm font-semibold text-slate-900">Agent ID</h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Use this with the agent&apos;s API key when calling{' '}
+          <code className="font-mono">POST /api/v1/auth/agent-token</code>.
+        </p>
+      </header>
+      <div className="flex items-center gap-2 px-4 py-3">
+        <code className="flex-1 truncate rounded border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-xs text-slate-800">
+          {id}
+        </code>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -223,8 +292,8 @@ function EditForm({
       <header className="border-b border-slate-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-900">Profile</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          The agent <span className="font-mono">{id.slice(0, 8)}…</span> can&apos;t change. Name,
-          priority, and model are editable.
+          Agent credentials cannot be changed after creation. You can only update the Name,
+          Priority, and Model.
         </p>
       </header>
       <form className="grid gap-3 px-4 py-4 sm:grid-cols-3" onSubmit={onSubmit}>
@@ -282,30 +351,6 @@ function EditForm({
   );
 }
 
-function HealthPill({ status, lastSeenAt }: { status: HealthStatus; lastSeenAt: string | null }) {
-  const tone =
-    status === 'ONLINE'
-      ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-      : status === 'IDLE'
-        ? 'border-amber-300 bg-amber-50 text-amber-800'
-        : 'border-slate-300 bg-slate-100 text-slate-600';
-  const dot =
-    status === 'ONLINE' ? 'bg-emerald-500' : status === 'IDLE' ? 'bg-amber-500' : 'bg-slate-400';
-  const tooltip = lastSeenAt
-    ? `Last seen ${formatRelative(lastSeenAt)} (${new Date(lastSeenAt).toLocaleString()})`
-    : 'Never seen — agent has not authenticated yet.';
-  return (
-    <span
-      title={tooltip}
-      aria-label={tooltip}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone}`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-      {status}
-    </span>
-  );
-}
-
 function accuracyTone(percent: number): 'good' | 'bad' | 'default' {
   if (percent >= 80) return 'good';
   if (percent < 60) return 'bad';
@@ -319,55 +364,4 @@ function formatDuration(seconds: number): string {
   const hr = min / 60;
   if (hr < 24) return `${hr.toFixed(1)}h`;
   return `${(hr / 24).toFixed(1)}d`;
-}
-
-function formatRelative(iso: string): string {
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return iso;
-  const diff = Date.now() - ts;
-  const sec = Math.round(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
-}
-
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  // Hint rendered next to the label as an info-icon tooltip rather
-  // than below the input — keeps every Field the same height inside
-  // the grid so inputs stay aligned regardless of which carry hints.
-  return (
-    <div>
-      <div className="mb-1 flex items-center gap-1">
-        <label
-          htmlFor={htmlFor}
-          className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-        >
-          {label}
-        </label>
-        {hint ? (
-          <span
-            title={hint}
-            aria-label={hint}
-            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold text-slate-500"
-          >
-            ?
-          </span>
-        ) : null}
-      </div>
-      {children}
-    </div>
-  );
 }

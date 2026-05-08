@@ -192,6 +192,8 @@ export const tasksApi = {
 
 // ---------- Agents ----------
 
+export type HealthStatus = 'ONLINE' | 'IDLE' | 'STALE';
+
 export interface Agent {
   id: string;
   workspace_id: string;
@@ -199,6 +201,10 @@ export interface Agent {
   priority: number;
   model: string | null;
   created_at: string;
+  // Most recent api contact (heartbeat or JWT exchange). Null until
+  // the agent has authenticated at least once.
+  last_seen_at: string | null;
+  health_status: HealthStatus;
 }
 
 export interface AgentStats {
@@ -210,13 +216,7 @@ export interface AgentStats {
   total_tokens_used: number;
 }
 
-export type HealthStatus = 'ONLINE' | 'IDLE' | 'STALE';
-
 export interface AgentDetail extends Agent {
-  // ISO timestamp of the agent's last contact (heartbeat or token
-  // exchange). Null until the agent has authenticated at least once.
-  last_seen_at: string | null;
-  health_status: HealthStatus;
   stats: AgentStats;
 }
 

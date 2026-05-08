@@ -1,18 +1,59 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
-import { ApiError, type Agent, type CreateAgentResponse } from '../../lib/api';
-import { useAgents, useCreateAgent } from '../../lib/queries';
+import { Field, HealthPill } from '../../components/AgentUI';
+import { ApiError, type Agent, type CreateAgentResponse, type HealthStatus } from '../../lib/api';
+import { agentKeys, useAgents, useCreateAgent } from '../../lib/queries';
 
 // One-time secret display: when an agent is provisioned the api returns
 // the plaintext key in the response, hashed on persist. The created
 // response is held in component state and surfaced inline; refreshing
 // the page erases it. Same pattern as invite tokens on /team.
 
+type StatusFilter = 'ALL' | HealthStatus;
+
 export default function AgentsPage() {
   const { data: agents, isLoading, isError, error } = useAgents();
+  const qc = useQueryClient();
+
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const [pingingAll, setPingingAll] = useState(false);
+
+  const filtered = useMemo(() => {
+    if (!agents) return [];
+    const q = search.trim().toLowerCase();
+    return agents.filter((a) => {
+      if (statusFilter !== 'ALL' && a.health_status !== statusFilter) return false;
+      if (q === '') return true;
+      return (
+        a.name.toLowerCase().includes(q) ||
+        (a.model ?? '').toLowerCase().includes(q) ||
+        a.id.toLowerCase().includes(q)
+      );
+    });
+  }, [agents, search, statusFilter]);
+
+  const onPingAll = async () => {
+    // Refetches the list query (and any hot detail queries). The actual
+    // last_seen_at stamping only happens when an agent itself reconnects
+    // — this just pulls the freshest server-side view.
+    setPingingAll(true);
+    try {
+      await qc.refetchQueries({ queryKey: agentKeys.all });
+    } finally {
+      setPingingAll(false);
+    }
+  };
+
+  const counts = useMemo(() => {
+    const base = { ALL: agents?.length ?? 0, ONLINE: 0, IDLE: 0, STALE: 0 };
+    for (const a of agents ?? []) base[a.health_status] += 1;
+    return base;
+  }, [agents]);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -27,9 +68,33 @@ export default function AgentsPage() {
       <CreateAgentSection />
 
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">Active agents</h2>
+        <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
+          <h2 className="mr-auto text-sm font-semibold text-slate-900">Active agents</h2>
+          <button
+            type="button"
+            onClick={onPingAll}
+            disabled={pingingAll || !agents || agents.length === 0}
+            className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full bg-white ${pingingAll ? 'animate-ping' : ''}`}
+              aria-hidden
+            />
+            {pingingAll ? 'Pinging…' : 'Ping all'}
+          </button>
         </header>
+
+        <div className="grid gap-2 border-b border-slate-100 px-4 py-3 sm:grid-cols-[1fr_auto]">
+          <input
+            type="search"
+            placeholder="Search by name, model, or ID…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+          <StatusTabs current={statusFilter} counts={counts} onChange={setStatusFilter} />
+        </div>
+
         <div className="p-1">
           {isError ? (
             <p className="px-3 py-6 text-sm text-red-600">
@@ -41,15 +106,66 @@ export default function AgentsPage() {
             <p className="px-3 py-6 text-center text-sm text-slate-500">
               No agents yet. Create one above to get started.
             </p>
+          ) : filtered.length === 0 ? (
+            <p className="px-3 py-6 text-center text-sm text-slate-500">
+              No agents match the current filters.
+            </p>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {agents.map((a) => (
+              {filtered.map((a) => (
                 <AgentRow key={a.id} agent={a} />
               ))}
             </ul>
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function StatusTabs({
+  current,
+  counts,
+  onChange,
+}: {
+  current: StatusFilter;
+  counts: Record<StatusFilter, number>;
+  onChange: (s: StatusFilter) => void;
+}) {
+  const tabs: StatusFilter[] = ['ALL', 'ONLINE', 'IDLE', 'STALE'];
+  return (
+    <div className="inline-flex overflow-hidden rounded-md border border-slate-300 text-xs">
+      {tabs.map((t, i) => {
+        const active = current === t;
+        const dot =
+          t === 'ONLINE'
+            ? 'bg-emerald-500'
+            : t === 'IDLE'
+              ? 'bg-amber-500'
+              : t === 'STALE'
+                ? 'bg-slate-400'
+                : null;
+        return (
+          <button
+            key={t}
+            type="button"
+            onClick={() => onChange(t)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 font-medium ${i > 0 ? 'border-l border-slate-300' : ''} ${
+              active ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            {dot ? <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden /> : null}
+            {t === 'ALL' ? 'All' : t.charAt(0) + t.slice(1).toLowerCase()}
+            <span
+              className={`rounded-full px-1.5 text-[10px] ${
+                active ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {counts[t]}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -107,7 +223,11 @@ function CreateAgentSection() {
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </Field>
-        <Field label="Model" htmlFor="agent_model" hint="Optional.">
+        <Field
+          label="Model"
+          htmlFor="agent_model"
+          hint="Free-form model identifier, e.g. claude-opus-4-7. Optional."
+        >
           <input
             id="agent_model"
             type="text"
@@ -118,7 +238,11 @@ function CreateAgentSection() {
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </Field>
-        <Field label="Priority" htmlFor="agent_priority" hint="Lower = higher rank.">
+        <Field
+          label="Priority"
+          htmlFor="agent_priority"
+          hint="Numeric rank, 2-100. Lower = higher priority. Workspace owner is 1."
+        >
           <input
             id="agent_priority"
             type="number"
@@ -217,22 +341,50 @@ function KeyRow({
 }
 
 function AgentRow({ agent }: { agent: Agent }) {
+  const qc = useQueryClient();
+  const [pinging, setPinging] = useState(false);
+
+  const onPing = async (e: React.MouseEvent) => {
+    // Stop the click from bubbling into the row's Link.
+    e.preventDefault();
+    e.stopPropagation();
+    setPinging(true);
+    try {
+      // Refresh both the list (so this row's pill updates) and any
+      // open detail cache for this agent.
+      await Promise.all([
+        qc.refetchQueries({ queryKey: agentKeys.all }),
+        qc.refetchQueries({ queryKey: agentKeys.detail(agent.id) }),
+      ]);
+    } finally {
+      setPinging(false);
+    }
+  };
+
   return (
     <li className="hover:bg-slate-50">
-      <Link
-        href={`/agents/${agent.id}`}
-        className="flex items-center justify-between gap-3 px-3 py-2.5"
-      >
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-slate-900">{agent.name}</p>
-          <p className="mt-0.5 truncate text-xs text-slate-500">
-            {agent.model ?? <span className="italic">No model set</span>}
-          </p>
-        </div>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <Link href={`/agents/${agent.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-slate-900">{agent.name}</p>
+            <p className="mt-0.5 truncate text-xs text-slate-500">
+              {agent.model ?? <span className="italic">No model set</span>}
+            </p>
+          </div>
+        </Link>
+        <HealthPill status={agent.health_status} lastSeenAt={agent.last_seen_at} size="sm" />
         <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800">
           P{agent.priority}
         </span>
-      </Link>
+        <button
+          type="button"
+          onClick={onPing}
+          disabled={pinging}
+          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pinging ? 'Pinging…' : 'Ping'}
+        </button>
+      </div>
     </li>
   );
 }
@@ -247,43 +399,5 @@ function SkeletonRows({ count }: { count: number }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  // Hint moved next to the label as a hover-tooltip icon. Putting it
-  // below the input as a paragraph made fields with a hint taller than
-  // ones without, so `sm:items-end` left them visibly misaligned.
-  return (
-    <div>
-      <div className="mb-1 flex items-center gap-1">
-        <label
-          htmlFor={htmlFor}
-          className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-        >
-          {label}
-        </label>
-        {hint ? (
-          <span
-            title={hint}
-            aria-label={hint}
-            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold text-slate-500"
-          >
-            ?
-          </span>
-        ) : null}
-      </div>
-      {children}
-    </div>
   );
 }

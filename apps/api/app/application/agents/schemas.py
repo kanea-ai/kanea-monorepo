@@ -35,7 +35,11 @@ class UpdateAgentRequest(BaseModel):
 
 
 class AgentResponse(BaseModel):
-    """Safe shape (no API key, no stats). Returned by GET /agents."""
+    """Safe shape (no API key, no stats). Returned by GET /agents.
+
+    Includes last_seen_at + health_status so the list page can render
+    the presence pill and run the status filter without an N+1 detail
+    fetch per row."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,9 +49,14 @@ class AgentResponse(BaseModel):
     priority: int
     model: str | None
     created_at: datetime
+    last_seen_at: datetime | None
+    health_status: str
 
     @classmethod
     def from_entity(cls, member: Member) -> AgentResponse:
+        # Local import to avoid a circular schemas <-> service edge.
+        from app.application.agents.service import derive_health_status
+
         return cls(
             id=member.id,
             workspace_id=member.workspace_id,
@@ -55,6 +64,8 @@ class AgentResponse(BaseModel):
             priority=member.priority,
             model=member.model,
             created_at=member.created_at,
+            last_seen_at=member.last_seen_at,
+            health_status=derive_health_status(member.last_seen_at),
         )
 
 
