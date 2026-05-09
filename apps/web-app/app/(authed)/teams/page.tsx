@@ -32,7 +32,7 @@ import {
 export default function TeamsPage() {
   const { data: members, isLoading, isError, error } = useMembers();
   const principal = useCurrentPrincipal();
-  const isAdmin = principal?.role === 'OWNER' || principal?.role === 'ADMIN';
+  const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -431,7 +431,7 @@ function TeamRolePill({ role }: { role: TeamRole | null }) {
 function InviteSection({ isAdmin }: { isAdmin: boolean }) {
   const createInvite = useCreateInvite();
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'ADMIN' | 'MEMBER'>('MEMBER');
+  const [role, setRole] = useState<'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER'>('WORKSPACE_MEMBER');
   const [lastInvite, setLastInvite] = useState<InviteCreateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -478,11 +478,11 @@ function InviteSection({ isAdmin }: { isAdmin: boolean }) {
           <select
             id="invite_role"
             value={role}
-            onChange={(e) => setRole(e.target.value as 'ADMIN' | 'MEMBER')}
+            onChange={(e) => setRole(e.target.value as 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER')}
             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           >
-            <option value="MEMBER">Member</option>
-            <option value="ADMIN">Admin</option>
+            <option value="WORKSPACE_MEMBER">Member</option>
+            <option value="WORKSPACE_ADMIN">Admin</option>
           </select>
         </Field>
         <button
@@ -613,9 +613,9 @@ function MemberRow({ member, isAdmin }: { member: Member; isAdmin: boolean }) {
 }
 
 const ROLE_PILL: Record<MemberRole, string> = {
-  OWNER: 'bg-indigo-100 text-indigo-800',
-  ADMIN: 'bg-blue-100 text-blue-800',
-  MEMBER: 'bg-slate-100 text-slate-700',
+  WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
+  WORKSPACE_ADMIN: 'bg-blue-100 text-blue-800',
+  WORKSPACE_MEMBER: 'bg-slate-100 text-slate-700',
 };
 
 function RolePill({ role }: { role: MemberRole }) {
@@ -629,7 +629,9 @@ function RolePill({ role }: { role: MemberRole }) {
 }
 
 function roleLabel(role: MemberRole): string {
-  return role.charAt(0) + role.slice(1).toLowerCase();
+  // Strip the WORKSPACE_ prefix and title-case the rest.
+  const tail = role.slice('WORKSPACE_'.length);
+  return tail.charAt(0) + tail.slice(1).toLowerCase();
 }
 
 function SkeletonRows({ count }: { count: number }) {

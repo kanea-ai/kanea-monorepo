@@ -168,7 +168,8 @@ function AcceptForm({ token, preview }: { token: string; preview: InvitePreview 
 }
 
 function roleLabel(role: MemberRole): string {
-  return role.charAt(0) + role.slice(1).toLowerCase();
+  const tail = role.slice('WORKSPACE_'.length);
+  return tail.charAt(0) + tail.slice(1).toLowerCase();
 }
 
 function Field({

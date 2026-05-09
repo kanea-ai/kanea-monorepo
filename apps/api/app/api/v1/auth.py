@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import secrets
 from typing import Annotated
 from urllib.parse import urlencode
@@ -189,7 +191,11 @@ async def oauth_callback(
     # frontend renders the workspace picker and POSTs to /auth/select-
     # workspace with that token + the chosen workspace_id.
     if login_resp.requires_selection:
-        response = _redirect_to_frontend(settings, selection_token=login_resp.selection_token)
+        response = _redirect_to_frontend(
+            settings,
+            selection_token=login_resp.selection_token,
+            workspaces=login_resp.workspaces,
+        )
     else:
         response = _redirect_to_frontend(settings, token=login_resp.access_token)
     # Clear the state cookie now that it's been consumed.
@@ -202,6 +208,7 @@ def _redirect_to_frontend(
     *,
     token: str | None = None,
     selection_token: str | None = None,
+    workspaces: list | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
     params: dict[str, str] = {}
@@ -209,6 +216,13 @@ def _redirect_to_frontend(
         params["token"] = token
     if selection_token is not None:
         params["selection_token"] = selection_token
+    if workspaces is not None:
+        # Embed workspaces alongside the selection token so the picker
+        # page can render without a follow-up api round-trip. Base64url
+        # of compact JSON keeps the URL clean and pop-safe across the
+        # tiny realistic counts (<10 workspaces).
+        payload = json.dumps([w.model_dump(mode="json") for w in workspaces], separators=(",", ":"))
+        params["workspaces"] = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
     if error is not None:
         params["error"] = error
     suffix = f"?{urlencode(params)}" if params else ""

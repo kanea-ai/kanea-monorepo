@@ -134,6 +134,60 @@ def test_oauth_callback_happy_path_redirects_to_frontend_with_token(
     auth_service.oauth_login.assert_awaited_once()
 
 
+def test_oauth_callback_multi_workspace_redirects_with_selection_token(
+    client: TestClient, auth_service: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Multi-workspace OAuth users get bounced to the frontend with
+    the selection token AND a base64url-encoded workspaces blob, so
+    the picker can render without a follow-up api round-trip."""
+    import base64
+    import json
+    from uuid import uuid4
+
+    from app.application.auth.schemas import WorkspaceOption
+    from app.domain.enums import MemberRole
+
+    mock_client = MagicMock()
+    mock_client.fetch_identity = AsyncMock(
+        return_value=OAuthIdentity(
+            provider=OAuthProvider.GOOGLE,
+            oauth_id="g-12345",
+            email="alice@kanea.ai",
+            name="Alice",
+        )
+    )
+    monkeypatch.setattr("app.api.v1.auth.get_oauth_client", lambda *_a, **_kw: mock_client)
+
+    ws_a, ws_b = uuid4(), uuid4()
+    auth_service.oauth_login.return_value = LoginResponse(
+        requires_selection=True,
+        selection_token="sel.jwt",
+        workspaces=[
+            WorkspaceOption(workspace_id=ws_a, name="Acme", role=MemberRole.WORKSPACE_OWNER),
+            WorkspaceOption(workspace_id=ws_b, name="Beta", role=MemberRole.WORKSPACE_MEMBER),
+        ],
+    )
+
+    client.cookies.set("kanea_oauth_state", "the-state-token")
+    response = client.get(
+        "/api/v1/auth/oauth/GOOGLE/callback?code=auth-code&state=the-state-token",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("http://localhost:3000/auth/callback?")
+    qs = parse_qs(urlsplit(location).query)
+    assert qs["selection_token"] == ["sel.jwt"]
+    assert "token" not in qs
+
+    # Decode the embedded workspaces blob and verify both made it
+    # through with stable role names.
+    decoded = json.loads(base64.urlsafe_b64decode(qs["workspaces"][0] + "==").decode("utf-8"))
+    assert {w["workspace_id"] for w in decoded} == {str(ws_a), str(ws_b)}
+    assert {w["role"] for w in decoded} == {"WORKSPACE_OWNER", "WORKSPACE_MEMBER"}
+
+
 def test_oauth_callback_rejects_state_mismatch(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

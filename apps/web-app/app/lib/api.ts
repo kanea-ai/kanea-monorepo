@@ -194,6 +194,29 @@ export interface TokenResponse {
   expires_in: number;
 }
 
+// Login is branched in Phase 1: single-workspace users get a token
+// straight away, multi-workspace users get a selection token + the
+// list of workspaces they can pick from.
+export interface WorkspaceOption {
+  workspace_id: string;
+  name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+}
+
+export interface LoginResponse {
+  requires_selection: boolean;
+  access_token: string | null;
+  token_type: string;
+  expires_in: number | null;
+  selection_token: string | null;
+  workspaces: WorkspaceOption[] | null;
+}
+
+export interface SelectWorkspacePayload {
+  selection_token: string;
+  workspace_id: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -204,10 +227,35 @@ export class ApiError extends Error {
   }
 }
 
+// Global 401 handler. AuthProvider registers this on mount; api code
+// invokes it whenever the backend returns 401 on an authenticated
+// request (token expired / revoked / workspace removed). Auth-bearing
+// endpoints (/auth/login, /auth/select-workspace, /auth/register) are
+// excluded — there a 401 just means "wrong credentials" and shouldn't
+// trigger a redirect loop.
+type UnauthorizedHandler = () => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(fn: UnauthorizedHandler | null): void {
+  onUnauthorized = fn;
+}
+
+const AUTH_PATHS_NO_REDIRECT = new Set([
+  `${V1}/auth/login`,
+  `${V1}/auth/register`,
+  `${V1}/auth/select-workspace`,
+]);
+
 function authHeader(): HeadersInit {
   if (typeof window === 'undefined') return {};
   const token = window.localStorage.getItem(TOKEN_STORAGE_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function maybeUnauthorized(path: string, status: number): void {
+  if (status !== 401) return;
+  if (AUTH_PATHS_NO_REDIRECT.has(path)) return;
+  onUnauthorized?.();
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -225,14 +273,36 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       .json()
       .then((b: { detail?: string }) => b.detail)
       .catch(() => response.statusText);
+    maybeUnauthorized(path, response.status);
     throw new ApiError(response.status, detail || `HTTP ${response.status}`);
   }
   return response.json() as Promise<T>;
 }
 
+// Helper for the bare-fetch sites (DELETE / 201-no-body endpoints) so
+// they share the same 401 handling as request<T>().
+async function requestVoid(path: string, init: RequestInit = {}): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeader(),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((b: { detail?: string }) => b.detail)
+      .catch(() => response.statusText);
+    maybeUnauthorized(path, response.status);
+    throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+  }
+}
+
 export const authApi = {
   login: (payload: LoginPayload) =>
-    request<TokenResponse>(`${V1}/auth/login`, {
+    request<LoginResponse>(`${V1}/auth/login`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -241,11 +311,18 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  selectWorkspace: (payload: SelectWorkspacePayload) =>
+    request<TokenResponse>(`${V1}/auth/select-workspace`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 
 // ---------- Tenants ----------
 
-export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+// Org-level role. Renamed in Phase 1 to disambiguate from TeamRole
+// (which uses MEMBER too) and to read clearly in JWTs / audit log.
+export type MemberRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
 export type MemberKind = 'HUMAN' | 'AGENT';
 export type TeamRole = 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER';
 
@@ -270,7 +347,7 @@ export interface SetMemberTeamPayload {
 
 export interface InviteCreatePayload {
   email: string;
-  role: 'ADMIN' | 'MEMBER';
+  role: 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
 }
 
 export interface InviteCreateResponse {
@@ -369,34 +446,16 @@ export const tasksApi = {
       body: JSON.stringify(payload),
     }),
   listRelations: (id: string) => request<TaskRelations>(`${V1}/tasks/${id}/relations`),
-  createRelation: async (id: string, payload: CreateRelationPayload): Promise<void> => {
-    // 201 with no body — request<T> would JSON-parse and explode.
-    const response = await fetch(`${API_BASE}${V1}/tasks/${id}/relations`, {
+  // 201 with no body — request<T> would JSON-parse and explode, so
+  // these go through requestVoid (which still funnels 401s to the
+  // global handler so an expired token logs the user out cleanly).
+  createRelation: (id: string, payload: CreateRelationPayload) =>
+    requestVoid(`${V1}/tasks/${id}/relations`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const detail = await response
-        .json()
-        .then((b: { detail?: string }) => b.detail)
-        .catch(() => response.statusText);
-      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
-    }
-  },
-  deleteRelation: async (id: string, relationId: string): Promise<void> => {
-    const response = await fetch(`${API_BASE}${V1}/tasks/${id}/relations/${relationId}`, {
-      method: 'DELETE',
-      headers: { ...authHeader() },
-    });
-    if (!response.ok) {
-      const detail = await response
-        .json()
-        .then((b: { detail?: string }) => b.detail)
-        .catch(() => response.statusText);
-      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
-    }
-  },
+    }),
+  deleteRelation: (id: string, relationId: string) =>
+    requestVoid(`${V1}/tasks/${id}/relations/${relationId}`, { method: 'DELETE' }),
 };
 
 // ---------- Agents ----------
@@ -460,20 +519,9 @@ export const agentsApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
-  // Returns 204 (no body). request<T> would JSON-parse — handle inline.
-  remove: async (id: string): Promise<void> => {
-    const response = await fetch(`${API_BASE}${V1}/agents/${id}`, {
-      method: 'DELETE',
-      headers: { ...authHeader() },
-    });
-    if (!response.ok) {
-      const detail = await response
-        .json()
-        .then((b: { detail?: string }) => b.detail)
-        .catch(() => response.statusText);
-      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
-    }
-  },
+  // Returns 204 (no body). request<T> would JSON-parse — handle via
+  // requestVoid so 401s still flow to the global logout handler.
+  remove: (id: string) => requestVoid(`${V1}/agents/${id}`, { method: 'DELETE' }),
 };
 
 export interface RateTaskPayload {
@@ -529,19 +577,7 @@ export const projectsApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
-  remove: async (id: string): Promise<void> => {
-    const response = await fetch(`${API_BASE}${V1}/projects/${id}`, {
-      method: 'DELETE',
-      headers: { ...authHeader() },
-    });
-    if (!response.ok) {
-      const detail = await response
-        .json()
-        .then((b: { detail?: string }) => b.detail)
-        .catch(() => response.statusText);
-      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
-    }
-  },
+  remove: (id: string) => requestVoid(`${V1}/projects/${id}`, { method: 'DELETE' }),
   listTasks: (id: string) => request<Task[]>(`${V1}/projects/${id}/tasks`),
   history: (id: string) => request<ProjectHistory>(`${V1}/projects/${id}/history`),
 };
@@ -625,17 +661,5 @@ export const teamsApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
-  remove: async (id: string): Promise<void> => {
-    const response = await fetch(`${API_BASE}${V1}/teams/${id}`, {
-      method: 'DELETE',
-      headers: { ...authHeader() },
-    });
-    if (!response.ok) {
-      const detail = await response
-        .json()
-        .then((b: { detail?: string }) => b.detail)
-        .catch(() => response.statusText);
-      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
-    }
-  },
+  remove: (id: string) => requestVoid(`${V1}/teams/${id}`, { method: 'DELETE' }),
 };

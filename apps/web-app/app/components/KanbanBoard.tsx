@@ -30,7 +30,7 @@ const COLUMNS: { id: TaskStatus; label: string; defaultCollapsed?: boolean }[] =
 
 export function KanbanBoard() {
   const principal = useCurrentPrincipal();
-  const isAdmin = principal?.role === 'OWNER' || principal?.role === 'ADMIN';
+  const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
 
   // Section 2: only admins get the filter bar. Non-admins see only
   // their own tasks regardless of any filter the api would accept —

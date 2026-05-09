@@ -11,14 +11,33 @@ import {
   type ReactNode,
 } from 'react';
 
-import { TOKEN_STORAGE_KEY, authApi, type LoginPayload, type RegisterPayload } from './api';
+import {
+  TOKEN_STORAGE_KEY,
+  authApi,
+  setUnauthorizedHandler,
+  type LoginPayload,
+  type LoginResponse,
+  type RegisterPayload,
+  type SelectWorkspacePayload,
+  type WorkspaceOption,
+} from './api';
+
+// Login is branched in Phase 1: 1 workspace -> straight token, >1 ->
+// caller must render a picker, then call `selectWorkspace` to exchange
+// the short-lived selection token for the final access token.
+export type LoginResult =
+  | { kind: 'token' }
+  | { kind: 'selection'; selectionToken: string; workspaces: WorkspaceOption[] };
 
 interface AuthContextValue {
   token: string | null;
   isReady: boolean;
-  login: (payload: LoginPayload) => Promise<void>;
+  login: (payload: LoginPayload) => Promise<LoginResult>;
+  selectWorkspace: (payload: SelectWorkspacePayload) => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
   logout: () => void;
+  /** Hydrate the AuthContext after an OAuth round-trip drops a token in the URL. */
+  setTokenFromOAuth: (token: string) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,8 +55,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsReady(true);
   }, []);
 
-  const login = useCallback(async (payload: LoginPayload) => {
-    const res = await authApi.login(payload);
+  const logout = useCallback(() => {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    setToken(null);
+    // Preserve the current path as `?next=` so post-login lands the user
+    // back where they were when their session expired.
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      const here = window.location.pathname + window.location.search;
+      router.replace(`/login?next=${encodeURIComponent(here)}`);
+    } else {
+      router.replace('/login');
+    }
+  }, [router]);
+
+  // Wire the 401 interceptor up exactly once. The api module calls back
+  // here whenever an authenticated endpoint returns 401 — regardless of
+  // whether the request went through fetch() directly or through the
+  // typed request<T>() helper.
+  useEffect(() => {
+    setUnauthorizedHandler(logout);
+    return () => setUnauthorizedHandler(null);
+  }, [logout]);
+
+  const login = useCallback(async (payload: LoginPayload): Promise<LoginResult> => {
+    const res: LoginResponse = await authApi.login(payload);
+    if (res.requires_selection) {
+      // Don't store anything yet — the caller must complete the
+      // selection step before we have a usable access token.
+      return {
+        kind: 'selection',
+        selectionToken: res.selection_token!,
+        workspaces: res.workspaces ?? [],
+      };
+    }
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, res.access_token!);
+    setToken(res.access_token);
+    return { kind: 'token' };
+  }, []);
+
+  const selectWorkspace = useCallback(async (payload: SelectWorkspacePayload) => {
+    const res = await authApi.selectWorkspace(payload);
     window.localStorage.setItem(TOKEN_STORAGE_KEY, res.access_token);
     setToken(res.access_token);
   }, []);
@@ -48,15 +105,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(res.access_token);
   }, []);
 
-  const logout = useCallback(() => {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    setToken(null);
-    router.replace('/login');
-  }, [router]);
+  const setTokenFromOAuth = useCallback((newToken: string) => {
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, newToken);
+    setToken(newToken);
+  }, []);
 
   const value = useMemo(
-    () => ({ token, isReady, login, register, logout }),
-    [token, isReady, login, register, logout],
+    () => ({
+      token,
+      isReady,
+      login,
+      selectWorkspace,
+      register,
+      logout,
+      setTokenFromOAuth,
+    }),
+    [token, isReady, login, selectWorkspace, register, logout, setTokenFromOAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -71,7 +135,7 @@ export function useAuth(): AuthContextValue {
 export interface CurrentPrincipal {
   member_id: string;
   workspace_id: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
   type: 'HUMAN' | 'AGENT';
   scope: string;
 }
@@ -96,7 +160,7 @@ export function useCurrentPrincipal(): CurrentPrincipal | null {
       return {
         member_id: String(json.sub),
         workspace_id: String(json.workspace_id),
-        role: json.role ?? 'MEMBER',
+        role: json.role ?? 'WORKSPACE_MEMBER',
         type: json.type ?? 'HUMAN',
         scope: json.scope ?? 'human',
       };
