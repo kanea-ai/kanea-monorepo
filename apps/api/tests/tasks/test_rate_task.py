@@ -63,8 +63,20 @@ def ratings() -> AsyncMock:
 
 
 @pytest.fixture
-def service(task_repo: AsyncMock, members: AsyncMock, ratings: AsyncMock) -> TaskService:
-    return TaskService(tasks=task_repo, members=members, ratings=ratings)
+def service(
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    ratings: AsyncMock,
+    workspace_repo: AsyncMock,
+    seq_allocator: AsyncMock,
+) -> TaskService:
+    return TaskService(
+        tasks=task_repo,
+        members=members,
+        ratings=ratings,
+        workspaces=workspace_repo,
+        seq_allocator=seq_allocator,
+    )
 
 
 async def test_creator_can_rate_done_task(

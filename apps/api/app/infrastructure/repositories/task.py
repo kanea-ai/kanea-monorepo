@@ -19,9 +19,11 @@ def _to_entity(row: TaskModel) -> Task:
         title=row.title,
         status=row.status,
         priority=row.priority,
+        seq=row.seq,
         description=row.description,
         assignee_id=row.assignee_id,
         due_at=row.due_at,
+        is_blocked=row.is_blocked,
         completed_at=row.completed_at,
         blocked_reason=row.blocked_reason,
         tokens_used=row.tokens_used,
@@ -52,10 +54,13 @@ class SqlAlchemyTaskRepository:
         workspace_id: UUID,
         *,
         status: TaskStatus | None = None,
+        blocked_only: bool = False,
     ) -> list[Task]:
         stmt = select(TaskModel).where(TaskModel.workspace_id == workspace_id)
         if status is not None:
             stmt = stmt.where(TaskModel.status == status)
+        if blocked_only:
+            stmt = stmt.where(TaskModel.is_blocked.is_(True))
         stmt = stmt.order_by(TaskModel.priority, TaskModel.created_at)
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
@@ -65,21 +70,18 @@ class SqlAlchemyTaskRepository:
         task_id: UUID,
         *,
         status: TaskStatus,
-        blocked_reason: str | None,
         tokens_used: int | None = None,
     ) -> Task:
         row = await self._session.get(TaskModel, task_id)
         if row is None:
             raise TaskNotFoundError("task not found")
         row.status = status
-        row.blocked_reason = blocked_reason
         if tokens_used is not None:
             # Cumulative — agents report the *total* spent so far, not a
             # delta. Keeps the contract idempotent under retries.
             row.tokens_used = tokens_used
         # Stamp completion when transitioning into DONE; clear it if the
-        # task is reopened (DONE -> elsewhere isn't currently legal per
-        # _ALLOWED_TRANSITIONS, but defensive).
+        # task is reopened.
         if status is TaskStatus.DONE:
             from datetime import UTC
             from datetime import datetime as _dt
@@ -87,6 +89,24 @@ class SqlAlchemyTaskRepository:
             row.completed_at = _dt.now(UTC)
         else:
             row.completed_at = None
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
+
+    async def set_blocked(
+        self,
+        task_id: UUID,
+        *,
+        is_blocked: bool,
+        blocked_reason: str | None,
+    ) -> Task:
+        """Toggle the blocked flag without touching status. Reason is
+        cleared when unblocking."""
+        row = await self._session.get(TaskModel, task_id)
+        if row is None:
+            raise TaskNotFoundError("task not found")
+        row.is_blocked = is_blocked
+        row.blocked_reason = blocked_reason if is_blocked else None
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
@@ -99,6 +119,8 @@ class SqlAlchemyTaskRepository:
             title=task.title,
             status=task.status,
             priority=task.priority,
+            seq=task.seq,
+            is_blocked=task.is_blocked,
             description=task.description,
             assignee_id=task.assignee_id,
             due_at=task.due_at,

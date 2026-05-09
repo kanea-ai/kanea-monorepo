@@ -9,7 +9,6 @@ import { useTasks } from '../lib/queries';
 const STATUS_LABEL: Record<TaskStatus, string> = {
   PENDING: 'Pending',
   IN_PROGRESS: 'In Progress',
-  BLOCKED: 'Blocked',
   DONE: 'Done',
   CANCELLED: 'Cancelled',
 };
@@ -19,7 +18,7 @@ export function Dashboard() {
   const tasks = useMemo(() => data ?? [], [data]);
 
   const counts = useMemo(() => bucketByStatus(tasks), [tasks]);
-  const blocked = useMemo(() => tasks.filter((t) => t.status === 'BLOCKED'), [tasks]);
+  const blocked = useMemo(() => tasks.filter((t) => t.is_blocked), [tasks]);
   const recent = useMemo(
     () => [...tasks].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8),
     [tasks],
@@ -73,10 +72,10 @@ export function Dashboard() {
               href="/board"
             />
             <StatTile
-              label={STATUS_LABEL.BLOCKED}
-              value={counts.BLOCKED}
+              label="Blocked"
+              value={blocked.length}
               loading={isLoading}
-              tone={counts.BLOCKED > 0 ? 'warn' : 'default'}
+              tone={blocked.length > 0 ? 'warn' : 'default'}
               href="/blocked"
             />
             <StatTile
@@ -138,7 +137,6 @@ function bucketByStatus(tasks: Task[]): Record<TaskStatus, number> {
   const out: Record<TaskStatus, number> = {
     PENDING: 0,
     IN_PROGRESS: 0,
-    BLOCKED: 0,
     DONE: 0,
     CANCELLED: 0,
   };
@@ -243,7 +241,6 @@ function ActivityRow({ task }: { task: Task }) {
 const STATUS_PILL: Record<TaskStatus, string> = {
   PENDING: 'bg-slate-100 text-slate-700',
   IN_PROGRESS: 'bg-blue-100 text-blue-800',
-  BLOCKED: 'bg-amber-100 text-amber-800',
   DONE: 'bg-emerald-100 text-emerald-800',
   CANCELLED: 'bg-slate-100 text-slate-500',
 };

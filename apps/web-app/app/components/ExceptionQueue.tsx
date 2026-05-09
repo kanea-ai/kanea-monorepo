@@ -1,18 +1,23 @@
 'use client';
 
+import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
+
 import type { Task } from '../lib/api';
-import { useBlockedTasks, useUpdateTaskStatus } from '../lib/queries';
+import { tasksApi } from '../lib/api';
+import { taskKeys, useBlockedTasks } from '../lib/queries';
 
 export function ExceptionQueue() {
   const { data, isLoading, isError, error } = useBlockedTasks();
-  const updateStatus = useUpdateTaskStatus();
+  const qc = useQueryClient();
   const tasks = data ?? [];
 
-  const handleResolve = (taskId: string) => {
-    updateStatus.mutate({
-      id: taskId,
-      payload: { status: 'IN_PROGRESS' },
-    });
+  const handleResolve = async (taskId: string) => {
+    // Resolving = clearing the blocked flag. Status is untouched —
+    // unblocking a PENDING task leaves it PENDING; an IN_PROGRESS
+    // task stays in progress.
+    await tasksApi.setBlocked(taskId, { is_blocked: false });
+    qc.invalidateQueries({ queryKey: taskKeys.all });
   };
 
   return (
@@ -48,12 +53,7 @@ export function ExceptionQueue() {
         ) : (
           <ul className="space-y-3">
             {tasks.map((task) => (
-              <ExceptionCard
-                key={task.id}
-                task={task}
-                onResolve={handleResolve}
-                isResolving={updateStatus.isPending && updateStatus.variables?.id === task.id}
-              />
+              <ExceptionCard key={task.id} task={task} onResolve={handleResolve} />
             ))}
           </ul>
         )}
@@ -65,41 +65,43 @@ export function ExceptionQueue() {
 function ExceptionCard({
   task,
   onResolve,
-  isResolving,
 }: {
   task: Task;
-  onResolve: (id: string) => void;
-  isResolving: boolean;
+  onResolve: (id: string) => Promise<void>;
 }) {
   return (
-    <li className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 shadow-sm">
+    <li className="rounded-lg border border-red-200 bg-red-50/60 p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-medium text-slate-900">{task.title}</h3>
-        <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
+        <Link href={`/tasks/${task.id}`} className="min-w-0 flex-1">
+          <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+            {task.public_id}
+          </p>
+          <h3 className="truncate text-sm font-medium text-slate-900 hover:text-indigo-700">
+            {task.title}
+          </h3>
+        </Link>
+        <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
           Blocked
         </span>
       </div>
 
       {task.blocked_reason ? (
-        <div className="mt-2 rounded border border-amber-200 bg-white p-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            Agent reported
-          </p>
+        <div className="mt-2 rounded border border-red-200 bg-white p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Reason</p>
           <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-slate-800">
             {task.blocked_reason}
           </p>
         </div>
       ) : (
-        <p className="mt-2 text-xs italic text-slate-500">No reason provided by the agent.</p>
+        <p className="mt-2 text-xs italic text-slate-500">No reason provided.</p>
       )}
 
       <button
         type="button"
         onClick={() => onResolve(task.id)}
-        disabled={isResolving}
         className="mt-3 w-full rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {isResolving ? 'Resolving…' : 'Resolve → In Progress'}
+        Unblock
       </button>
     </li>
   );

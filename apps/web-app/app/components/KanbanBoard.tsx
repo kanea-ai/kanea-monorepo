@@ -1,13 +1,14 @@
 'use client';
 
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
+import Link from 'next/link';
 import { useMemo } from 'react';
 
 import type { Task, TaskStatus } from '../lib/api';
 import { useTasks, useUpdateTaskStatus } from '../lib/queries';
 
-// Columns are the non-BLOCKED workflow states. BLOCKED is surfaced
-// in the Exception Queue side panel only — it's an out-of-band state.
+// Status is the lifecycle column; being blocked is orthogonal and shown
+// as a red border on the card regardless of which column it sits in.
 const COLUMNS: { id: TaskStatus; label: string }[] = [
   { id: 'PENDING', label: 'Pending' },
   { id: 'IN_PROGRESS', label: 'In Progress' },
@@ -23,7 +24,6 @@ export function KanbanBoard() {
     const buckets: Record<TaskStatus, Task[]> = {
       PENDING: [],
       IN_PROGRESS: [],
-      BLOCKED: [],
       DONE: [],
       CANCELLED: [],
     };
@@ -90,16 +90,38 @@ function Column({ id, label, tasks }: { id: TaskStatus; label: string; tasks: Ta
                     ref={p.innerRef}
                     {...p.draggableProps}
                     {...p.dragHandleProps}
-                    className={`rounded-md border border-slate-200 bg-white p-3 text-sm shadow-sm transition-shadow ${
-                      s.isDragging ? 'shadow-md ring-2 ring-indigo-300' : ''
-                    }`}
+                    className={`rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow ${
+                      task.is_blocked
+                        ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
+                        : 'border-slate-200'
+                    } ${s.isDragging ? 'shadow-md ring-2 ring-indigo-300' : ''}`}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-medium text-slate-900">{task.title}</h3>
+                      <Link
+                        href={`/tasks/${task.id}`}
+                        // Stop drag handler from claiming the click — the
+                        // dnd library calls preventDefault on parent click
+                        // events, so we explicitly stopPropagation here.
+                        onClick={(e) => e.stopPropagation()}
+                        className="min-w-0 flex-1"
+                      >
+                        <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+                          {task.public_id}
+                        </p>
+                        <h3 className="truncate font-medium text-slate-900 hover:text-indigo-700">
+                          {task.title}
+                        </h3>
+                      </Link>
                       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
                         P{task.priority}
                       </span>
                     </div>
+                    {task.is_blocked ? (
+                      <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
+                      </p>
+                    ) : null}
                     {task.description ? (
                       <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p>
                     ) : null}

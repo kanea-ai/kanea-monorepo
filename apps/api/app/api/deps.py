@@ -24,7 +24,12 @@ from app.application.auth.ports import (
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
-from app.application.tasks.ports import TaskRatingRepository, TaskRepository
+from app.application.tasks.ports import (
+    TaskCommentRepository,
+    TaskRatingRepository,
+    TaskRepository,
+    WorkspaceTaskSeqRepository,
+)
 from app.application.tasks.schemas import Principal
 from app.application.tasks.service import TaskService
 from app.application.tenants.ports import (
@@ -40,6 +45,7 @@ from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRep
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
+from app.infrastructure.repositories.task_comment import SqlAlchemyTaskCommentRepository
 from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
@@ -84,6 +90,10 @@ def get_workspace_repository(session: SessionDep) -> WorkspaceRepository:
     return SqlAlchemyWorkspaceRepository(session)
 
 
+def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
+    return SqlAlchemyWorkspaceRepository(session)
+
+
 def get_auth_service(
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
@@ -111,12 +121,34 @@ def get_task_rating_repository(session: SessionDep) -> TaskRatingRepository:
     return SqlAlchemyTaskRatingRepository(session)
 
 
+def get_task_comment_repository(session: SessionDep) -> TaskCommentRepository:
+    return SqlAlchemyTaskCommentRepository(session)
+
+
+def get_workspace_task_seq_repository(session: SessionDep) -> WorkspaceTaskSeqRepository:
+    # Same SQLAlchemy class as the auth-side workspace repo; different
+    # protocol surface (allocate_next_task_seq).
+    return SqlAlchemyWorkspaceRepository(session)
+
+
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    workspaces: Annotated[WorkspaceReadRepository, Depends(get_workspace_read_repository)],
+    seq_allocator: Annotated[
+        WorkspaceTaskSeqRepository, Depends(get_workspace_task_seq_repository)
+    ],
     ratings: Annotated[TaskRatingRepository, Depends(get_task_rating_repository)],
+    comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repository)],
 ) -> TaskService:
-    return TaskService(tasks=tasks, members=members, ratings=ratings)
+    return TaskService(
+        tasks=tasks,
+        members=members,
+        workspaces=workspaces,
+        seq_allocator=seq_allocator,
+        ratings=ratings,
+        comments=comments,
+    )
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
@@ -129,10 +161,6 @@ def get_invite_repository(session: SessionDep) -> InviteRepository:
 def get_tenant_member_repository(session: SessionDep) -> TenantMemberRepository:
     # Same SQLAlchemy class — different protocol surface (list_for_workspace).
     return SqlAlchemyMemberRepository(session)
-
-
-def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
-    return SqlAlchemyWorkspaceRepository(session)
 
 
 def get_invite_service(

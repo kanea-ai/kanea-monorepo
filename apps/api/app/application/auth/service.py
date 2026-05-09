@@ -52,6 +52,8 @@ class AuthService:
                 id=uuid4(),
                 name=request.workspace_name,
                 slug=_generate_slug(request.workspace_name),
+                task_prefix=_generate_task_prefix(request.workspace_name),
+                next_task_seq=1,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -146,11 +148,14 @@ class AuthService:
             return TokenResponse(access_token=token, expires_in=ttl)
 
         # First-time signup via OAuth — auto-provision a workspace.
+        ws_name = f"{identity.name}'s workspace" if identity.name else "Workspace"
         workspace = await self.workspaces.create(
             Workspace(
                 id=uuid4(),
-                name=f"{identity.name}'s workspace" if identity.name else "Workspace",
+                name=ws_name,
                 slug=_generate_slug(identity.name or "workspace"),
+                task_prefix=_generate_task_prefix(identity.name or "workspace"),
+                next_task_seq=1,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -191,9 +196,20 @@ class AuthService:
 # so signups never collide on the slug column. Trades a little prettiness
 # for never having to retry on conflict.
 _SLUG_NORMALIZE = re.compile(r"[^a-z0-9]+")
+_PREFIX_NORMALIZE = re.compile(r"[^A-Z]")
 
 
 def _generate_slug(name: str) -> str:
     base = _SLUG_NORMALIZE.sub("-", name.lower()).strip("-")[:48] or "workspace"
     suffix = secrets.token_hex(3)
     return f"{base}-{suffix}"
+
+
+def _generate_task_prefix(name: str) -> str:
+    """Derive a short alpha prefix for human-readable task ids.
+
+    Strips non-alpha, uppercases, takes first 6 chars. Falls back to
+    ``TASK`` if the name has no alpha content. Editable later via a
+    workspace-settings endpoint we haven't built yet."""
+    cleaned = _PREFIX_NORMALIZE.sub("", name.upper())
+    return cleaned[:6] if cleaned else "TASK"

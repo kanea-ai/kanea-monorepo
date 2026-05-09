@@ -12,6 +12,12 @@ class Workspace:
     id: UUID
     name: str
     slug: str
+    # Short alpha prefix for human-readable task ids ("DEVOPS" -> DEVOPS-001).
+    # Always uppercase, derived from `name` on signup, capped at 8 chars.
+    task_prefix: str
+    # Monotonic counter incremented atomically when a task is created.
+    # Always points at the *next* seq to hand out.
+    next_task_seq: int
     created_at: datetime
     updated_at: datetime
 
@@ -100,15 +106,37 @@ class Task:
     title: str
     status: TaskStatus
     priority: int
+    # Per-workspace integer. Combined with the workspace task_prefix it
+    # produces a human-readable id like ``DEVOPS-001``. Allocated at
+    # creation via an atomic UPDATE ... RETURNING on the workspace row.
+    seq: int = 0
     description: str | None = None
     assignee_id: UUID | None = None
     due_at: datetime | None = None
+    # Blocked-flag is orthogonal to status. A task can be IN_PROGRESS
+    # and blocked at the same time. blocked_reason is only meaningful
+    # when is_blocked is true.
+    is_blocked: bool = False
     blocked_reason: str | None = None
     completed_at: datetime | None = None
     # Running total of LLM tokens an agent has spent on this task. Agents
     # report it back through the status-update endpoint so it accumulates
     # across iterations.
     tokens_used: int = 0
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskComment:
+    """One line of a task's discussion thread. Authors can be human or
+    agent members; `author_member_id` is null after the author is
+    deleted (FK SET NULL) so threads stay legible."""
+
+    id: UUID
+    task_id: UUID
+    author_member_id: UUID | None
+    body: str
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

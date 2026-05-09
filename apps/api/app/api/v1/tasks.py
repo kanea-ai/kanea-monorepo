@@ -6,9 +6,12 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import PrincipalDep, TaskServiceDep
 from app.application.tasks.schemas import (
+    CommentResponse,
+    CreateCommentRequest,
     CreateTaskRequest,
     DelegateTaskRequest,
     RateTaskRequest,
+    SetBlockedRequest,
     TaskRatingResponse,
     TaskResponse,
     UpdateTaskStatusRequest,
@@ -35,12 +38,14 @@ async def list_tasks(
     principal: PrincipalDep,
     service: TaskServiceDep,
     status_filter: TaskStatus | None = None,
+    blocked_only: bool = False,
 ) -> list[TaskResponse]:
-    """List tasks in the requester's workspace, optionally filtered by status.
-
-    The Exception Queue calls this with `?status=BLOCKED`.
-    """
-    return await service.list_for_workspace(principal, status=status_filter)
+    """List tasks in the requester's workspace, optionally filtered by
+    status. The Exception Queue calls this with ``?blocked_only=true``;
+    the kanban with no filter."""
+    return await service.list_for_workspace(
+        principal, status=status_filter, blocked_only=blocked_only
+    )
 
 
 @router.post(
@@ -120,6 +125,62 @@ async def update_task_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InvalidStatusTransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/{task_id}/block",
+    response_model=TaskResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_task_blocked(
+    task_id: UUID,
+    payload: SetBlockedRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    """Toggle the orthogonal blocked flag. Status is untouched —
+    a blocked task can still be PENDING or IN_PROGRESS."""
+    try:
+        return await service.set_blocked(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{task_id}/comments",
+    response_model=list[CommentResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_task_comments(
+    task_id: UUID,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> list[CommentResponse]:
+    """Comments on a task, oldest first. Visible to anyone in the
+    workspace (humans + agents)."""
+    try:
+        return await service.list_comments(task_id, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{task_id}/comments",
+    response_model=CommentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_task_comment(
+    task_id: UUID,
+    payload: CreateCommentRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> CommentResponse:
+    """Append a comment to the task's discussion. Author is the JWT
+    holder; agents can post too."""
+    try:
+        return await service.post_comment(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post(

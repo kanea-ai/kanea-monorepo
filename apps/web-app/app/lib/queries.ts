@@ -10,12 +10,15 @@ import {
   type AgentDetail,
   type CreateAgentPayload,
   type CreateAgentResponse,
+  type CreateCommentPayload,
   type CreateTaskPayload,
   type InviteCreatePayload,
   type InviteCreateResponse,
   type Member,
   type RateTaskPayload,
+  type SetBlockedPayload,
   type Task,
+  type TaskComment,
   type TaskRating,
   type TaskStatus,
   type UpdateAgentPayload,
@@ -24,8 +27,13 @@ import {
 
 export const taskKeys = {
   all: ['tasks'] as const satisfies QueryKey,
-  list: (status?: TaskStatus) =>
-    (status ? (['tasks', { status }] as const) : (['tasks'] as const)) satisfies QueryKey,
+  list: (opts: { status?: TaskStatus; blockedOnly?: boolean } = {}) => {
+    if (opts.blockedOnly) return ['tasks', { blockedOnly: true }] as const satisfies QueryKey;
+    if (opts.status) return ['tasks', { status: opts.status }] as const satisfies QueryKey;
+    return ['tasks'] as const satisfies QueryKey;
+  },
+  detail: (id: string) => ['tasks', id] as const satisfies QueryKey,
+  comments: (id: string) => ['tasks', id, 'comments'] as const satisfies QueryKey,
 };
 
 export function useTasks() {
@@ -37,10 +45,46 @@ export function useTasks() {
 
 export function useBlockedTasks() {
   return useQuery({
-    queryKey: taskKeys.list('BLOCKED'),
-    queryFn: () => tasksApi.list('BLOCKED'),
+    queryKey: taskKeys.list({ blockedOnly: true }),
+    queryFn: () => tasksApi.list({ blockedOnly: true }),
     // The Exception Queue should feel responsive — keep it fresh.
     refetchInterval: 15_000,
+  });
+}
+
+export function useTask(id: string) {
+  return useQuery<Task>({
+    queryKey: taskKeys.detail(id),
+    queryFn: () => tasksApi.get(id),
+  });
+}
+
+export function useTaskComments(id: string) {
+  return useQuery<TaskComment[]>({
+    queryKey: taskKeys.comments(id),
+    queryFn: () => tasksApi.listComments(id),
+  });
+}
+
+export function usePostComment(id: string) {
+  const qc = useQueryClient();
+  return useMutation<TaskComment, Error, CreateCommentPayload>({
+    mutationFn: (payload) => tasksApi.postComment(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.comments(id) });
+    },
+  });
+}
+
+export function useSetTaskBlocked(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, SetBlockedPayload>({
+    mutationFn: (payload) => tasksApi.setBlocked(id, payload),
+    onSuccess: () => {
+      // Block-flag is shown on board, exception queue and detail —
+      // bust them all so the new flag propagates.
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
   });
 }
 
@@ -154,26 +198,18 @@ export function useUpdateTaskStatus() {
     onMutate: async ({ id, payload }) => {
       await qc.cancelQueries({ queryKey: taskKeys.all });
       const previousAll = qc.getQueryData<Task[]>(taskKeys.list());
-      const previousBlocked = qc.getQueryData<Task[]>(taskKeys.list('BLOCKED'));
+      const previousBlocked = qc.getQueryData<Task[]>(taskKeys.list({ blockedOnly: true }));
 
       qc.setQueryData<Task[] | undefined>(taskKeys.list(), (prev) =>
-        prev?.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                status: payload.status,
-                blocked_reason:
-                  payload.status === 'BLOCKED' ? (payload.blocked_reason ?? null) : null,
-              }
-            : t,
-        ),
+        prev?.map((t) => (t.id === id ? { ...t, status: payload.status } : t)),
       );
 
       return { previousAll, previousBlocked };
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.previousAll) qc.setQueryData(taskKeys.list(), ctx.previousAll);
-      if (ctx?.previousBlocked) qc.setQueryData(taskKeys.list('BLOCKED'), ctx.previousBlocked);
+      if (ctx?.previousBlocked)
+        qc.setQueryData(taskKeys.list({ blockedOnly: true }), ctx.previousBlocked);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: taskKeys.all });

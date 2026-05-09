@@ -31,8 +31,18 @@ def members() -> AsyncMock:
 
 
 @pytest.fixture
-def service(task_repo: AsyncMock, members: AsyncMock) -> TaskService:
-    return TaskService(tasks=task_repo, members=members)
+def service(
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    workspace_repo: AsyncMock,
+    seq_allocator: AsyncMock,
+) -> TaskService:
+    return TaskService(
+        tasks=task_repo,
+        members=members,
+        workspaces=workspace_repo,
+        seq_allocator=seq_allocator,
+    )
 
 
 # ---------- create ----------

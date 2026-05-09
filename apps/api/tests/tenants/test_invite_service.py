@@ -173,7 +173,15 @@ def _active_invite(**overrides) -> Invite:
 
 def _workspace(name: str = "Acme") -> Workspace:
     now = datetime.utcnow()
-    return Workspace(id=uuid4(), name=name, slug="acme-abc123", created_at=now, updated_at=now)
+    return Workspace(
+        id=uuid4(),
+        name=name,
+        slug="acme-abc123",
+        task_prefix="ACME",
+        next_task_seq=1,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 async def test_preview_returns_workspace_summary(

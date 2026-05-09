@@ -34,6 +34,9 @@ def make_task(
     title: str = "Investigate latency spike",
     status: TaskStatus = TaskStatus.PENDING,
     priority: int = 3,
+    seq: int = 1,
+    is_blocked: bool = False,
+    blocked_reason: str | None = None,
 ) -> Task:
     now = datetime.now(UTC)
     return Task(
@@ -43,9 +46,12 @@ def make_task(
         title=title,
         status=status,
         priority=priority,
+        seq=seq,
         description=None,
         assignee_id=assignee_id,
         due_at=None,
+        is_blocked=is_blocked,
+        blocked_reason=blocked_reason,
         created_at=now,
         updated_at=now,
     )

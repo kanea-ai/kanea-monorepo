@@ -36,6 +36,7 @@ def _task_response(
     assignee_id=None,
     workspace_id=None,
     status: TaskStatus = TaskStatus.PENDING,
+    is_blocked: bool = False,
     blocked_reason: str | None = None,
 ) -> TaskResponse:
     now = datetime.now(UTC)
@@ -46,9 +47,12 @@ def _task_response(
         title="Investigate latency spike",
         status=status,
         priority=3,
+        seq=1,
+        public_id="TASK-001",
         description=None,
         assignee_id=assignee_id,
         due_at=None,
+        is_blocked=is_blocked,
         blocked_reason=blocked_reason,
         created_at=now,
         updated_at=now,

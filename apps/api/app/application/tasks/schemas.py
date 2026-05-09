@@ -39,11 +39,21 @@ class UpdateTaskStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: TaskStatus
-    blocked_reason: str | None = None
     # Cumulative tokens spent on the task so far. Agents bump this when
-    # they mark DONE (or BLOCKED, etc.) so the workspace can see how
-    # expensive each task was. Optional — omit to leave the value alone.
+    # they mark DONE (or any other transition) so the workspace can see
+    # how expensive each task was. Optional — omit to leave the value
+    # alone.
     tokens_used: int | None = Field(default=None, ge=0)
+
+
+class SetBlockedRequest(BaseModel):
+    """Toggle the orthogonal `is_blocked` flag. `reason` is required when
+    blocking, ignored when unblocking."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_blocked: bool
+    reason: str | None = Field(default=None, max_length=2_000)
 
 
 class RateTaskRequest(BaseModel):
@@ -92,15 +102,21 @@ class TaskResponse(BaseModel):
     title: str
     status: TaskStatus
     priority: int
+    seq: int
+    # Human-readable id like ``DEVOPS-001``. Built by the service layer
+    # from the workspace prefix + zero-padded seq. Stable for the life
+    # of the task; not used as a primary key.
+    public_id: str
     description: str | None
     assignee_id: UUID | None
     due_at: datetime | None
+    is_blocked: bool
     blocked_reason: str | None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_entity(cls, task: Task) -> TaskResponse:
+    def from_entity(cls, task: Task, *, prefix: str) -> TaskResponse:
         return cls(
             id=task.id,
             workspace_id=task.workspace_id,
@@ -108,10 +124,32 @@ class TaskResponse(BaseModel):
             title=task.title,
             status=task.status,
             priority=task.priority,
+            seq=task.seq,
+            public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
             due_at=task.due_at,
+            is_blocked=task.is_blocked,
             blocked_reason=task.blocked_reason,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
+
+
+class CreateCommentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1, max_length=20_000)
+
+
+class CommentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    task_id: UUID
+    author_member_id: UUID | None
+    # Display name resolved at read time so the UI doesn't need a
+    # second round-trip. Null only when the author was deleted.
+    author_name: str | None
+    body: str
+    created_at: datetime

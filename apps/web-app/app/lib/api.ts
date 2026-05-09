@@ -11,7 +11,7 @@ const V1 = '/api/v1';
 
 export const TOKEN_STORAGE_KEY = 'kanea_token';
 
-export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'BLOCKED' | 'DONE' | 'CANCELLED';
+export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
 
 export interface Task {
   id: string;
@@ -20,9 +20,17 @@ export interface Task {
   title: string;
   status: TaskStatus;
   priority: number;
+  seq: number;
+  // Human-readable id like ``DEVOPS-001``. Built server-side from the
+  // workspace prefix + zero-padded seq.
+  public_id: string;
   description: string | null;
   assignee_id: string | null;
   due_at: string | null;
+  // Blocked is orthogonal to status. A task can be PENDING/IN_PROGRESS
+  // and blocked at the same time. The Kanban renders blocked cards
+  // with a red border regardless of column.
+  is_blocked: boolean;
   blocked_reason: string | null;
   created_at: string;
   updated_at: string;
@@ -30,7 +38,27 @@ export interface Task {
 
 export interface UpdateStatusPayload {
   status: TaskStatus;
-  blocked_reason?: string | null;
+  // Cumulative tokens spent on the task. Optional — agents pass it on
+  // status updates so tokens roll up across iterations.
+  tokens_used?: number | null;
+}
+
+export interface SetBlockedPayload {
+  is_blocked: boolean;
+  reason?: string | null;
+}
+
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  author_member_id: string | null;
+  author_name: string | null;
+  body: string;
+  created_at: string;
+}
+
+export interface CreateCommentPayload {
+  body: string;
 }
 
 export interface CreateTaskPayload {
@@ -168,9 +196,12 @@ export const tenantsApi = {
 };
 
 export const tasksApi = {
-  list: (status?: TaskStatus) => {
-    const qs = status ? `?status_filter=${status}` : '';
-    return request<Task[]>(`${V1}/tasks${qs}`);
+  list: (opts: { status?: TaskStatus; blockedOnly?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.status) params.set('status_filter', opts.status);
+    if (opts.blockedOnly) params.set('blocked_only', 'true');
+    const qs = params.toString();
+    return request<Task[]>(`${V1}/tasks${qs ? `?${qs}` : ''}`);
   },
   get: (id: string) => request<Task>(`${V1}/tasks/${id}`),
   create: (payload: CreateTaskPayload) =>
@@ -183,8 +214,19 @@ export const tasksApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  setBlocked: (id: string, payload: SetBlockedPayload) =>
+    request<Task>(`${V1}/tasks/${id}/block`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   rate: (id: string, payload: RateTaskPayload) =>
     request<TaskRating>(`${V1}/tasks/${id}/rate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listComments: (id: string) => request<TaskComment[]>(`${V1}/tasks/${id}/comments`),
+  postComment: (id: string, payload: CreateCommentPayload) =>
+    request<TaskComment>(`${V1}/tasks/${id}/comments`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

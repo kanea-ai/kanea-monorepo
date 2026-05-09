@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -56,6 +57,8 @@ class WorkspaceModel(TimestampMixin, Base):
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    task_prefix: Mapped[str] = mapped_column(String(8), nullable=False, default="TASK")
+    next_task_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     teams: Mapped[list[TeamModel]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
@@ -163,6 +166,7 @@ class TaskModel(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_tasks_workspace_id_status", "workspace_id", "status"),
         Index("ix_tasks_assignee_id_status", "assignee_id", "status"),
+        Index("uq_tasks_workspace_id_seq", "workspace_id", "seq", unique=True),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -187,6 +191,8 @@ class TaskModel(TimestampMixin, Base):
         task_status_enum, nullable=False, default=TaskStatus.PENDING
     )
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -218,6 +224,26 @@ class InviteModel(TimestampMixin, Base):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskCommentModel(TimestampMixin, Base):
+    __tablename__ = "task_comments"
+    __table_args__ = (Index("ix_task_comments_task_id_created_at", "task_id", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Author can be null after the member is deleted (FK SET NULL); the
+    # comment body still survives so the conversation history reads.
+    author_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class TaskRatingModel(TimestampMixin, Base):
