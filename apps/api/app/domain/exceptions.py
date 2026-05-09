@@ -70,6 +70,22 @@ class TaskAlreadyRatedError(DomainError):
     single-shot — re-rating is a separate UX we haven't designed yet."""
 
 
+class TaskRelationSelfLinkError(DomainError):
+    """Raised when a caller tries to relate a task to itself. Caught at
+    the service boundary; the DB-level CHECK is the belt to the service's
+    braces."""
+
+
+class TaskRelationAlreadyExistsError(DomainError):
+    """Raised on a duplicate (source, target, type) tuple. Distinct from
+    a generic IntegrityError so the route can map to 409 cleanly."""
+
+
+class TaskRelationNotFoundError(DomainError):
+    """Raised when a relation id doesn't resolve, or when its task is
+    cross-tenant (404 to avoid leaking existence)."""
+
+
 class RatingForbiddenError(DomainError):
     """Raised when the rater isn't the task creator. Only the issuing party
     can rate the work — assignees can't self-rate or rate peers."""

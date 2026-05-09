@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from app.domain.enums import MemberRole, MemberType, OAuthProvider, TaskStatus
+from app.domain.enums import (
+    MemberRole,
+    MemberType,
+    OAuthProvider,
+    TaskRelationType,
+    TaskStatus,
+)
 
 
 @dataclass(slots=True)
@@ -123,6 +129,19 @@ class Task:
     # report it back through the status-update endpoint so it accumulates
     # across iterations.
     tokens_used: int = 0
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskRelation:
+    """One directed link between two tasks. Lives in its own table so
+    relations can be added/removed without touching the task rows."""
+
+    id: UUID
+    source_task_id: UUID
+    target_task_id: UUID
+    relation_type: TaskRelationType
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

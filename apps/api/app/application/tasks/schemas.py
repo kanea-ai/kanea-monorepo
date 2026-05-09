@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.entities import Task
-from app.domain.enums import MemberRole, MemberType, TaskStatus
+from app.domain.enums import MemberRole, MemberType, TaskRelationType, TaskStatus
 
 
 @dataclass(slots=True, frozen=True)
@@ -134,6 +134,41 @@ class TaskResponse(BaseModel):
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
+
+
+class CreateRelationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relation_type: TaskRelationType
+    target_task_id: UUID
+
+
+class RelationItem(BaseModel):
+    """One related task as the UI sees it. ``relation_id`` is the row
+    id (used to delete), ``task_id`` and ``public_id`` identify the
+    counterpart task."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    relation_id: UUID
+    task_id: UUID
+    public_id: str
+    title: str
+    status: TaskStatus
+    is_blocked: bool
+
+
+class TaskRelationsResponse(BaseModel):
+    """Seven UI buckets. ``relates_to`` collapses both directions of
+    the symmetric RELATES_TO type into one list."""
+
+    blocks: list[RelationItem]
+    blocked_by: list[RelationItem]
+    mitigates: list[RelationItem]
+    mitigated_by: list[RelationItem]
+    duplicates: list[RelationItem]
+    duplicated_by: list[RelationItem]
+    relates_to: list[RelationItem]
 
 
 class CreateCommentRequest(BaseModel):

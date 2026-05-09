@@ -27,6 +27,7 @@ from app.application.auth.service import AuthService
 from app.application.tasks.ports import (
     TaskCommentRepository,
     TaskRatingRepository,
+    TaskRelationRepository,
     TaskRepository,
     WorkspaceTaskSeqRepository,
 )
@@ -47,6 +48,7 @@ from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
 from app.infrastructure.repositories.task_comment import SqlAlchemyTaskCommentRepository
 from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
+from app.infrastructure.repositories.task_relation import SqlAlchemyTaskRelationRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
@@ -125,6 +127,10 @@ def get_task_comment_repository(session: SessionDep) -> TaskCommentRepository:
     return SqlAlchemyTaskCommentRepository(session)
 
 
+def get_task_relation_repository(session: SessionDep) -> TaskRelationRepository:
+    return SqlAlchemyTaskRelationRepository(session)
+
+
 def get_workspace_task_seq_repository(session: SessionDep) -> WorkspaceTaskSeqRepository:
     # Same SQLAlchemy class as the auth-side workspace repo; different
     # protocol surface (allocate_next_task_seq).
@@ -140,6 +146,7 @@ def get_task_service(
     ],
     ratings: Annotated[TaskRatingRepository, Depends(get_task_rating_repository)],
     comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repository)],
+    relations: Annotated[TaskRelationRepository, Depends(get_task_relation_repository)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -148,6 +155,7 @@ def get_task_service(
         seq_allocator=seq_allocator,
         ratings=ratings,
         comments=comments,
+        relations=relations,
     )
 
 

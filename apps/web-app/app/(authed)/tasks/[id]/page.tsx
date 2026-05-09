@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
+import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
 import {
   usePostComment,
@@ -66,6 +67,8 @@ export default function TaskDetailPage() {
               )}
             </div>
           </section>
+
+          <TaskRelationsPanel taskId={id} />
 
           <CommentThread taskId={id} />
         </div>

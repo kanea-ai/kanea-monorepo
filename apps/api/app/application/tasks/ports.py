@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import Task, TaskComment, TaskRating
-from app.domain.enums import TaskStatus
+from app.domain.entities import Task, TaskComment, TaskRating, TaskRelation
+from app.domain.enums import TaskRelationType, TaskStatus
 
 
 @runtime_checkable
@@ -33,6 +33,7 @@ class TaskRepository(Protocol):
         blocked_reason: str | None,
     ) -> Task: ...
     async def create(self, task: Task) -> Task: ...
+    async def list_by_ids(self, task_ids: list[UUID]) -> list[Task]: ...
 
 
 @runtime_checkable
@@ -54,3 +55,18 @@ class TaskRatingRepository(Protocol):
 class TaskCommentRepository(Protocol):
     async def list_for_task(self, task_id: UUID) -> list[TaskComment]: ...
     async def create(self, comment: TaskComment) -> TaskComment: ...
+
+
+@runtime_checkable
+class TaskRelationRepository(Protocol):
+    async def get_existing(
+        self,
+        *,
+        source_task_id: UUID,
+        target_task_id: UUID,
+        relation_type: TaskRelationType,
+    ) -> TaskRelation | None: ...
+    async def list_for_task(self, task_id: UUID) -> list[TaskRelation]: ...
+    async def get_by_id(self, relation_id: UUID) -> TaskRelation | None: ...
+    async def create(self, relation: TaskRelation) -> TaskRelation: ...
+    async def delete(self, relation_id: UUID) -> bool: ...

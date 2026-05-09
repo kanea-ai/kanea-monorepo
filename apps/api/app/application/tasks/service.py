@@ -8,24 +8,28 @@ from app.application.auth.ports import MemberRepository
 from app.application.tasks.ports import (
     TaskCommentRepository,
     TaskRatingRepository,
+    TaskRelationRepository,
     TaskRepository,
     WorkspaceTaskSeqRepository,
 )
 from app.application.tasks.schemas import (
     CommentResponse,
     CreateCommentRequest,
+    CreateRelationRequest,
     CreateTaskRequest,
     DelegateTaskRequest,
     Principal,
     RateTaskRequest,
+    RelationItem,
     SetBlockedRequest,
     TaskRatingResponse,
+    TaskRelationsResponse,
     TaskResponse,
     UpdateTaskStatusRequest,
 )
 from app.application.tenants.ports import WorkspaceReadRepository
-from app.domain.entities import Member, Task, TaskComment, TaskRating
-from app.domain.enums import TaskStatus
+from app.domain.entities import Member, Task, TaskComment, TaskRating, TaskRelation
+from app.domain.enums import TaskRelationType, TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
@@ -33,6 +37,9 @@ from app.domain.exceptions import (
     TaskAlreadyRatedError,
     TaskNotFoundError,
     TaskNotInDoneStateError,
+    TaskRelationAlreadyExistsError,
+    TaskRelationNotFoundError,
+    TaskRelationSelfLinkError,
 )
 
 # Allowed status transitions. Any transition not listed here is rejected.
@@ -57,6 +64,7 @@ class TaskService:
     # for None and raises a clear error if it's invoked without one.
     ratings: TaskRatingRepository | None = None
     comments: TaskCommentRepository | None = None
+    relations: TaskRelationRepository | None = None
 
     async def delegate(
         self,
@@ -232,6 +240,136 @@ class TaskService:
             )
         )
         return await self._comment_to_response(comment)
+
+    # ---------- relations ----------
+
+    async def list_relations(self, task_id: UUID, requester: Principal) -> TaskRelationsResponse:
+        if self.relations is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("list_relations called without a relations repository")
+
+        await self._load_task(task_id, requester)
+        rows = await self.relations.list_for_task(task_id)
+        return await self._group_relations(task_id, rows, requester)
+
+    async def create_relation(
+        self,
+        task_id: UUID,
+        request: CreateRelationRequest,
+        requester: Principal,
+    ) -> TaskRelation:
+        """Idempotent: returns the existing row if (source, target,
+        type) is already linked. Same-workspace required, no self-link."""
+        if self.relations is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("create_relation called without a relations repository")
+
+        if task_id == request.target_task_id:
+            raise TaskRelationSelfLinkError("a task cannot be linked to itself")
+
+        # Both ends must be in the requester's workspace; both 404 the
+        # same way as a missing task.
+        await self._load_task(task_id, requester)
+        await self._load_task(request.target_task_id, requester)
+
+        existing = await self.relations.get_existing(
+            source_task_id=task_id,
+            target_task_id=request.target_task_id,
+            relation_type=request.relation_type,
+        )
+        if existing is not None:
+            raise TaskRelationAlreadyExistsError("this relation already exists between these tasks")
+
+        return await self.relations.create(
+            TaskRelation(
+                id=uuid4(),
+                source_task_id=task_id,
+                target_task_id=request.target_task_id,
+                relation_type=request.relation_type,
+            )
+        )
+
+    async def delete_relation(self, task_id: UUID, relation_id: UUID, requester: Principal) -> None:
+        """Removes the row by id. The route's task_id is taken as the
+        owning task — we 404 if the relation isn't anchored to it."""
+        if self.relations is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("delete_relation called without a relations repository")
+
+        relation = await self.relations.get_by_id(relation_id)
+        if relation is None:
+            raise TaskRelationNotFoundError("relation not found")
+        if task_id not in (relation.source_task_id, relation.target_task_id):
+            raise TaskRelationNotFoundError("relation not found")
+        # Tenant-isolation: the route already loaded the task to confirm
+        # the requester has access; we trust task_id here.
+        await self._load_task(task_id, requester)
+        await self.relations.delete(relation_id)
+
+    async def _group_relations(
+        self,
+        task_id: UUID,
+        rows: list[TaskRelation],
+        requester: Principal,
+    ) -> TaskRelationsResponse:
+        # Bulk-fetch the counterpart tasks in one round-trip so the UI
+        # can render public_id + title without N additional GETs.
+        counterpart_ids = {
+            r.target_task_id if r.source_task_id == task_id else r.source_task_id for r in rows
+        }
+        tasks_by_id: dict[UUID, Task] = {}
+        if counterpart_ids:
+            for task in await self.tasks.list_by_ids(list(counterpart_ids)):
+                # Defensive: only surface counterpart tasks in the same
+                # workspace. Cross-workspace shouldn't be possible
+                # because creation rejects it, but DB-level FKs don't
+                # enforce tenancy so we double-check here.
+                if task.workspace_id == requester.workspace_id:
+                    tasks_by_id[task.id] = task
+
+        prefix = await self._workspace_prefix(requester.workspace_id)
+
+        def to_item(relation: TaskRelation, counterpart_id: UUID) -> RelationItem | None:
+            counterpart = tasks_by_id.get(counterpart_id)
+            if counterpart is None:
+                return None
+            return RelationItem(
+                relation_id=relation.id,
+                task_id=counterpart.id,
+                public_id=f"{prefix}-{counterpart.seq:03d}",
+                title=counterpart.title,
+                status=counterpart.status,
+                is_blocked=counterpart.is_blocked,
+            )
+
+        groups: dict[str, list[RelationItem]] = {
+            "blocks": [],
+            "blocked_by": [],
+            "mitigates": [],
+            "mitigated_by": [],
+            "duplicates": [],
+            "duplicated_by": [],
+            "relates_to": [],
+        }
+
+        for r in rows:
+            outgoing = r.source_task_id == task_id
+            counterpart_id = r.target_task_id if outgoing else r.source_task_id
+            item = to_item(r, counterpart_id)
+            if item is None:
+                continue
+
+            if r.relation_type is TaskRelationType.RELATES_TO:
+                # Symmetric — the same row appears in `relates_to` for
+                # both ends; don't double-bucket.
+                groups["relates_to"].append(item)
+                continue
+
+            if r.relation_type is TaskRelationType.BLOCKS:
+                (groups["blocks"] if outgoing else groups["blocked_by"]).append(item)
+            elif r.relation_type is TaskRelationType.MITIGATES:
+                (groups["mitigates"] if outgoing else groups["mitigated_by"]).append(item)
+            elif r.relation_type is TaskRelationType.DUPLICATES:
+                (groups["duplicates"] if outgoing else groups["duplicated_by"]).append(item)
+
+        return TaskRelationsResponse(**groups)
 
     async def _comment_to_response(self, comment: TaskComment) -> CommentResponse:
         author_name: str | None = None

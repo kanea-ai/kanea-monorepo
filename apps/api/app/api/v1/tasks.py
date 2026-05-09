@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import PrincipalDep, TaskServiceDep
 from app.application.tasks.schemas import (
     CommentResponse,
     CreateCommentRequest,
+    CreateRelationRequest,
     CreateTaskRequest,
     DelegateTaskRequest,
     RateTaskRequest,
     SetBlockedRequest,
     TaskRatingResponse,
+    TaskRelationsResponse,
     TaskResponse,
     UpdateTaskStatusRequest,
 )
@@ -24,6 +26,9 @@ from app.domain.exceptions import (
     TaskAlreadyRatedError,
     TaskNotFoundError,
     TaskNotInDoneStateError,
+    TaskRelationAlreadyExistsError,
+    TaskRelationNotFoundError,
+    TaskRelationSelfLinkError,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -181,6 +186,68 @@ async def post_task_comment(
         return await service.post_comment(task_id, payload, principal)
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{task_id}/relations",
+    response_model=TaskRelationsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_task_relations(
+    task_id: UUID,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskRelationsResponse:
+    """All directional relations grouped into the seven UI buckets:
+    blocks / blocked_by / mitigates / mitigated_by / duplicates /
+    duplicated_by / relates_to."""
+    try:
+        return await service.list_relations(task_id, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{task_id}/relations",
+    status_code=status.HTTP_201_CREATED,
+    response_class=Response,
+)
+async def create_task_relation(
+    task_id: UUID,
+    payload: CreateRelationRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> Response:
+    """Link two tasks. The link is directional for BLOCKS / MITIGATES /
+    DUPLICATES; symmetric for RELATES_TO. 409 if the same relation
+    already exists; 400 on a self-link."""
+    try:
+        await service.create_relation(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TaskRelationSelfLinkError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except TaskRelationAlreadyExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_201_CREATED)
+
+
+@router.delete(
+    "/{task_id}/relations/{relation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_task_relation(
+    task_id: UUID,
+    relation_id: UUID,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> Response:
+    try:
+        await service.delete_relation(task_id, relation_id, principal)
+    except (TaskNotFoundError, TaskRelationNotFoundError) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

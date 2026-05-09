@@ -61,6 +61,32 @@ export interface CreateCommentPayload {
   body: string;
 }
 
+export type RelationType = 'BLOCKS' | 'MITIGATES' | 'DUPLICATES' | 'RELATES_TO';
+
+export interface RelationItem {
+  relation_id: string;
+  task_id: string;
+  public_id: string;
+  title: string;
+  status: TaskStatus;
+  is_blocked: boolean;
+}
+
+export interface TaskRelations {
+  blocks: RelationItem[];
+  blocked_by: RelationItem[];
+  mitigates: RelationItem[];
+  mitigated_by: RelationItem[];
+  duplicates: RelationItem[];
+  duplicated_by: RelationItem[];
+  relates_to: RelationItem[];
+}
+
+export interface CreateRelationPayload {
+  relation_type: RelationType;
+  target_task_id: string;
+}
+
 export interface CreateTaskPayload {
   title: string;
   description?: string | null;
@@ -230,6 +256,35 @@ export const tasksApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  listRelations: (id: string) => request<TaskRelations>(`${V1}/tasks/${id}/relations`),
+  createRelation: async (id: string, payload: CreateRelationPayload): Promise<void> => {
+    // 201 with no body — request<T> would JSON-parse and explode.
+    const response = await fetch(`${API_BASE}${V1}/tasks/${id}/relations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const detail = await response
+        .json()
+        .then((b: { detail?: string }) => b.detail)
+        .catch(() => response.statusText);
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    }
+  },
+  deleteRelation: async (id: string, relationId: string): Promise<void> => {
+    const response = await fetch(`${API_BASE}${V1}/tasks/${id}/relations/${relationId}`, {
+      method: 'DELETE',
+      headers: { ...authHeader() },
+    });
+    if (!response.ok) {
+      const detail = await response
+        .json()
+        .then((b: { detail?: string }) => b.detail)
+        .catch(() => response.statusText);
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    }
+  },
 };
 
 // ---------- Agents ----------

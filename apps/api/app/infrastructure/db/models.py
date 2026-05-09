@@ -19,7 +19,13 @@ from sqlalchemy.dialects.postgresql import ENUM as PgEnum  # noqa: N811
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.enums import MemberRole, MemberType, OAuthProvider, TaskStatus
+from app.domain.enums import (
+    MemberRole,
+    MemberType,
+    OAuthProvider,
+    TaskRelationType,
+    TaskStatus,
+)
 from app.infrastructure.db.base import Base, TimestampMixin
 
 member_type_enum = PgEnum(
@@ -48,6 +54,14 @@ oauth_provider_enum = PgEnum(
     name="oauth_provider",
     values_callable=lambda enum: [member.value for member in enum],
     create_type=True,
+)
+
+task_relation_type_enum = PgEnum(
+    TaskRelationType,
+    name="task_relation_type",
+    values_callable=lambda enum: [member.value for member in enum],
+    # Created in migration 0009 alongside the table.
+    create_type=False,
 )
 
 
@@ -244,6 +258,37 @@ class TaskCommentModel(TimestampMixin, Base):
         nullable=True,
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class TaskRelationModel(TimestampMixin, Base):
+    __tablename__ = "task_relations"
+    __table_args__ = (
+        CheckConstraint(
+            "source_task_id <> target_task_id",
+            name="task_relations_no_self_link",
+        ),
+        UniqueConstraint(
+            "source_task_id",
+            "target_task_id",
+            "relation_type",
+            name="uq_task_relations_source_target_type",
+        ),
+        Index("ix_task_relations_target_type", "target_task_id", "relation_type"),
+        Index("ix_task_relations_source_type", "source_task_id", "relation_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_task_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_task_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    relation_type: Mapped[TaskRelationType] = mapped_column(task_relation_type_enum, nullable=False)
 
 
 class TaskRatingModel(TimestampMixin, Base):

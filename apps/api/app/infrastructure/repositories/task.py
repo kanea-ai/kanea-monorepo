@@ -40,6 +40,15 @@ class SqlAlchemyTaskRepository:
         row = await self._session.get(TaskModel, task_id)
         return _to_entity(row) if row is not None else None
 
+    async def list_by_ids(self, task_ids: list[UUID]) -> list[Task]:
+        """Bulk lookup used by the relations endpoint to materialise the
+        counterpart tasks for the UI without N round-trips."""
+        if not task_ids:
+            return []
+        stmt = select(TaskModel).where(TaskModel.id.in_(task_ids))
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
     async def assign(self, task_id: UUID, assignee_id: UUID) -> Task:
         row = await self._session.get(TaskModel, task_id)
         if row is None:

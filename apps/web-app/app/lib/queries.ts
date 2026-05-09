@@ -11,6 +11,7 @@ import {
   type CreateAgentPayload,
   type CreateAgentResponse,
   type CreateCommentPayload,
+  type CreateRelationPayload,
   type CreateTaskPayload,
   type InviteCreatePayload,
   type InviteCreateResponse,
@@ -20,6 +21,7 @@ import {
   type Task,
   type TaskComment,
   type TaskRating,
+  type TaskRelations,
   type TaskStatus,
   type UpdateAgentPayload,
   type UpdateStatusPayload,
@@ -34,6 +36,7 @@ export const taskKeys = {
   },
   detail: (id: string) => ['tasks', id] as const satisfies QueryKey,
   comments: (id: string) => ['tasks', id, 'comments'] as const satisfies QueryKey,
+  relations: (id: string) => ['tasks', id, 'relations'] as const satisfies QueryKey,
 };
 
 export function useTasks() {
@@ -84,6 +87,37 @@ export function useSetTaskBlocked(id: string) {
       // Block-flag is shown on board, exception queue and detail —
       // bust them all so the new flag propagates.
       qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+export function useTaskRelations(id: string) {
+  return useQuery<TaskRelations>({
+    queryKey: taskKeys.relations(id),
+    queryFn: () => tasksApi.listRelations(id),
+  });
+}
+
+export function useCreateRelation(id: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, CreateRelationPayload>({
+    mutationFn: (payload) => tasksApi.createRelation(id, payload),
+    onSuccess: (_data, vars) => {
+      // Both ends of the link change — bust this task's relations and
+      // the counterpart's so the inverse view picks the row up.
+      qc.invalidateQueries({ queryKey: taskKeys.relations(id) });
+      qc.invalidateQueries({ queryKey: taskKeys.relations(vars.target_task_id) });
+    },
+  });
+}
+
+export function useDeleteRelation(id: string) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, { relationId: string; counterpartTaskId: string }>({
+    mutationFn: ({ relationId }) => tasksApi.deleteRelation(id, relationId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: taskKeys.relations(id) });
+      qc.invalidateQueries({ queryKey: taskKeys.relations(vars.counterpartTaskId) });
     },
   });
 }
