@@ -425,3 +425,73 @@ def test_delete_relation_returns_204(client: TestClient, task_service_mock: Asyn
     )
     assert response.status_code == 204
     task_service_mock.delete_relation.assert_awaited_once()
+
+
+# ---------- get_by_id embeds relations (agent context) ----------
+
+
+async def test_get_by_id_embeds_full_relations(
+    service: TaskService,
+    task_repo: AsyncMock,
+    relations: AsyncMock,
+) -> None:
+    """When an agent fetches a task, the relations must be embedded in
+    the response so the LLM sees the full linked-work context without
+    a second round-trip."""
+    p = make_principal()
+    me = make_task(workspace_id=p.workspace_id, seq=1)
+    blocker = make_task(workspace_id=p.workspace_id, seq=2)
+
+    task_repo.get_by_id.return_value = me
+    task_repo.list_by_ids.return_value = [blocker]
+    relations.list_for_task.return_value = [
+        TaskRelation(
+            id=uuid4(),
+            source_task_id=blocker.id,
+            target_task_id=me.id,
+            relation_type=TaskRelationType.BLOCKS,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    ]
+
+    response = await service.get_by_id(me.id, p)
+
+    assert response.public_id == "TASK-001"
+    assert [item.task_id for item in response.relations.blocked_by] == [blocker.id]
+    assert response.relations.blocks == []
+
+
+async def test_get_by_id_returns_empty_relations_when_repo_missing() -> None:
+    """Defensive: legacy DI without the relations repo still returns
+    a usable detail response with empty buckets."""
+    from app.domain.entities import Workspace
+
+    task_repo = AsyncMock()
+    workspace_repo = AsyncMock()
+    seq_alloc = AsyncMock()
+
+    p = make_principal()
+    me = make_task(workspace_id=p.workspace_id, seq=1)
+    task_repo.get_by_id.return_value = me
+    workspace_repo.get_by_id.return_value = Workspace(
+        id=p.workspace_id,
+        name="Test",
+        slug="test",
+        task_prefix="TASK",
+        next_task_seq=1,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    s = TaskService(
+        tasks=task_repo,
+        members=AsyncMock(),
+        workspaces=workspace_repo,
+        seq_allocator=seq_alloc,
+        relations=None,
+    )
+    response = await s.get_by_id(me.id, p)
+    assert response.relations.blocks == []
+    assert response.relations.blocked_by == []
+    assert response.relations.relates_to == []

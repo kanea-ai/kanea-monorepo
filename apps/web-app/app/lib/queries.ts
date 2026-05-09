@@ -20,6 +20,7 @@ import {
   type SetBlockedPayload,
   type Task,
   type TaskComment,
+  type TaskDetail,
   type TaskRating,
   type TaskRelations,
   type TaskStatus,
@@ -56,7 +57,7 @@ export function useBlockedTasks() {
 }
 
 export function useTask(id: string) {
-  return useQuery<Task>({
+  return useQuery<TaskDetail>({
     queryKey: taskKeys.detail(id),
     queryFn: () => tasksApi.get(id),
   });
@@ -104,9 +105,12 @@ export function useCreateRelation(id: string) {
     mutationFn: (payload) => tasksApi.createRelation(id, payload),
     onSuccess: (_data, vars) => {
       // Both ends of the link change — bust this task's relations and
-      // the counterpart's so the inverse view picks the row up.
+      // the counterpart's. Detail responses now embed relations, so
+      // the detail caches also need invalidating.
       qc.invalidateQueries({ queryKey: taskKeys.relations(id) });
       qc.invalidateQueries({ queryKey: taskKeys.relations(vars.target_task_id) });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(vars.target_task_id) });
     },
   });
 }
@@ -118,6 +122,8 @@ export function useDeleteRelation(id: string) {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: taskKeys.relations(id) });
       qc.invalidateQueries({ queryKey: taskKeys.relations(vars.counterpartTaskId) });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(vars.counterpartTaskId) });
     },
   });
 }

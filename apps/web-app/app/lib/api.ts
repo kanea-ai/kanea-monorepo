@@ -36,6 +36,13 @@ export interface Task {
   updated_at: string;
 }
 
+// Returned by GET /tasks/{id}. Same shape as Task plus the seven
+// relation buckets so agents (and the detail page) get the full
+// linked-work graph in a single round-trip.
+export interface TaskDetail extends Task {
+  relations: TaskRelations;
+}
+
 export interface UpdateStatusPayload {
   status: TaskStatus;
   // Cumulative tokens spent on the task. Optional — agents pass it on
@@ -229,7 +236,7 @@ export const tasksApi = {
     const qs = params.toString();
     return request<Task[]>(`${V1}/tasks${qs ? `?${qs}` : ''}`);
   },
-  get: (id: string) => request<Task>(`${V1}/tasks/${id}`),
+  get: (id: string) => request<TaskDetail>(`${V1}/tasks/${id}`),
   create: (payload: CreateTaskPayload) =>
     request<Task>(`${V1}/tasks`, {
       method: 'POST',

@@ -171,6 +171,32 @@ class TaskRelationsResponse(BaseModel):
     relates_to: list[RelationItem]
 
 
+class TaskDetailResponse(BaseModel):
+    """Returned by GET /tasks/{id}. Mirrors TaskResponse and adds the
+    seven relation buckets so an agent that fetches one task gets the
+    complete picture of its linked work in a single round-trip — no
+    second call to /relations required."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    created_by_id: UUID
+    title: str
+    status: TaskStatus
+    priority: int
+    seq: int
+    public_id: str
+    description: str | None
+    assignee_id: UUID | None
+    due_at: datetime | None
+    is_blocked: bool
+    blocked_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+    relations: TaskRelationsResponse
+
+
 class CreateCommentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

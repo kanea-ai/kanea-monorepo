@@ -22,6 +22,7 @@ from app.application.tasks.schemas import (
     RateTaskRequest,
     RelationItem,
     SetBlockedRequest,
+    TaskDetailResponse,
     TaskRatingResponse,
     TaskRelationsResponse,
     TaskResponse,
@@ -93,10 +94,48 @@ class TaskService:
         prefix = await self._workspace_prefix(requester.workspace_id)
         return [TaskResponse.from_entity(row, prefix=prefix) for row in rows]
 
-    async def get_by_id(self, task_id: UUID, requester: Principal) -> TaskResponse:
+    async def get_by_id(self, task_id: UUID, requester: Principal) -> TaskDetailResponse:
+        """Returns the task plus its full relation graph. Agents reading
+        a task get the linked-work context (blocks / blocked_by / etc.)
+        in a single round-trip; the standalone /relations endpoint is
+        kept for callers that only want the buckets."""
         task = await self._load_task(task_id, requester)
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(task, prefix=prefix)
+
+        # Relations are best-effort: if the relations repo isn't wired
+        # (legacy DI), fall back to an empty grouping rather than 500.
+        if self.relations is not None:
+            rows = await self.relations.list_for_task(task.id)
+            grouped = await self._group_relations(task.id, rows, requester)
+        else:
+            grouped = TaskRelationsResponse(
+                blocks=[],
+                blocked_by=[],
+                mitigates=[],
+                mitigated_by=[],
+                duplicates=[],
+                duplicated_by=[],
+                relates_to=[],
+            )
+
+        return TaskDetailResponse(
+            id=task.id,
+            workspace_id=task.workspace_id,
+            created_by_id=task.created_by_id,
+            title=task.title,
+            status=task.status,
+            priority=task.priority,
+            seq=task.seq,
+            public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
+            description=task.description,
+            assignee_id=task.assignee_id,
+            due_at=task.due_at,
+            is_blocked=task.is_blocked,
+            blocked_reason=task.blocked_reason,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            relations=grouped,
+        )
 
     async def create(self, request: CreateTaskRequest, requester: Principal) -> TaskResponse:
         # If an assignee is supplied, it must belong to the same workspace.

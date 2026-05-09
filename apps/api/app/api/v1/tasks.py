@@ -13,6 +13,7 @@ from app.application.tasks.schemas import (
     DelegateTaskRequest,
     RateTaskRequest,
     SetBlockedRequest,
+    TaskDetailResponse,
     TaskRatingResponse,
     TaskRelationsResponse,
     TaskResponse,
@@ -80,14 +81,17 @@ async def create_task(
 
 @router.get(
     "/{task_id}",
-    response_model=TaskResponse,
+    response_model=TaskDetailResponse,
     status_code=status.HTTP_200_OK,
 )
 async def get_task(
     task_id: UUID,
     principal: PrincipalDep,
     service: TaskServiceDep,
-) -> TaskResponse:
+) -> TaskDetailResponse:
+    """Single-task fetch with the seven relation buckets embedded.
+    Agents reading a task get the full linked-work context in one
+    round-trip — no extra call to /relations needed."""
     try:
         return await service.get_by_id(task_id, principal)
     except TaskNotFoundError as exc:
