@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import (
@@ -14,10 +16,12 @@ from app.application.tenants.schemas import (
     InviteCreateResponse,
     InvitePreviewResponse,
     MemberResponse,
+    SetMemberTeamRequest,
 )
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
+    InvalidMemberTypeError,
     InviteAlreadyAcceptedError,
     InviteExpiredError,
     InviteNotFoundError,
@@ -92,3 +96,25 @@ async def accept_invite(
 async def list_members(principal: PrincipalDep, service: InviteServiceDep) -> list[MemberResponse]:
     members = await service.list_workspace_members(principal)
     return [MemberResponse.from_entity(m) for m in members]
+
+
+@router.patch(
+    "/members/{member_id}/team",
+    response_model=MemberResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_member_team(
+    member_id: UUID,
+    payload: SetMemberTeamRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Workspace admins assign a member to a Team and set their
+    intra-team role. Use team_id=null to unassign."""
+    try:
+        member = await service.set_member_team(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)

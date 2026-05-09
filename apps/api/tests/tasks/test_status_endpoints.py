@@ -446,7 +446,12 @@ async def test_list_for_workspace_passes_blocked_only(
     assert len(result) == 1
     assert result[0].is_blocked is True
     task_repo.list_by_workspace.assert_awaited_once_with(
-        workspace_id, status=None, blocked_only=True, project_id=None, team_id=None
+        workspace_id,
+        status=None,
+        blocked_only=True,
+        project_id=None,
+        team_id=None,
+        assignee_id=None,
     )
 
 
@@ -469,4 +474,5 @@ async def test_list_for_workspace_passes_status_filter(
         blocked_only=False,
         project_id=None,
         team_id=None,
+        assignee_id=None,
     )

@@ -51,16 +51,21 @@ async def list_tasks(
     blocked_only: bool = False,
     project_id: UUID | None = None,
     team_id: UUID | None = None,
+    assignee_id: UUID | None = None,
 ) -> list[TaskResponse]:
     """List tasks in the requester's workspace, optionally filtered.
-    The Exception Queue calls this with ``?blocked_only=true``; the
-    project board with ``?project_id=...``; the kanban with no filter."""
+
+    RBAC: workspace OWNER / ADMIN see all tasks and can use every
+    filter freely; other principals are forced to see only tasks
+    where assignee_id = requester (the service silently overrides
+    any ?assignee_id query)."""
     return await service.list_for_workspace(
         principal,
         status=status_filter,
         blocked_only=blocked_only,
         project_id=project_id,
         team_id=team_id,
+        assignee_id=assignee_id,
     )
 
 

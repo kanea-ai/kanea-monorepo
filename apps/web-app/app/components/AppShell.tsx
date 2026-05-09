@@ -29,7 +29,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     { href: '/board', label: 'Board' },
     { href: '/projects', label: 'Projects' },
     { href: '/blocked', label: 'Blocked', badge: blocked?.length },
-    { href: '/team', label: 'Team' },
+    { href: '/team', label: 'Teams' },
     { href: '/agents', label: 'Agents' },
   ];
 

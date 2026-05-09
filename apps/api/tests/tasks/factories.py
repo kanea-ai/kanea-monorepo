@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from app.application.tasks.schemas import Principal
 from app.domain.entities import Task
-from app.domain.enums import MemberType, TaskStatus
+from app.domain.enums import MemberRole, MemberType, TaskStatus
 
 
 def make_principal(
@@ -15,6 +15,11 @@ def make_principal(
     member_type: MemberType = MemberType.HUMAN,
     priority: int = 1,
     scope: str = "human",
+    # Default to OWNER so existing service-level tests (which pre-date
+    # the board-level RBAC in section 2) keep their full visibility on
+    # /tasks list calls. Tests that need to exercise non-admin scoping
+    # pass role=MemberRole.MEMBER explicitly.
+    role: MemberRole = MemberRole.OWNER,
 ) -> Principal:
     return Principal(
         member_id=member_id or uuid4(),
@@ -22,6 +27,7 @@ def make_principal(
         type=member_type,
         priority=priority,
         scope=scope,
+        role=role,
     )
 
 

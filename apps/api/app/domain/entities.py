@@ -12,6 +12,7 @@ from app.domain.enums import (
     TaskActivityType,
     TaskRelationType,
     TaskStatus,
+    TeamRole,
 )
 
 
@@ -74,6 +75,9 @@ class Member:
     # derived health_status pill on the agent detail view. Null on
     # humans (we only surface it for agents).
     last_seen_at: datetime | None = None
+    # Intra-team rank when team_id is set. Null when the member isn't
+    # on a team. Distinct from `role` (which is workspace-level).
+    team_role: TeamRole | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

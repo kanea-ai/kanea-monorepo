@@ -97,3 +97,24 @@ class MemberRole(StrEnum):
     OWNER = "OWNER"
     ADMIN = "ADMIN"
     MEMBER = "MEMBER"
+
+
+class TeamRole(StrEnum):
+    """A member's rank within a Team. Distinct from MemberRole, which
+    governs workspace-level permissions; TeamRole is per-team and
+    scopes intra-team responsibilities.
+
+    HEAD    : top leader of the team. Orchestrates resources and sets
+              high-level goals across the team's projects.
+    MANAGER : manages agents/employees within the team. Tracks KPIs,
+              can reassign tasks within the team, and can modify agent
+              contexts (model / priority / config).
+    LEAD    : technical lead — executes work and can delegate to
+              lower-priority members on the same team.
+    MEMBER  : standard executor (Human or Agent).
+    """
+
+    HEAD = "HEAD"
+    MANAGER = "MANAGER"
+    LEAD = "LEAD"
+    MEMBER = "MEMBER"

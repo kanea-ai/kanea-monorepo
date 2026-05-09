@@ -2,10 +2,18 @@
 
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import type { Task, TaskStatus } from '../lib/api';
-import { useTasks, useUpdateTaskStatus } from '../lib/queries';
+import { useCurrentPrincipal } from '../lib/auth';
+import {
+  useMembers,
+  useProjects,
+  useTasks,
+  useTeams,
+  useUpdateTaskStatus,
+  type TaskListFilters,
+} from '../lib/queries';
 
 // Status is the lifecycle column; being blocked is orthogonal and shown
 // as a red border on the card regardless of which column it sits in.
@@ -17,7 +25,14 @@ const COLUMNS: { id: TaskStatus; label: string }[] = [
 ];
 
 export function KanbanBoard() {
-  const { data, isLoading, isError, error } = useTasks();
+  const principal = useCurrentPrincipal();
+  const isAdmin = principal?.role === 'OWNER' || principal?.role === 'ADMIN';
+
+  // Section 2: only admins get the filter bar. Non-admins see only
+  // their own tasks regardless of any filter the api would accept —
+  // the server enforces the same rule defensively.
+  const [filters, setFilters] = useState<TaskListFilters>({});
+  const { data, isLoading, isError, error } = useTasks(isAdmin ? filters : {});
   const updateStatus = useUpdateTaskStatus();
 
   const grouped = useMemo(() => {
@@ -52,16 +67,110 @@ export function KanbanBoard() {
   }
 
   return (
-    <DragDropContext onDragEnd={onDragEnd}>
-      {/* Below md, columns scroll horizontally so each one stays usable
-          (a 4-col grid would crush them at phone widths). At md+ we
-          go back to an even grid. */}
-      <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4 md:grid md:snap-none md:grid-cols-4 md:gap-4 md:overflow-visible md:p-6">
-        {COLUMNS.map((col) => (
-          <Column key={col.id} id={col.id} label={col.label} tasks={grouped[col.id]} />
+    <div className="flex h-full flex-col">
+      {isAdmin ? (
+        <FilterBar filters={filters} onChange={setFilters} />
+      ) : (
+        <div className="border-b border-slate-200 bg-white px-4 py-2 text-[11px] text-slate-500">
+          Showing your tasks. Workspace admins see the full board.
+        </div>
+      )}
+      <DragDropContext onDragEnd={onDragEnd}>
+        {/* Below md, columns scroll horizontally so each one stays usable
+            (a 4-col grid would crush them at phone widths). At md+ we
+            go back to an even grid. */}
+        <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4 md:grid md:snap-none md:grid-cols-4 md:gap-4 md:overflow-visible md:p-6">
+          {COLUMNS.map((col) => (
+            <Column key={col.id} id={col.id} label={col.label} tasks={grouped[col.id]} />
+          ))}
+        </div>
+      </DragDropContext>
+    </div>
+  );
+}
+
+function FilterBar({
+  filters,
+  onChange,
+}: {
+  filters: TaskListFilters;
+  onChange: (next: TaskListFilters) => void;
+}) {
+  const { data: teams } = useTeams();
+  const { data: projects } = useProjects();
+  const { data: members } = useMembers();
+
+  const set = <K extends keyof TaskListFilters>(key: K, value: TaskListFilters[K]) => {
+    onChange({ ...filters, [key]: value === '' ? undefined : value });
+  };
+
+  const active = filters.teamId || filters.projectId || filters.assigneeId || filters.blockedOnly;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 text-xs">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Filter
+      </span>
+
+      <select
+        value={filters.teamId ?? ''}
+        onChange={(e) => set('teamId', e.target.value || undefined)}
+        className="rounded border border-slate-300 px-2 py-1"
+      >
+        <option value="">All teams</option>
+        {(teams ?? []).map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
         ))}
-      </div>
-    </DragDropContext>
+      </select>
+
+      <select
+        value={filters.projectId ?? ''}
+        onChange={(e) => set('projectId', e.target.value || undefined)}
+        className="rounded border border-slate-300 px-2 py-1"
+      >
+        <option value="">All projects</option>
+        {(projects ?? []).map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+
+      <select
+        value={filters.assigneeId ?? ''}
+        onChange={(e) => set('assigneeId', e.target.value || undefined)}
+        className="rounded border border-slate-300 px-2 py-1"
+      >
+        <option value="">Any assignee</option>
+        {(members ?? []).map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+            {m.type === 'AGENT' ? ' (agent)' : ''}
+          </option>
+        ))}
+      </select>
+
+      <label className="ml-1 inline-flex items-center gap-1 text-[11px] text-slate-700">
+        <input
+          type="checkbox"
+          checked={!!filters.blockedOnly}
+          onChange={(e) => set('blockedOnly', e.target.checked || undefined)}
+        />
+        Blocked only
+      </label>
+
+      {active ? (
+        <button
+          type="button"
+          onClick={() => onChange({})}
+          className="ml-auto rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Clear
+        </button>
+      ) : null}
+    </div>
   );
 }
 

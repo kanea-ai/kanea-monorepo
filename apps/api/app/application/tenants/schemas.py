@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.domain.entities import Invite, Member
-from app.domain.enums import MemberRole, MemberType
+from app.domain.enums import MemberRole, MemberType, TeamRole
 
 
 class InviteCreateRequest(BaseModel):
@@ -67,6 +67,8 @@ class MemberResponse(BaseModel):
     type: MemberType
     role: MemberRole
     priority: int
+    team_id: UUID | None
+    team_role: TeamRole | None
 
     @classmethod
     def from_entity(cls, member: Member) -> MemberResponse:
@@ -78,7 +80,20 @@ class MemberResponse(BaseModel):
             type=member.type,
             role=member.role,
             priority=member.priority,
+            team_id=member.team_id,
+            team_role=member.team_role,
         )
+
+
+class SetMemberTeamRequest(BaseModel):
+    """Admin-only: assign / unassign a member to a team and set their
+    intra-team role. team_id=null clears the assignment (and the
+    role); when team_id is set, team_role must also be set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    team_id: UUID | None = None
+    team_role: TeamRole | None = None
 
 
 def invite_create_response_from_entity(

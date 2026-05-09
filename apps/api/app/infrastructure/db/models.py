@@ -28,6 +28,7 @@ from app.domain.enums import (
     ProjectStatus,
     TaskRelationType,
     TaskStatus,
+    TeamRole,
 )
 from app.infrastructure.db.base import Base, TimestampMixin
 
@@ -43,6 +44,14 @@ member_role_enum = PgEnum(
     name="member_role",
     values_callable=lambda enum: [member.value for member in enum],
     create_type=True,
+)
+
+team_role_enum = PgEnum(
+    TeamRole,
+    name="team_role",
+    values_callable=lambda enum: [member.value for member in enum],
+    # Created in migration 0012 alongside the column.
+    create_type=False,
 )
 
 task_status_enum = PgEnum(
@@ -163,6 +172,7 @@ class MemberModel(TimestampMixin, Base):
     role: Mapped[MemberRole] = mapped_column(
         member_role_enum, nullable=False, default=MemberRole.MEMBER
     )
+    team_role: Mapped[TeamRole | None] = mapped_column(team_role_enum, nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

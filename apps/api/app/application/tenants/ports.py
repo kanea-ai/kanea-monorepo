@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import Invite, Member, Workspace
+from app.domain.enums import TeamRole
 
 
 @runtime_checkable
@@ -21,6 +22,13 @@ class TenantMemberRepository(Protocol):
 
     async def list_for_workspace(self, workspace_id: UUID) -> list[Member]: ...
     async def get_by_id(self, member_id: UUID) -> Member | None: ...
+    async def set_team(
+        self,
+        member_id: UUID,
+        *,
+        team_id: UUID | None,
+        team_role: TeamRole | None,
+    ) -> Member: ...
 
 
 @runtime_checkable

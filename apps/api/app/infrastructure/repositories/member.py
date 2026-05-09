@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import AgentStats, Member
-from app.domain.enums import MemberType, TaskStatus
+from app.domain.enums import MemberType, TaskStatus, TeamRole
 from app.infrastructure.db.models import MemberModel, TaskModel, TaskRatingModel
 
 
@@ -21,6 +21,7 @@ def _to_entity(row: MemberModel) -> Member:
         email=row.email,
         priority=row.priority,
         role=row.role,
+        team_role=row.team_role,
         model=row.model,
         last_seen_at=row.last_seen_at,
         created_at=row.created_at,
@@ -98,6 +99,27 @@ class SqlAlchemyMemberRepository:
             raise AgentNotFoundError("agent not found")
         await self._session.delete(row)
         await self._session.flush()
+
+    async def set_team(
+        self,
+        member_id: UUID,
+        *,
+        team_id: UUID | None,
+        team_role: TeamRole | None,
+    ) -> Member:
+        """Assign / unassign a member to a team. Setting team_id to
+        None clears the team and the role. Setting team_id requires a
+        non-None team_role — the service layer enforces that."""
+        from app.domain.exceptions import InvalidMemberTypeError
+
+        row = await self._session.get(MemberModel, member_id)
+        if row is None:
+            raise InvalidMemberTypeError("member not found")
+        row.team_id = team_id
+        row.team_role = team_role
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
 
     async def heartbeat(self, member_id: UUID) -> None:
         """Stamp last_seen_at = now() on the member row. No-ops silently

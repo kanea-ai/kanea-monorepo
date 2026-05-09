@@ -24,6 +24,7 @@ import {
   type ProjectHistory,
   type RateTaskPayload,
   type SetBlockedPayload,
+  type SetMemberTeamPayload,
   type Task,
   type TaskActivity,
   type TaskComment,
@@ -38,12 +39,23 @@ import {
   type UpdateTaskLinksPayload,
 } from './api';
 
+// Filters the kanban + dashboard pass to /tasks. The query cache key
+// includes them so flipping a filter triggers a fresh fetch.
+export interface TaskListFilters {
+  status?: TaskStatus;
+  blockedOnly?: boolean;
+  projectId?: string;
+  teamId?: string;
+  assigneeId?: string;
+}
+
 export const taskKeys = {
   all: ['tasks'] as const satisfies QueryKey,
-  list: (opts: { status?: TaskStatus; blockedOnly?: boolean } = {}) => {
-    if (opts.blockedOnly) return ['tasks', { blockedOnly: true }] as const satisfies QueryKey;
-    if (opts.status) return ['tasks', { status: opts.status }] as const satisfies QueryKey;
-    return ['tasks'] as const satisfies QueryKey;
+  list: (filters: TaskListFilters = {}) => {
+    if (Object.values(filters).every((v) => v == null || v === false)) {
+      return ['tasks'] as const satisfies QueryKey;
+    }
+    return ['tasks', filters] as const satisfies QueryKey;
   },
   detail: (id: string) => ['tasks', id] as const satisfies QueryKey,
   comments: (id: string) => ['tasks', id, 'comments'] as const satisfies QueryKey,
@@ -51,10 +63,10 @@ export const taskKeys = {
   activity: (id: string) => ['tasks', id, 'activity'] as const satisfies QueryKey,
 };
 
-export function useTasks() {
+export function useTasks(filters: TaskListFilters = {}) {
   return useQuery({
-    queryKey: taskKeys.list(),
-    queryFn: () => tasksApi.list(),
+    queryKey: taskKeys.list(filters),
+    queryFn: () => tasksApi.list(filters),
   });
 }
 
@@ -149,6 +161,17 @@ export function useMembers() {
   return useQuery<Member[]>({
     queryKey: tenantKeys.members,
     queryFn: () => tenantsApi.listMembers(),
+  });
+}
+
+export function useSetMemberTeam() {
+  const qc = useQueryClient();
+  return useMutation<Member, Error, { memberId: string; payload: SetMemberTeamPayload }>({
+    mutationFn: ({ memberId, payload }) => tenantsApi.setMemberTeam(memberId, payload),
+    onSuccess: () => {
+      // Member shape now carries team_id + team_role; bust the list.
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
   });
 }
 

@@ -238,6 +238,7 @@ def get_invite_service(
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
     config: Annotated[Settings, Depends(get_settings)],
+    teams: Annotated[TeamRepository, Depends(get_team_repository)],
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -250,6 +251,7 @@ def get_invite_service(
         # Invite links resolve on the SaaS app subdomain — same place the
         # frontend serves /invite/[token].
         accept_url_base=config.oauth_post_login_redirect.rsplit("/auth/callback", 1)[0],
+        teams=teams,
     )
 
 

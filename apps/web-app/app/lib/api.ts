@@ -209,6 +209,7 @@ export const authApi = {
 
 export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 export type MemberKind = 'HUMAN' | 'AGENT';
+export type TeamRole = 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER';
 
 export interface Member {
   id: string;
@@ -218,6 +219,15 @@ export interface Member {
   type: MemberKind;
   role: MemberRole;
   priority: number;
+  // Section 1: intra-team rank, set when the member is assigned to a
+  // Team. Null when unassigned.
+  team_id: string | null;
+  team_role: TeamRole | null;
+}
+
+export interface SetMemberTeamPayload {
+  team_id: string | null;
+  team_role: TeamRole | null;
 }
 
 export interface InviteCreatePayload {
@@ -260,6 +270,11 @@ export const tenantsApi = {
   acceptInvite: (token: string, payload: InviteAcceptPayload) =>
     request<TokenResponse>(`${V1}/tenants/invites/${encodeURIComponent(token)}/accept`, {
       method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  setMemberTeam: (memberId: string, payload: SetMemberTeamPayload) =>
+    request<Member>(`${V1}/tenants/members/${memberId}/team`, {
+      method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 };

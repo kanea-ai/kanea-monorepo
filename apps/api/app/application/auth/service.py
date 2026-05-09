@@ -21,7 +21,7 @@ from app.application.auth.schemas import (
     TokenResponse,
 )
 from app.domain.entities import Credentials, Member, Workspace
-from app.domain.enums import MemberType
+from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
 
 # Workspace owners are the highest rank in the hierarchy. The delegate
@@ -67,6 +67,10 @@ class AuthService:
                 name=request.full_name,
                 email=str(request.email),
                 priority=OWNER_PRIORITY,
+                # Workspace creator owns the tenant. Without this the
+                # role defaults to MEMBER and the new owner can't even
+                # invite collaborators or create teams.
+                role=MemberRole.OWNER,
             )
         )
 
@@ -168,6 +172,7 @@ class AuthService:
                 name=identity.name or identity.email,
                 email=identity.email,
                 priority=OWNER_PRIORITY,
+                role=MemberRole.OWNER,
             )
         )
         await self.credentials.create(

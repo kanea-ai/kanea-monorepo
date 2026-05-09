@@ -14,6 +14,7 @@ from app.application.auth.ports import (
 )
 from app.application.auth.schemas import TokenResponse
 from app.application.tasks.schemas import Principal
+from app.application.teams.ports import TeamRepository
 from app.application.tenants.ports import (
     InviteRepository,
     TenantMemberRepository,
@@ -24,6 +25,7 @@ from app.application.tenants.schemas import (
     InviteCreateRequest,
     InviteCreateResponse,
     InvitePreviewResponse,
+    SetMemberTeamRequest,
     invite_create_response_from_entity,
 )
 from app.domain.entities import Credentials, Invite, Member
@@ -31,6 +33,7 @@ from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
+    InvalidMemberTypeError,
     InviteAlreadyAcceptedError,
     InviteExpiredError,
     InviteNotFoundError,
@@ -58,6 +61,9 @@ class InviteService:
     tokens: TokenService
     # Public base URL the invite link resolves on. Injected from settings.
     accept_url_base: str
+    # Team repo for the team-assignment endpoint. Optional so existing
+    # constructors / unit tests stay green.
+    teams: TeamRepository | None = None
 
     async def create_invite(
         self, request: InviteCreateRequest, principal: Principal
@@ -146,6 +152,44 @@ class InviteService:
 
     async def list_workspace_members(self, principal: Principal) -> list[Member]:
         return await self.members.list_for_workspace(principal.workspace_id)
+
+    async def set_member_team(
+        self,
+        member_id: UUID,
+        request: SetMemberTeamRequest,
+        principal: Principal,
+    ) -> Member:
+        """Workspace admins assign a member to a Team and set their
+        intra-team role. Validates: tenant isolation, team_id +
+        team_role coherence (both set or both null), team belongs to
+        the same workspace.
+
+        Route-level RBAC (WorkspaceAdminDep) is the primary guard;
+        this service-level check is the belt for direct callers."""
+        if principal.role not in (MemberRole.OWNER, MemberRole.ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
+
+        if request.team_id is None and request.team_role is not None:
+            raise InvalidMemberTypeError("team_role must be null when team_id is null")
+        if request.team_id is not None and request.team_role is None:
+            raise InvalidMemberTypeError("team_role is required when team_id is set")
+
+        target = await self.members.get_by_id(member_id)
+        if target is None or target.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+
+        # The team must belong to the same workspace; the FK alone
+        # accepts cross-tenant ids so we add an explicit check.
+        if request.team_id is not None and self.teams is not None:
+            team = await self.teams.get_by_id(request.team_id)
+            if team is None or team.workspace_id != principal.workspace_id:
+                raise InvalidMemberTypeError("team not found")
+
+        return await self.members.set_team(
+            member_id,
+            team_id=request.team_id,
+            team_role=request.team_role,
+        )
 
     async def _load_active_invite(self, raw_token: str) -> Invite:
         invite = await self.invites.get_by_token_hash(_hash_token(raw_token))

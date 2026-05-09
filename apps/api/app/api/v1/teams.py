@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from app.api.deps import PrincipalDep, TeamServiceDep
+from app.api.deps import PrincipalDep, TeamServiceDep, WorkspaceAdminDep
 from app.application.teams.schemas import (
     CreateTeamRequest,
     TeamResponse,
@@ -34,9 +34,10 @@ async def list_teams(
 )
 async def create_team(
     payload: CreateTeamRequest,
-    principal: PrincipalDep,
+    principal: WorkspaceAdminDep,
     service: TeamServiceDep,
 ) -> TeamResponse:
+    """Workspace owners / admins only — section 1 RBAC requirement."""
     try:
         return await service.create(payload, principal)
     except TeamNameConflictError as exc:
@@ -51,7 +52,7 @@ async def create_team(
 async def update_team(
     team_id: UUID,
     payload: UpdateTeamRequest,
-    principal: PrincipalDep,
+    principal: WorkspaceAdminDep,
     service: TeamServiceDep,
 ) -> TeamResponse:
     try:
@@ -69,7 +70,7 @@ async def update_team(
 )
 async def delete_team(
     team_id: UUID,
-    principal: PrincipalDep,
+    principal: WorkspaceAdminDep,
     service: TeamServiceDep,
 ) -> Response:
     try:

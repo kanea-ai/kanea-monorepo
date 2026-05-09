@@ -68,6 +68,44 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
+export interface CurrentPrincipal {
+  member_id: string;
+  workspace_id: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  type: 'HUMAN' | 'AGENT';
+  scope: string;
+}
+
+/**
+ * Decode the JWT payload to surface the caller's identity + role.
+ *
+ * The signature is not verified here — that's the server's job. We
+ * use this only for cosmetic / RBAC-aware UI gating (e.g. showing a
+ * "Create team" button to admins). Every privileged action still goes
+ * through the api, which rejects with 403 on its own.
+ */
+export function useCurrentPrincipal(): CurrentPrincipal | null {
+  const { token, isReady } = useAuth();
+  return useMemo(() => {
+    if (!isReady || !token) return null;
+    try {
+      const [, payload] = token.split('.');
+      if (!payload) return null;
+      const padded = payload.replace(/-/g, '+').replace(/_/g, '/');
+      const json = JSON.parse(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)));
+      return {
+        member_id: String(json.sub),
+        workspace_id: String(json.workspace_id),
+        role: json.role ?? 'MEMBER',
+        type: json.type ?? 'HUMAN',
+        scope: json.scope ?? 'human',
+      };
+    } catch {
+      return null;
+    }
+  }, [token, isReady]);
+}
+
 /**
  * Redirects unauthenticated users to /login. Returns `true` once the auth
  * state has been read from storage and a token is present, so callers can

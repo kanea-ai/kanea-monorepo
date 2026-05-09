@@ -68,6 +68,7 @@ class SqlAlchemyTaskRepository:
         blocked_only: bool = False,
         project_id: UUID | None = None,
         team_id: UUID | None = None,
+        assignee_id: UUID | None = None,
     ) -> list[Task]:
         stmt = select(TaskModel).where(TaskModel.workspace_id == workspace_id)
         if status is not None:
@@ -78,6 +79,8 @@ class SqlAlchemyTaskRepository:
             stmt = stmt.where(TaskModel.project_id == project_id)
         if team_id is not None:
             stmt = stmt.where(TaskModel.team_id == team_id)
+        if assignee_id is not None:
+            stmt = stmt.where(TaskModel.assignee_id == assignee_id)
         stmt = stmt.order_by(TaskModel.priority, TaskModel.created_at)
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]

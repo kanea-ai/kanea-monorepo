@@ -42,7 +42,7 @@ from app.domain.entities import (
     TaskRating,
     TaskRelation,
 )
-from app.domain.enums import TaskActivityType, TaskRelationType, TaskStatus
+from app.domain.enums import MemberRole, TaskActivityType, TaskRelationType, TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
@@ -120,13 +120,22 @@ class TaskService:
         blocked_only: bool = False,
         project_id: UUID | None = None,
         team_id: UUID | None = None,
+        assignee_id: UUID | None = None,
     ) -> list[TaskResponse]:
+        """Workspace task list with RBAC. Workspace OWNER / ADMIN see
+        all tasks and can filter freely; other principals are forced
+        to see only their own assigned tasks regardless of any
+        ?assignee_id query — the filter is silently overridden."""
+        is_admin = requester.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        effective_assignee_id = assignee_id if is_admin else requester.member_id
+
         rows = await self.tasks.list_by_workspace(
             requester.workspace_id,
             status=status,
             blocked_only=blocked_only,
             project_id=project_id,
             team_id=team_id,
+            assignee_id=effective_assignee_id,
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return [TaskResponse.from_entity(row, prefix=prefix) for row in rows]

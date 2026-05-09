@@ -19,6 +19,7 @@ class TaskRepository(Protocol):
         blocked_only: bool = False,
         project_id: UUID | None = None,
         team_id: UUID | None = None,
+        assignee_id: UUID | None = None,
     ) -> list[Task]: ...
     async def update_status(
         self,
