@@ -11,7 +11,7 @@ const V1 = '/api/v1';
 
 export const TOKEN_STORAGE_KEY = 'kanea_token';
 
-export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE' | 'CANCELLED';
 
 export interface Task {
   id: string;

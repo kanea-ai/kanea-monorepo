@@ -162,7 +162,7 @@ function SidePanel({ task }: { task: Task }) {
               disabled={updateStatus.isPending}
               className="rounded border border-slate-300 px-2 py-1 text-xs"
             >
-              {(['PENDING', 'IN_PROGRESS', 'DONE', 'CANCELLED'] as const).map((s) => (
+              {(['PENDING', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED'] as const).map((s) => (
                 <option key={s} value={s}>
                   {s.replace('_', ' ')}
                 </option>

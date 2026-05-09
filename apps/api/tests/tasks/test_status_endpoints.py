@@ -408,11 +408,46 @@ async def test_status_update_does_not_touch_blocked_reason(
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
+        # IN_PROGRESS -> IN_REVIEW: executor flags the work for verification.
+        (TaskStatus.IN_PROGRESS, TaskStatus.IN_REVIEW),
+        # IN_REVIEW -> DONE: reviewer approves.
+        (TaskStatus.IN_REVIEW, TaskStatus.DONE),
+        # IN_REVIEW -> IN_PROGRESS: reviewer rejects, kicks back.
+        (TaskStatus.IN_REVIEW, TaskStatus.IN_PROGRESS),
+        # IN_REVIEW -> CANCELLED: scope drops mid-review.
+        (TaskStatus.IN_REVIEW, TaskStatus.CANCELLED),
+    ],
+)
+async def test_in_review_transitions_are_allowed(
+    service: TaskService,
+    task_repo: AsyncMock,
+    from_status: TaskStatus,
+    to_status: TaskStatus,
+) -> None:
+    workspace_id = uuid4()
+    requester = make_principal(workspace_id=workspace_id, priority=1)
+    task = make_task(workspace_id=workspace_id, status=from_status)
+    task_repo.get_by_id.return_value = task
+    task_repo.update_status.return_value = make_task(
+        task_id=task.id, workspace_id=workspace_id, status=to_status
+    )
+
+    await service.update_status(task.id, UpdateTaskStatusRequest(status=to_status), requester)
+
+    task_repo.update_status.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("from_status", "to_status"),
+    [
         (TaskStatus.DONE, TaskStatus.IN_PROGRESS),
         (TaskStatus.CANCELLED, TaskStatus.IN_PROGRESS),
         (TaskStatus.PENDING, TaskStatus.DONE),
         (TaskStatus.DONE, TaskStatus.CANCELLED),
         (TaskStatus.CANCELLED, TaskStatus.DONE),
+        # PENDING can't skip straight to IN_REVIEW — must go through
+        # IN_PROGRESS first so the activity log captures the work.
+        (TaskStatus.PENDING, TaskStatus.IN_REVIEW),
     ],
 )
 async def test_invalid_transitions_are_rejected(

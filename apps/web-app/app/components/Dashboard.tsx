@@ -9,6 +9,7 @@ import { useTasks } from '../lib/queries';
 const STATUS_LABEL: Record<TaskStatus, string> = {
   PENDING: 'Pending',
   IN_PROGRESS: 'In Progress',
+  IN_REVIEW: 'In Review',
   DONE: 'Done',
   CANCELLED: 'Cancelled',
 };
@@ -137,6 +138,7 @@ function bucketByStatus(tasks: Task[]): Record<TaskStatus, number> {
   const out: Record<TaskStatus, number> = {
     PENDING: 0,
     IN_PROGRESS: 0,
+    IN_REVIEW: 0,
     DONE: 0,
     CANCELLED: 0,
   };
@@ -241,6 +243,7 @@ function ActivityRow({ task }: { task: Task }) {
 const STATUS_PILL: Record<TaskStatus, string> = {
   PENDING: 'bg-slate-100 text-slate-700',
   IN_PROGRESS: 'bg-blue-100 text-blue-800',
+  IN_REVIEW: 'bg-amber-100 text-amber-800',
   DONE: 'bg-emerald-100 text-emerald-800',
   CANCELLED: 'bg-slate-100 text-slate-500',
 };

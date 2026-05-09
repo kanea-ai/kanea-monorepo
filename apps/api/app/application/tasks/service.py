@@ -62,7 +62,19 @@ from app.domain.exceptions import (
 # toggled via PATCH /tasks/{id}/block. The lifecycle stays linear.
 _ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
-    TaskStatus.IN_PROGRESS: frozenset({TaskStatus.DONE, TaskStatus.CANCELLED, TaskStatus.PENDING}),
+    TaskStatus.IN_PROGRESS: frozenset(
+        {
+            TaskStatus.IN_REVIEW,
+            TaskStatus.DONE,
+            TaskStatus.CANCELLED,
+            TaskStatus.PENDING,
+        }
+    ),
+    # IN_REVIEW kicks back to IN_PROGRESS on rejection, or forward to
+    # DONE on approval. CANCELLED is the bail-out.
+    TaskStatus.IN_REVIEW: frozenset(
+        {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}
+    ),
     TaskStatus.DONE: frozenset(),
     TaskStatus.CANCELLED: frozenset(),
 }

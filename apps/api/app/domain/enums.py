@@ -10,11 +10,16 @@ class MemberType(StrEnum):
 
 class TaskStatus(StrEnum):
     """Lifecycle status. Being blocked is orthogonal — it lives on the
-    task as `is_blocked` so a task can stay PENDING/IN_PROGRESS while
-    waiting on something external."""
+    task as `is_blocked` so a task can stay PENDING / IN_PROGRESS /
+    IN_REVIEW while waiting on something external.
+
+    IN_REVIEW is the column for work that's done from the executor's
+    POV but needs verification — QA, secondary-agent check, reviewer
+    sign-off. It sits between IN_PROGRESS and DONE."""
 
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
+    IN_REVIEW = "IN_REVIEW"
     DONE = "DONE"
     CANCELLED = "CANCELLED"
 

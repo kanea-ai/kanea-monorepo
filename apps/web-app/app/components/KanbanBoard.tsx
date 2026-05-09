@@ -17,11 +17,15 @@ import {
 
 // Status is the lifecycle column; being blocked is orthogonal and shown
 // as a red border on the card regardless of which column it sits in.
-const COLUMNS: { id: TaskStatus; label: string }[] = [
+// `defaultCollapsed` ships DONE / CANCELLED in the collapsed state on
+// first paint — they pile up over time and would otherwise eat half
+// the screen.
+const COLUMNS: { id: TaskStatus; label: string; defaultCollapsed?: boolean }[] = [
   { id: 'PENDING', label: 'Pending' },
   { id: 'IN_PROGRESS', label: 'In Progress' },
-  { id: 'DONE', label: 'Done' },
-  { id: 'CANCELLED', label: 'Cancelled' },
+  { id: 'IN_REVIEW', label: 'In Review' },
+  { id: 'DONE', label: 'Done', defaultCollapsed: true },
+  { id: 'CANCELLED', label: 'Cancelled', defaultCollapsed: true },
 ];
 
 export function KanbanBoard() {
@@ -39,12 +43,23 @@ export function KanbanBoard() {
     const buckets: Record<TaskStatus, Task[]> = {
       PENDING: [],
       IN_PROGRESS: [],
+      IN_REVIEW: [],
       DONE: [],
       CANCELLED: [],
     };
     for (const task of data ?? []) buckets[task.status].push(task);
     return buckets;
   }, [data]);
+
+  // Collapsed-state lives at the board level so dragging a card into
+  // a collapsed column auto-expands it (next render reads the new
+  // state). DONE / CANCELLED start collapsed per COLUMNS config.
+  const [collapsed, setCollapsed] = useState<Record<TaskStatus, boolean>>(() => {
+    const init = {} as Record<TaskStatus, boolean>;
+    for (const col of COLUMNS) init[col.id] = !!col.defaultCollapsed;
+    return init;
+  });
+  const toggleColumn = (id: TaskStatus) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const onDragEnd = (result: DropResult) => {
     const { destination, source, draggableId } = result;
@@ -76,12 +91,19 @@ export function KanbanBoard() {
         </div>
       )}
       <DragDropContext onDragEnd={onDragEnd}>
-        {/* Below md, columns scroll horizontally so each one stays usable
-            (a 4-col grid would crush them at phone widths). At md+ we
-            go back to an even grid. */}
-        <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4 md:grid md:snap-none md:grid-cols-4 md:gap-4 md:overflow-visible md:p-6">
+        {/* Columns flex-wise rather than equal-grid. Active columns
+            stretch; collapsed ones shrink to a 12-rem rail so they
+            stay usable. Below md they scroll horizontally. */}
+        <div className="flex h-full snap-x snap-mandatory items-start gap-3 overflow-x-auto p-3 sm:p-4 md:snap-none md:overflow-visible md:p-6">
           {COLUMNS.map((col) => (
-            <Column key={col.id} id={col.id} label={col.label} tasks={grouped[col.id]} />
+            <Column
+              key={col.id}
+              id={col.id}
+              label={col.label}
+              tasks={grouped[col.id]}
+              isCollapsed={collapsed[col.id]}
+              onToggle={() => toggleColumn(col.id)}
+            />
           ))}
         </div>
       </DragDropContext>
@@ -174,74 +196,122 @@ function FilterBar({
   );
 }
 
-function Column({ id, label, tasks }: { id: TaskStatus; label: string; tasks: Task[] }) {
+function Column({
+  id,
+  label,
+  tasks,
+  isCollapsed,
+  onToggle,
+}: {
+  id: TaskStatus;
+  label: string;
+  tasks: Task[];
+  isCollapsed: boolean;
+  onToggle: () => void;
+}) {
+  // Collapsed columns shrink to a thin rail (just header + count).
+  // The Droppable still mounts so dnd can drop into a collapsed
+  // column — but we render it with min-height: 0 to keep the rail
+  // tight.
+  const widthClass = isCollapsed ? 'w-12 md:w-12 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
   return (
-    <div className="flex min-h-0 w-72 shrink-0 snap-start flex-col rounded-lg bg-slate-100 p-3 md:w-auto md:shrink">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">{label}</h2>
-        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">
+    <div
+      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-all ${widthClass}`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        title={isCollapsed ? 'Expand column' : 'Collapse column'}
+        className={`mb-2 flex items-center gap-2 rounded px-1 py-1 text-left hover:bg-slate-200/60 ${
+          isCollapsed ? 'flex-col gap-1' : 'justify-between'
+        }`}
+      >
+        <span
+          aria-hidden
+          className={`text-[10px] text-slate-500 transition-transform ${
+            isCollapsed ? '' : 'rotate-90'
+          }`}
+        >
+          ▶
+        </span>
+        <h2
+          className={`whitespace-nowrap text-sm font-semibold uppercase tracking-wide text-slate-600 ${
+            isCollapsed ? 'rotate-180 [writing-mode:vertical-rl]' : ''
+          }`}
+        >
+          {label}
+        </h2>
+        <span
+          className={`rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 ${
+            isCollapsed ? '' : 'ml-auto'
+          }`}
+        >
           {tasks.length}
         </span>
-      </div>
-      <Droppable droppableId={id}>
-        {(provided, snapshot) => (
-          <div
-            ref={provided.innerRef}
-            {...provided.droppableProps}
-            className={`flex min-h-[200px] flex-1 flex-col gap-2 rounded-md p-1 transition-colors ${
-              snapshot.isDraggingOver ? 'bg-slate-200/70' : ''
-            }`}
-          >
-            {tasks.map((task, index) => (
-              <Draggable key={task.id} draggableId={task.id} index={index}>
-                {(p, s) => (
-                  <article
-                    ref={p.innerRef}
-                    {...p.draggableProps}
-                    {...p.dragHandleProps}
-                    className={`rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow ${
-                      task.is_blocked
-                        ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
-                        : 'border-slate-200'
-                    } ${s.isDragging ? 'shadow-md ring-2 ring-indigo-300' : ''}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <Link
-                        href={`/tasks/${task.id}`}
-                        // Stop drag handler from claiming the click — the
-                        // dnd library calls preventDefault on parent click
-                        // events, so we explicitly stopPropagation here.
-                        onClick={(e) => e.stopPropagation()}
-                        className="min-w-0 flex-1"
-                      >
-                        <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
-                          {task.public_id}
+      </button>
+      {isCollapsed ? null : (
+        <Droppable droppableId={id}>
+          {(provided, snapshot) => (
+            <div
+              ref={provided.innerRef}
+              {...provided.droppableProps}
+              className={`flex min-h-[200px] flex-1 flex-col gap-2 rounded-md p-1 transition-colors ${
+                snapshot.isDraggingOver ? 'bg-slate-200/70' : ''
+              }`}
+            >
+              {tasks.map((task, index) => (
+                <Draggable key={task.id} draggableId={task.id} index={index}>
+                  {(p, s) => (
+                    <article
+                      ref={p.innerRef}
+                      {...p.draggableProps}
+                      {...p.dragHandleProps}
+                      className={`rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow ${
+                        task.is_blocked
+                          ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
+                          : 'border-slate-200'
+                      } ${s.isDragging ? 'shadow-md ring-2 ring-indigo-300' : ''}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <Link
+                          href={`/tasks/${task.id}`}
+                          // Stop drag handler from claiming the click — the
+                          // dnd library calls preventDefault on parent click
+                          // events, so we explicitly stopPropagation here.
+                          onClick={(e) => e.stopPropagation()}
+                          className="min-w-0 flex-1"
+                        >
+                          <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+                            {task.public_id}
+                          </p>
+                          <h3 className="truncate font-medium text-slate-900 hover:text-indigo-700">
+                            {task.title}
+                          </h3>
+                        </Link>
+                        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                          P{task.priority}
+                        </span>
+                      </div>
+                      {task.is_blocked ? (
+                        <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                          <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                          Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
                         </p>
-                        <h3 className="truncate font-medium text-slate-900 hover:text-indigo-700">
-                          {task.title}
-                        </h3>
-                      </Link>
-                      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
-                        P{task.priority}
-                      </span>
-                    </div>
-                    {task.is_blocked ? (
-                      <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
-                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                        Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
-                      </p>
-                    ) : null}
-                    {task.description ? (
-                      <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p>
-                    ) : null}
-                  </article>
-                )}
-              </Draggable>
-            ))}
-            {provided.placeholder}
-          </div>
-        )}
-      </Droppable>
+                      ) : null}
+                      {task.description ? (
+                        <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                          {task.description}
+                        </p>
+                      ) : null}
+                    </article>
+                  )}
+                </Draggable>
+              ))}
+              {provided.placeholder}
+            </div>
+          )}
+        </Droppable>
+      )}
     </div>
   );
 }
