@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { ApiError, type Member } from '../lib/api';
-import { useCreateTask, useMembers } from '../lib/queries';
+import { useCreateTask, useMembers, useProjects, useTeams } from '../lib/queries';
 
 // Modal-ish (centered dialog with backdrop) without pulling in a UI lib.
 // `useEffect` traps `Escape` and clicks on the backdrop close. The form
@@ -13,11 +13,15 @@ import { useCreateTask, useMembers } from '../lib/queries';
 export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const createTask = useCreateTask();
   const { data: members } = useMembers();
+  const { data: projects } = useProjects();
+  const { data: teams } = useTeams();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<number>(3);
   const [assigneeId, setAssigneeId] = useState<string>('');
+  const [projectId, setProjectId] = useState<string>('');
+  const [teamId, setTeamId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -42,12 +46,16 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
         description: description || null,
         priority,
         assignee_id: assigneeId || null,
+        project_id: projectId || null,
+        team_id: teamId || null,
       });
       // Reset and close.
       setTitle('');
       setDescription('');
       setPriority(3);
       setAssigneeId('');
+      setProjectId('');
+      setTeamId('');
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to create task');
@@ -123,6 +131,40 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
               {(members ?? []).map((m: Member) => (
                 <option key={m.id} value={m.id}>
                   {m.name} {m.type === 'AGENT' ? '(agent)' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Project" htmlFor="project">
+            <select
+              id="project"
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="">Backlog (no project)</option>
+              {(projects ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Team" htmlFor="team">
+            <select
+              id="team"
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="">No team</option>
+              {(teams ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
                 </option>
               ))}
             </select>

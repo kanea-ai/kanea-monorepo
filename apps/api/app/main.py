@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.agents import router as agents_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.projects import router as projects_router
 from app.api.v1.tasks import router as tasks_router
+from app.api.v1.teams import router as teams_router
 from app.api.v1.tenants import router as tenants_router
 from app.core.config import settings
 
@@ -37,6 +39,8 @@ app.include_router(auth_router, prefix=API_V1_PREFIX)
 app.include_router(tasks_router, prefix=API_V1_PREFIX)
 app.include_router(tenants_router, prefix=API_V1_PREFIX)
 app.include_router(agents_router, prefix=API_V1_PREFIX)
+app.include_router(projects_router, prefix=API_V1_PREFIX)
+app.include_router(teams_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/health", tags=["health"])

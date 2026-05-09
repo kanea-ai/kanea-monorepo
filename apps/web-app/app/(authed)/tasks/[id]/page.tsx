@@ -8,9 +8,12 @@ import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
 import {
   usePostComment,
+  useProjects,
   useSetTaskBlocked,
   useTask,
   useTaskComments,
+  useTeams,
+  useUpdateTaskLinks,
   useUpdateTaskStatus,
 } from '../../../lib/queries';
 
@@ -112,11 +115,26 @@ function BlockedBanner({ task }: { task: Task }) {
 function SidePanel({ task }: { task: Task }) {
   const updateStatus = useUpdateTaskStatus();
   const setBlocked = useSetTaskBlocked(task.id);
+  const updateLinks = useUpdateTaskLinks(task.id);
+  const { data: projects } = useProjects();
+  const { data: teams } = useTeams();
   const [reason, setReason] = useState('');
   const [openBlock, setOpenBlock] = useState(false);
 
   const onChangeStatus = (e: React.ChangeEvent<HTMLSelectElement>) => {
     updateStatus.mutate({ id: task.id, payload: { status: e.target.value as Task['status'] } });
+  };
+
+  const onChangeProject = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    // Empty string = "no project" → send explicit null so the link
+    // gets cleared (omitting the field would leave it untouched).
+    const v = e.target.value;
+    updateLinks.mutate({ project_id: v === '' ? null : v });
+  };
+
+  const onChangeTeam = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value;
+    updateLinks.mutate({ team_id: v === '' ? null : v });
   };
 
   const onBlock = async (e: FormEvent) => {
@@ -165,6 +183,36 @@ function SidePanel({ task }: { task: Task }) {
             <span className="font-mono text-[11px] text-slate-500">
               {task.assignee_id ? `${task.assignee_id.slice(0, 8)}…` : 'Unassigned'}
             </span>
+          </Row>
+          <Row label="Project">
+            <select
+              value={task.project_id ?? ''}
+              onChange={onChangeProject}
+              disabled={updateLinks.isPending}
+              className="rounded border border-slate-300 px-2 py-1 text-xs"
+            >
+              <option value="">Backlog</option>
+              {(projects ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Team">
+            <select
+              value={task.team_id ?? ''}
+              onChange={onChangeTeam}
+              disabled={updateLinks.isPending}
+              className="rounded border border-slate-300 px-2 py-1 text-xs"
+            >
+              <option value="">No team</option>
+              {(teams ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
           </Row>
           {task.due_at ? (
             <Row label="Due">

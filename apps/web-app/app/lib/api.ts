@@ -26,6 +26,11 @@ export interface Task {
   public_id: string;
   description: string | null;
   assignee_id: string | null;
+  // Workspace -> Project -> Task -> Team links. Both nullable: a
+  // backlog task can live without a project, an unowned task without
+  // a team. Server SET-NULLs them when the parent is deleted.
+  project_id: string | null;
+  team_id: string | null;
   due_at: string | null;
   // Blocked is orthogonal to status. A task can be PENDING/IN_PROGRESS
   // and blocked at the same time. The Kanban renders blocked cards
@@ -99,7 +104,14 @@ export interface CreateTaskPayload {
   description?: string | null;
   priority?: number;
   assignee_id?: string | null;
+  project_id?: string | null;
+  team_id?: string | null;
   due_at?: string | null;
+}
+
+export interface UpdateTaskLinksPayload {
+  project_id?: string | null;
+  team_id?: string | null;
 }
 
 export interface LoginPayload {
@@ -229,10 +241,14 @@ export const tenantsApi = {
 };
 
 export const tasksApi = {
-  list: (opts: { status?: TaskStatus; blockedOnly?: boolean } = {}) => {
+  list: (
+    opts: { status?: TaskStatus; blockedOnly?: boolean; projectId?: string; teamId?: string } = {},
+  ) => {
     const params = new URLSearchParams();
     if (opts.status) params.set('status_filter', opts.status);
     if (opts.blockedOnly) params.set('blocked_only', 'true');
+    if (opts.projectId) params.set('project_id', opts.projectId);
+    if (opts.teamId) params.set('team_id', opts.teamId);
     const qs = params.toString();
     return request<Task[]>(`${V1}/tasks${qs ? `?${qs}` : ''}`);
   },
@@ -249,6 +265,11 @@ export const tasksApi = {
     }),
   setBlocked: (id: string, payload: SetBlockedPayload) =>
     request<Task>(`${V1}/tasks/${id}/block`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  updateLinks: (id: string, payload: UpdateTaskLinksPayload) =>
+    request<Task>(`${V1}/tasks/${id}/links`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -384,3 +405,99 @@ export interface TaskRating {
   feedback: string | null;
   created_at: string;
 }
+
+// ---------- Projects ----------
+
+export type ProjectStatus = 'ACTIVE' | 'ARCHIVED';
+
+export interface Project {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  status: ProjectStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProjectPayload {
+  name: string;
+  description?: string | null;
+}
+
+export interface UpdateProjectPayload {
+  name?: string;
+  description?: string | null;
+  status?: ProjectStatus;
+}
+
+export const projectsApi = {
+  list: (includeArchived = false) =>
+    request<Project[]>(`${V1}/projects${includeArchived ? '?include_archived=true' : ''}`),
+  get: (id: string) => request<Project>(`${V1}/projects/${id}`),
+  create: (payload: CreateProjectPayload) =>
+    request<Project>(`${V1}/projects`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateProjectPayload) =>
+    request<Project>(`${V1}/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: async (id: string): Promise<void> => {
+    const response = await fetch(`${API_BASE}${V1}/projects/${id}`, {
+      method: 'DELETE',
+      headers: { ...authHeader() },
+    });
+    if (!response.ok) {
+      const detail = await response
+        .json()
+        .then((b: { detail?: string }) => b.detail)
+        .catch(() => response.statusText);
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    }
+  },
+  listTasks: (id: string) => request<Task[]>(`${V1}/projects/${id}/tasks`),
+};
+
+// ---------- Teams ----------
+
+export interface TeamRecord {
+  id: string;
+  workspace_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTeamPayload {
+  name: string;
+}
+
+export const teamsApi = {
+  list: () => request<TeamRecord[]>(`${V1}/teams`),
+  create: (payload: CreateTeamPayload) =>
+    request<TeamRecord>(`${V1}/teams`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: CreateTeamPayload) =>
+    request<TeamRecord>(`${V1}/teams/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: async (id: string): Promise<void> => {
+    const response = await fetch(`${API_BASE}${V1}/teams/${id}`, {
+      method: 'DELETE',
+      headers: { ...authHeader() },
+    });
+    if (!response.ok) {
+      const detail = await response
+        .json()
+        .then((b: { detail?: string }) => b.detail)
+        .catch(() => response.statusText);
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    }
+  },
+};

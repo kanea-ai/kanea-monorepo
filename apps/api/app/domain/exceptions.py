@@ -70,6 +70,27 @@ class TaskAlreadyRatedError(DomainError):
     single-shot — re-rating is a separate UX we haven't designed yet."""
 
 
+class ProjectNotFoundError(DomainError):
+    """Raised when a project id doesn't resolve in the requester's
+    workspace. Returned as 404 — same shape as truly-missing so cross-
+    tenant probing reveals nothing."""
+
+
+class ProjectNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace name
+    uniqueness constraint."""
+
+
+class TeamNotFoundError(DomainError):
+    """Raised when a team id doesn't resolve in the requester's
+    workspace."""
+
+
+class TeamNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace team
+    name uniqueness constraint."""
+
+
 class TaskRelationSelfLinkError(DomainError):
     """Raised when a caller tries to relate a task to itself. Caught at
     the service boundary; the DB-level CHECK is the belt to the service's

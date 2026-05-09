@@ -4,18 +4,23 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 
 import {
   agentsApi,
+  projectsApi,
   tasksApi,
+  teamsApi,
   tenantsApi,
   type Agent,
   type AgentDetail,
   type CreateAgentPayload,
   type CreateAgentResponse,
   type CreateCommentPayload,
+  type CreateProjectPayload,
   type CreateRelationPayload,
   type CreateTaskPayload,
+  type CreateTeamPayload,
   type InviteCreatePayload,
   type InviteCreateResponse,
   type Member,
+  type Project,
   type RateTaskPayload,
   type SetBlockedPayload,
   type Task,
@@ -24,8 +29,11 @@ import {
   type TaskRating,
   type TaskRelations,
   type TaskStatus,
+  type TeamRecord,
   type UpdateAgentPayload,
+  type UpdateProjectPayload,
   type UpdateStatusPayload,
+  type UpdateTaskLinksPayload,
 } from './api';
 
 export const taskKeys = {
@@ -253,6 +261,108 @@ export function useUpdateTaskStatus() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+// ---------- Projects ----------
+
+export const projectKeys = {
+  all: ['projects'] as const satisfies QueryKey,
+  list: (includeArchived: boolean) => ['projects', { includeArchived }] as const satisfies QueryKey,
+  detail: (id: string) => ['projects', id] as const satisfies QueryKey,
+  tasks: (id: string) => ['projects', id, 'tasks'] as const satisfies QueryKey,
+};
+
+export function useProjects(includeArchived = false) {
+  return useQuery<Project[]>({
+    queryKey: projectKeys.list(includeArchived),
+    queryFn: () => projectsApi.list(includeArchived),
+  });
+}
+
+export function useProject(id: string) {
+  return useQuery<Project>({
+    queryKey: projectKeys.detail(id),
+    queryFn: () => projectsApi.get(id),
+  });
+}
+
+export function useProjectTasks(id: string) {
+  return useQuery<Task[]>({
+    queryKey: projectKeys.tasks(id),
+    queryFn: () => projectsApi.listTasks(id),
+  });
+}
+
+export function useCreateProject() {
+  const qc = useQueryClient();
+  return useMutation<Project, Error, CreateProjectPayload>({
+    mutationFn: (payload) => projectsApi.create(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.all });
+    },
+  });
+}
+
+export function useUpdateProject(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Project, Error, UpdateProjectPayload>({
+    mutationFn: (payload) => projectsApi.update(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.all });
+      qc.invalidateQueries({ queryKey: projectKeys.detail(id) });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => projectsApi.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.all });
+      // Tasks now have project_id=null — bust the task lists too.
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+// ---------- Teams ----------
+
+export const teamKeys = {
+  all: ['teams'] as const satisfies QueryKey,
+};
+
+export function useTeams() {
+  return useQuery<TeamRecord[]>({
+    queryKey: teamKeys.all,
+    queryFn: () => teamsApi.list(),
+  });
+}
+
+export function useCreateTeam() {
+  const qc = useQueryClient();
+  return useMutation<TeamRecord, Error, CreateTeamPayload>({
+    mutationFn: (payload) => teamsApi.create(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: teamKeys.all });
+    },
+  });
+}
+
+// ---------- Task project / team move ----------
+
+export function useUpdateTaskLinks(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, UpdateTaskLinksPayload>({
+    mutationFn: (payload) => tasksApi.updateLinks(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(id) });
+      // Also bust project-scoped task lists since the row may have
+      // moved between projects.
+      qc.invalidateQueries({ queryKey: projectKeys.all });
     },
   });
 }

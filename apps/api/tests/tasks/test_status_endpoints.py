@@ -64,6 +64,8 @@ def _task_response(
         public_id=public_id,
         description=None,
         assignee_id=None,
+        project_id=None,
+        team_id=None,
         due_at=None,
         is_blocked=is_blocked,
         blocked_reason=blocked_reason,
@@ -444,7 +446,7 @@ async def test_list_for_workspace_passes_blocked_only(
     assert len(result) == 1
     assert result[0].is_blocked is True
     task_repo.list_by_workspace.assert_awaited_once_with(
-        workspace_id, status=None, blocked_only=True
+        workspace_id, status=None, blocked_only=True, project_id=None, team_id=None
     )
 
 
@@ -462,5 +464,9 @@ async def test_list_for_workspace_passes_status_filter(
     assert len(result) == 1
     assert result[0].status is TaskStatus.IN_PROGRESS
     task_repo.list_by_workspace.assert_awaited_once_with(
-        workspace_id, status=TaskStatus.IN_PROGRESS, blocked_only=False
+        workspace_id,
+        status=TaskStatus.IN_PROGRESS,
+        blocked_only=False,
+        project_id=None,
+        team_id=None,
     )

@@ -8,6 +8,7 @@ from app.domain.enums import (
     MemberRole,
     MemberType,
     OAuthProvider,
+    ProjectStatus,
     TaskRelationType,
     TaskStatus,
 )
@@ -35,6 +36,22 @@ class Team:
     name: str
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(slots=True)
+class Project:
+    """Workspace-scoped goal. A Project groups Tasks toward a single
+    objective; tasks across the same Project can sit on different
+    Teams. Status flips between ACTIVE and ARCHIVED — archive hides
+    the project from default lists without deleting its tasks."""
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    status: ProjectStatus
+    description: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)
@@ -118,6 +135,12 @@ class Task:
     seq: int = 0
     description: str | None = None
     assignee_id: UUID | None = None
+    # Optional links into the Workspace -> Project -> Task -> Team
+    # hierarchy. Both nullable: a backlog task lives without a project,
+    # an unowned task can live without a team. SET NULL on cascade so
+    # deleting a project/team doesn't orphan the task itself.
+    project_id: UUID | None = None
+    team_id: UUID | None = None
     due_at: datetime | None = None
     # Blocked-flag is orthogonal to status. A task can be IN_PROGRESS
     # and blocked at the same time. blocked_reason is only meaningful

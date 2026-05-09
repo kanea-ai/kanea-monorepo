@@ -17,6 +17,8 @@ class TaskRepository(Protocol):
         *,
         status: TaskStatus | None = None,
         blocked_only: bool = False,
+        project_id: UUID | None = None,
+        team_id: UUID | None = None,
     ) -> list[Task]: ...
     async def update_status(
         self,
@@ -34,6 +36,15 @@ class TaskRepository(Protocol):
     ) -> Task: ...
     async def create(self, task: Task) -> Task: ...
     async def list_by_ids(self, task_ids: list[UUID]) -> list[Task]: ...
+    async def update_links(
+        self,
+        task_id: UUID,
+        *,
+        project_id: UUID | None,
+        team_id: UUID | None,
+        clear_project: bool = False,
+        clear_team: bool = False,
+    ) -> Task: ...
 
 
 @runtime_checkable

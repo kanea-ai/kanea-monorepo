@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from app.application.auth.ports import MemberRepository
+from app.application.projects.ports import ProjectRepository
 from app.application.tasks.ports import (
     TaskCommentRepository,
     TaskRatingRepository,
@@ -26,14 +27,17 @@ from app.application.tasks.schemas import (
     TaskRatingResponse,
     TaskRelationsResponse,
     TaskResponse,
+    UpdateTaskLinksRequest,
     UpdateTaskStatusRequest,
 )
+from app.application.teams.ports import TeamRepository
 from app.application.tenants.ports import WorkspaceReadRepository
 from app.domain.entities import Member, Task, TaskComment, TaskRating, TaskRelation
 from app.domain.enums import TaskRelationType, TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
+    ProjectNotFoundError,
     RatingForbiddenError,
     TaskAlreadyRatedError,
     TaskNotFoundError,
@@ -41,6 +45,7 @@ from app.domain.exceptions import (
     TaskRelationAlreadyExistsError,
     TaskRelationNotFoundError,
     TaskRelationSelfLinkError,
+    TeamNotFoundError,
 )
 
 # Allowed status transitions. Any transition not listed here is rejected.
@@ -66,6 +71,10 @@ class TaskService:
     ratings: TaskRatingRepository | None = None
     comments: TaskCommentRepository | None = None
     relations: TaskRelationRepository | None = None
+    # Project / team lookups happen at create + move time so we can
+    # 404 cross-tenant ids instead of letting the FK silently accept.
+    projects: ProjectRepository | None = None
+    team_lookup: TeamRepository | None = None
 
     async def delegate(
         self,
@@ -87,9 +96,15 @@ class TaskService:
         *,
         status: TaskStatus | None = None,
         blocked_only: bool = False,
+        project_id: UUID | None = None,
+        team_id: UUID | None = None,
     ) -> list[TaskResponse]:
         rows = await self.tasks.list_by_workspace(
-            requester.workspace_id, status=status, blocked_only=blocked_only
+            requester.workspace_id,
+            status=status,
+            blocked_only=blocked_only,
+            project_id=project_id,
+            team_id=team_id,
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return [TaskResponse.from_entity(row, prefix=prefix) for row in rows]
@@ -129,6 +144,8 @@ class TaskService:
             public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
+            project_id=task.project_id,
+            team_id=task.team_id,
             due_at=task.due_at,
             is_blocked=task.is_blocked,
             blocked_reason=task.blocked_reason,
@@ -143,6 +160,15 @@ class TaskService:
             assignee = await self.members.get_by_id(request.assignee_id)
             if assignee is None or assignee.workspace_id != requester.workspace_id:
                 raise TaskNotFoundError("assignee not found")
+
+        # Same-workspace check for project + team. We surface
+        # ProjectNotFoundError / TeamNotFoundError on cross-tenant ids
+        # rather than a generic TaskNotFoundError so the route can map
+        # them precisely (and the agent's error log reads sensibly).
+        if request.project_id is not None:
+            await self._require_workspace_project(request.project_id, requester)
+        if request.team_id is not None:
+            await self._require_workspace_team(request.team_id, requester)
 
         # Atomic seq + prefix in one round-trip — rules out race-driven
         # collisions on the (workspace_id, seq) unique index.
@@ -160,6 +186,8 @@ class TaskService:
                 seq=seq,
                 description=request.description,
                 assignee_id=request.assignee_id,
+                project_id=request.project_id,
+                team_id=request.team_id,
                 due_at=request.due_at,
                 is_blocked=False,
                 blocked_reason=None,
@@ -168,6 +196,49 @@ class TaskService:
             )
         )
         return TaskResponse.from_entity(created, prefix=prefix)
+
+    async def update_links(
+        self,
+        task_id: UUID,
+        request: UpdateTaskLinksRequest,
+        requester: Principal,
+    ) -> TaskResponse:
+        """Move a task between projects and/or teams. Setting either to
+        null explicitly clears it; omitting the field leaves it
+        untouched (Pydantic's `model_fields_set` disambiguates)."""
+        task = await self._load_task(task_id, requester)
+
+        clear_project = "project_id" in request.model_fields_set and request.project_id is None
+        clear_team = "team_id" in request.model_fields_set and request.team_id is None
+
+        if request.project_id is not None and not clear_project:
+            await self._require_workspace_project(request.project_id, requester)
+        if request.team_id is not None and not clear_team:
+            await self._require_workspace_team(request.team_id, requester)
+
+        updated = await self.tasks.update_links(
+            task.id,
+            project_id=request.project_id if not clear_project else None,
+            team_id=request.team_id if not clear_team else None,
+            clear_project=clear_project,
+            clear_team=clear_team,
+        )
+        prefix = await self._workspace_prefix(requester.workspace_id)
+        return TaskResponse.from_entity(updated, prefix=prefix)
+
+    async def _require_workspace_project(self, project_id: UUID, requester: Principal) -> None:
+        if self.projects is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("project repo not wired")
+        project = await self.projects.get_by_id(project_id)
+        if project is None or project.workspace_id != requester.workspace_id:
+            raise ProjectNotFoundError("project not found")
+
+    async def _require_workspace_team(self, team_id: UUID, requester: Principal) -> None:
+        if self.team_lookup is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("team repo not wired")
+        team = await self.team_lookup.get_by_id(team_id)
+        if team is None or team.workspace_id != requester.workspace_id:
+            raise TeamNotFoundError("team not found")
 
     async def update_status(
         self,

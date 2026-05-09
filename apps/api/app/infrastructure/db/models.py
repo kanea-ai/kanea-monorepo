@@ -23,6 +23,7 @@ from app.domain.enums import (
     MemberRole,
     MemberType,
     OAuthProvider,
+    ProjectStatus,
     TaskRelationType,
     TaskStatus,
 )
@@ -64,6 +65,14 @@ task_relation_type_enum = PgEnum(
     create_type=False,
 )
 
+project_status_enum = PgEnum(
+    ProjectStatus,
+    name="project_status",
+    values_callable=lambda enum: [member.value for member in enum],
+    # Created in migration 0010 alongside the table.
+    create_type=False,
+)
+
 
 class WorkspaceModel(TimestampMixin, Base):
     __tablename__ = "workspaces"
@@ -100,6 +109,26 @@ class TeamModel(TimestampMixin, Base):
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="teams")
     members: Mapped[list[MemberModel]] = relationship(back_populates="team")
+
+
+class ProjectModel(TimestampMixin, Base):
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "name", name="uq_projects_workspace_id_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[ProjectStatus] = mapped_column(
+        project_status_enum, nullable=False, default=ProjectStatus.ACTIVE
+    )
 
 
 class MemberModel(TimestampMixin, Base):
@@ -207,6 +236,18 @@ class TaskModel(TimestampMixin, Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Optional Workspace -> Project -> Task -> Team links. Both SET NULL
+    # on parent delete so the task survives a project/team removal.
+    project_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    team_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

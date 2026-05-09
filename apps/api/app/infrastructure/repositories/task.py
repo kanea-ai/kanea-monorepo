@@ -22,6 +22,8 @@ def _to_entity(row: TaskModel) -> Task:
         seq=row.seq,
         description=row.description,
         assignee_id=row.assignee_id,
+        project_id=row.project_id,
+        team_id=row.team_id,
         due_at=row.due_at,
         is_blocked=row.is_blocked,
         completed_at=row.completed_at,
@@ -64,12 +66,18 @@ class SqlAlchemyTaskRepository:
         *,
         status: TaskStatus | None = None,
         blocked_only: bool = False,
+        project_id: UUID | None = None,
+        team_id: UUID | None = None,
     ) -> list[Task]:
         stmt = select(TaskModel).where(TaskModel.workspace_id == workspace_id)
         if status is not None:
             stmt = stmt.where(TaskModel.status == status)
         if blocked_only:
             stmt = stmt.where(TaskModel.is_blocked.is_(True))
+        if project_id is not None:
+            stmt = stmt.where(TaskModel.project_id == project_id)
+        if team_id is not None:
+            stmt = stmt.where(TaskModel.team_id == team_id)
         stmt = stmt.order_by(TaskModel.priority, TaskModel.created_at)
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
@@ -132,12 +140,41 @@ class SqlAlchemyTaskRepository:
             is_blocked=task.is_blocked,
             description=task.description,
             assignee_id=task.assignee_id,
+            project_id=task.project_id,
+            team_id=task.team_id,
             due_at=task.due_at,
             blocked_reason=task.blocked_reason,
             tokens_used=task.tokens_used,
             completed_at=task.completed_at,
         )
         self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
+
+    async def update_links(
+        self,
+        task_id: UUID,
+        *,
+        project_id: UUID | None,
+        team_id: UUID | None,
+        clear_project: bool = False,
+        clear_team: bool = False,
+    ) -> Task:
+        """Set project_id / team_id. ``clear_*`` distinguishes "leave
+        alone" (column omitted) from "clear" (set to NULL). The service
+        layer translates the request into one or the other."""
+        row = await self._session.get(TaskModel, task_id)
+        if row is None:
+            raise TaskNotFoundError("task not found")
+        if clear_project:
+            row.project_id = None
+        elif project_id is not None:
+            row.project_id = project_id
+        if clear_team:
+            row.team_id = None
+        elif team_id is not None:
+            row.team_id = team_id
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)

@@ -24,6 +24,8 @@ from app.application.auth.ports import (
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
+from app.application.projects.ports import ProjectRepository
+from app.application.projects.service import ProjectService
 from app.application.tasks.ports import (
     TaskCommentRepository,
     TaskRatingRepository,
@@ -33,6 +35,8 @@ from app.application.tasks.ports import (
 )
 from app.application.tasks.schemas import Principal
 from app.application.tasks.service import TaskService
+from app.application.teams.ports import TeamRepository
+from app.application.teams.service import TeamService
 from app.application.tenants.ports import (
     InviteRepository,
     TenantMemberRepository,
@@ -45,10 +49,12 @@ from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
+from app.infrastructure.repositories.project import SqlAlchemyProjectRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
 from app.infrastructure.repositories.task_comment import SqlAlchemyTaskCommentRepository
 from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
 from app.infrastructure.repositories.task_relation import SqlAlchemyTaskRelationRepository
+from app.infrastructure.repositories.team import SqlAlchemyTeamRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
@@ -119,6 +125,14 @@ def get_task_repository(session: SessionDep) -> TaskRepository:
     return SqlAlchemyTaskRepository(session)
 
 
+def get_project_repository(session: SessionDep) -> ProjectRepository:
+    return SqlAlchemyProjectRepository(session)
+
+
+def get_team_repository(session: SessionDep) -> TeamRepository:
+    return SqlAlchemyTeamRepository(session)
+
+
 def get_task_rating_repository(session: SessionDep) -> TaskRatingRepository:
     return SqlAlchemyTaskRatingRepository(session)
 
@@ -147,6 +161,8 @@ def get_task_service(
     ratings: Annotated[TaskRatingRepository, Depends(get_task_rating_repository)],
     comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repository)],
     relations: Annotated[TaskRelationRepository, Depends(get_task_relation_repository)],
+    projects: Annotated[ProjectRepository, Depends(get_project_repository)],
+    team_lookup: Annotated[TeamRepository, Depends(get_team_repository)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -156,10 +172,30 @@ def get_task_service(
         ratings=ratings,
         comments=comments,
         relations=relations,
+        projects=projects,
+        team_lookup=team_lookup,
     )
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
+
+def get_project_service(
+    projects: Annotated[ProjectRepository, Depends(get_project_repository)],
+) -> ProjectService:
+    return ProjectService(projects=projects)
+
+
+ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+
+
+def get_team_service(
+    teams: Annotated[TeamRepository, Depends(get_team_repository)],
+) -> TeamService:
+    return TeamService(teams=teams)
+
+
+TeamServiceDep = Annotated[TeamService, Depends(get_team_service)]
 
 
 def get_invite_repository(session: SessionDep) -> InviteRepository:

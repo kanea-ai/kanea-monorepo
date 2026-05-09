@@ -24,6 +24,15 @@ class OAuthProvider(StrEnum):
     GITHUB = "GITHUB"
 
 
+class ProjectStatus(StrEnum):
+    """Lifecycle of a Project. ACTIVE projects are visible to the UI by
+    default; ARCHIVED projects stay queryable but are hidden from
+    pickers and list views unless explicitly requested."""
+
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
 class TaskRelationType(StrEnum):
     """Directed relations between two tasks. The inverse views
     (blocked_by, mitigated_by, duplicated_by) are not stored — they're

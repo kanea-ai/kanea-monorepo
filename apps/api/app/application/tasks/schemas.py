@@ -90,7 +90,19 @@ class CreateTaskRequest(BaseModel):
     description: str | None = Field(default=None, max_length=20_000)
     priority: int = Field(default=0, ge=0, le=1000)
     assignee_id: UUID | None = None
+    project_id: UUID | None = None
+    team_id: UUID | None = None
     due_at: datetime | None = None
+
+
+class UpdateTaskLinksRequest(BaseModel):
+    """Move a task between projects / teams. Setting either to null
+    explicitly clears it; omitting the field leaves it untouched."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: UUID | None = None
+    team_id: UUID | None = None
 
 
 class TaskResponse(BaseModel):
@@ -109,6 +121,8 @@ class TaskResponse(BaseModel):
     public_id: str
     description: str | None
     assignee_id: UUID | None
+    project_id: UUID | None
+    team_id: UUID | None
     due_at: datetime | None
     is_blocked: bool
     blocked_reason: str | None
@@ -128,6 +142,8 @@ class TaskResponse(BaseModel):
             public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
+            project_id=task.project_id,
+            team_id=task.team_id,
             due_at=task.due_at,
             is_blocked=task.is_blocked,
             blocked_reason=task.blocked_reason,
@@ -190,6 +206,8 @@ class TaskDetailResponse(BaseModel):
     description: str | None
     assignee_id: UUID | None
     due_at: datetime | None
+    project_id: UUID | None
+    team_id: UUID | None
     is_blocked: bool
     blocked_reason: str | None
     created_at: datetime

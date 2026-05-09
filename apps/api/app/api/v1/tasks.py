@@ -17,12 +17,14 @@ from app.application.tasks.schemas import (
     TaskRatingResponse,
     TaskRelationsResponse,
     TaskResponse,
+    UpdateTaskLinksRequest,
     UpdateTaskStatusRequest,
 )
 from app.domain.enums import TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
+    ProjectNotFoundError,
     RatingForbiddenError,
     TaskAlreadyRatedError,
     TaskNotFoundError,
@@ -30,6 +32,7 @@ from app.domain.exceptions import (
     TaskRelationAlreadyExistsError,
     TaskRelationNotFoundError,
     TaskRelationSelfLinkError,
+    TeamNotFoundError,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -45,12 +48,18 @@ async def list_tasks(
     service: TaskServiceDep,
     status_filter: TaskStatus | None = None,
     blocked_only: bool = False,
+    project_id: UUID | None = None,
+    team_id: UUID | None = None,
 ) -> list[TaskResponse]:
-    """List tasks in the requester's workspace, optionally filtered by
-    status. The Exception Queue calls this with ``?blocked_only=true``;
-    the kanban with no filter."""
+    """List tasks in the requester's workspace, optionally filtered.
+    The Exception Queue calls this with ``?blocked_only=true``; the
+    project board with ``?project_id=...``; the kanban with no filter."""
     return await service.list_for_workspace(
-        principal, status=status_filter, blocked_only=blocked_only
+        principal,
+        status=status_filter,
+        blocked_only=blocked_only,
+        project_id=project_id,
+        team_id=team_id,
     )
 
 
@@ -71,9 +80,11 @@ async def create_task(
         return await service.create(payload, principal)
     except TaskNotFoundError as exc:
         # The only way create surfaces TaskNotFoundError is if the
-        # requested assignee_id doesn't exist in the workspace. Return
-        # 422 since that's a payload validation issue from the client's
-        # perspective, not a missing-task condition.
+        # requested assignee_id doesn't exist in the workspace.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except (ProjectNotFoundError, TeamNotFoundError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
@@ -134,6 +145,29 @@ async def update_task_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InvalidStatusTransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/{task_id}/links",
+    response_model=TaskResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_task_links(
+    task_id: UUID,
+    payload: UpdateTaskLinksRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    """Move the task between projects / teams. Setting either to null
+    clears it; omitting the field leaves it untouched."""
+    try:
+        return await service.update_links(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (ProjectNotFoundError, TeamNotFoundError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
 
 @router.patch(

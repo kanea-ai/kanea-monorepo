@@ -51,6 +51,8 @@ def _task_response(
         public_id="TASK-001",
         description=None,
         assignee_id=assignee_id,
+        project_id=None,
+        team_id=None,
         due_at=None,
         is_blocked=is_blocked,
         blocked_reason=blocked_reason,

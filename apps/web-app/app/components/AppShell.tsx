@@ -27,6 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const items: NavItem[] = [
     { href: '/', label: 'Dashboard' },
     { href: '/board', label: 'Board' },
+    { href: '/projects', label: 'Projects' },
     { href: '/blocked', label: 'Blocked', badge: blocked?.length },
     { href: '/team', label: 'Team' },
     { href: '/agents', label: 'Agents' },
