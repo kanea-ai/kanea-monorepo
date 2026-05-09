@@ -3,8 +3,15 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import Task, TaskActivity, TaskComment, TaskRating, TaskRelation
-from app.domain.enums import TaskRelationType, TaskStatus
+from app.domain.entities import (
+    Task,
+    TaskActivity,
+    TaskComment,
+    TaskRating,
+    TaskRelation,
+    TaskRequest,
+)
+from app.domain.enums import RequestStatus, TaskRelationType, TaskStatus
 
 
 @runtime_checkable
@@ -74,6 +81,35 @@ class TaskActivityRepository(Protocol):
     async def list_for_task(self, task_id: UUID) -> list[TaskActivity]: ...
     async def list_for_project(self, project_id: UUID) -> list[TaskActivity]: ...
     async def create(self, activity: TaskActivity) -> TaskActivity: ...
+
+
+@runtime_checkable
+class TaskRequestRepository(Protocol):
+    async def get_by_id(self, request_id: UUID) -> TaskRequest | None: ...
+    async def list_for_task(self, task_id: UUID) -> list[TaskRequest]: ...
+    async def list_for_source_team(
+        self,
+        team_id: UUID,
+        *,
+        status: RequestStatus | None = None,
+    ) -> list[TaskRequest]: ...
+    async def create(self, request: TaskRequest) -> TaskRequest: ...
+    async def mark_fulfilled(
+        self,
+        request_id: UUID,
+        *,
+        fulfilled_task_id: UUID,
+        resolver_member_id: UUID,
+        resolved_at,
+    ) -> TaskRequest: ...
+    async def mark_rejected(
+        self,
+        request_id: UUID,
+        *,
+        reason: str | None,
+        resolver_member_id: UUID,
+        resolved_at,
+    ) -> TaskRequest: ...
 
 
 @runtime_checkable

@@ -9,6 +9,7 @@ from app.domain.enums import (
     MemberType,
     OAuthProvider,
     ProjectStatus,
+    RequestStatus,
     TaskActivityType,
     TaskRelationType,
     TaskStatus,
@@ -159,6 +160,32 @@ class Task:
     tokens_used: int = 0
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskRequest:
+    """A cross-team work request anchored to a source task. The
+    source task's team leadership (MANAGER / LEAD / HEAD) decides
+    whether to fulfill (mint a target task on requested_team_id and
+    link it via BLOCKS) or reject.
+
+    fulfilled_task_id holds the new task id once fulfilled; null
+    otherwise. resolver_member_id captures who acted on the request."""
+
+    id: UUID
+    source_task_id: UUID
+    requested_team_id: UUID | None
+    requester_member_id: UUID | None
+    suggested_title: str
+    suggested_description: str | None
+    justification: str | None
+    status: RequestStatus
+    fulfilled_task_id: UUID | None = None
+    reject_reason: str | None = None
+    resolver_member_id: UUID | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+    resolved_at: datetime | None = None
 
 
 @dataclass(slots=True)

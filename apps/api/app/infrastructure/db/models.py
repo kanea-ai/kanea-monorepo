@@ -338,6 +338,51 @@ class TaskCommentModel(TimestampMixin, Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class TaskRequestModel(TimestampMixin, Base):
+    __tablename__ = "task_requests"
+    __table_args__ = (
+        Index("ix_task_requests_source_task_id", "source_task_id"),
+        Index(
+            "ix_task_requests_requested_team_id_status",
+            "requested_team_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_task_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_team_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    requester_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    suggested_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    suggested_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    justification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    fulfilled_task_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolver_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TaskRelationModel(TimestampMixin, Base):
     __tablename__ = "task_relations"
     __table_args__ = (

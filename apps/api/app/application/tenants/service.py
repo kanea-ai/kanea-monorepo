@@ -197,7 +197,16 @@ class InviteService:
             raise InviteNotFoundError("invite not found")
         if invite.accepted_at is not None:
             raise InviteAlreadyAcceptedError("invite already accepted")
-        if invite.expires_at <= datetime.utcnow():
+        # invite.expires_at comes back as timezone-aware from Postgres
+        # (TIMESTAMPTZ). Use a tz-aware "now" so we don't trip Python's
+        # naive-vs-aware comparison error.
+        from datetime import UTC
+
+        now = datetime.now(UTC)
+        expires_at = invite.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= now:
             raise InviteExpiredError("invite has expired")
         return invite
 

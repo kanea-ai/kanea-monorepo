@@ -12,6 +12,7 @@ from app.application.tasks.ports import (
     TaskRatingRepository,
     TaskRelationRepository,
     TaskRepository,
+    TaskRequestRepository,
     WorkspaceTaskSeqRepository,
 )
 from app.application.tasks.schemas import (
@@ -19,15 +20,19 @@ from app.application.tasks.schemas import (
     CommentResponse,
     CreateCommentRequest,
     CreateRelationRequest,
+    CreateRequestPayload,
     CreateTaskRequest,
     DelegateTaskRequest,
+    FulfillRequestPayload,
     Principal,
     RateTaskRequest,
+    RejectRequestPayload,
     RelationItem,
     SetBlockedRequest,
     TaskDetailResponse,
     TaskRatingResponse,
     TaskRelationsResponse,
+    TaskRequestResponse,
     TaskResponse,
     UpdateTaskLinksRequest,
     UpdateTaskStatusRequest,
@@ -41,9 +46,18 @@ from app.domain.entities import (
     TaskComment,
     TaskRating,
     TaskRelation,
+    TaskRequest,
 )
-from app.domain.enums import MemberRole, TaskActivityType, TaskRelationType, TaskStatus
+from app.domain.enums import (
+    MemberRole,
+    RequestStatus,
+    TaskActivityType,
+    TaskRelationType,
+    TaskStatus,
+    TeamRole,
+)
 from app.domain.exceptions import (
+    CrossTeamForbiddenError,
     DelegationForbiddenError,
     InvalidStatusTransitionError,
     ProjectNotFoundError,
@@ -54,6 +68,9 @@ from app.domain.exceptions import (
     TaskRelationAlreadyExistsError,
     TaskRelationNotFoundError,
     TaskRelationSelfLinkError,
+    TaskRequestAlreadyResolvedError,
+    TaskRequestForbiddenError,
+    TaskRequestNotFoundError,
     TeamNotFoundError,
 )
 
@@ -100,6 +117,9 @@ class TaskService:
     # all mutation paths no-op the recording if this isn't wired so
     # legacy DI / unit tests stay green.
     activities: TaskActivityRepository | None = None
+    # Cross-team request workflow (section 3). Optional so legacy DI
+    # paths that don't exercise the request endpoints stay valid.
+    requests: TaskRequestRepository | None = None
 
     async def delegate(
         self,
@@ -212,6 +232,7 @@ class TaskService:
             await self._require_workspace_project(request.project_id, requester)
         if request.team_id is not None:
             await self._require_workspace_team(request.team_id, requester)
+            await self._enforce_cross_team_rule(requester, request.team_id)
 
         # Atomic seq + prefix in one round-trip — rules out race-driven
         # collisions on the (workspace_id, seq) unique index.
@@ -264,6 +285,9 @@ class TaskService:
             await self._require_workspace_project(request.project_id, requester)
         if request.team_id is not None and not clear_team:
             await self._require_workspace_team(request.team_id, requester)
+            # Section 3: moving a task into another team needs the
+            # same RBAC as creating one there.
+            await self._enforce_cross_team_rule(requester, request.team_id)
 
         updated = await self.tasks.update_links(
             task.id,
@@ -343,6 +367,290 @@ class TaskService:
             event_type=row.event_type,
             payload=row.payload,
             created_at=row.created_at,
+        )
+
+    # ---------- cross-team requests (section 3) ----------
+
+    async def create_request(
+        self,
+        task_id: UUID,
+        request: CreateRequestPayload,
+        requester: Principal,
+    ) -> TaskRequestResponse:
+        """File a cross-team request anchored to a source task.
+
+        RBAC: workspace admin OR the requester must own the source
+        task (creator/assignee). The leadership of the source task's
+        team will fulfill or reject."""
+        if self.requests is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("requests repo not wired")
+
+        task = await self._load_task(task_id, requester)
+        await self._require_workspace_team(request.requested_team_id, requester)
+
+        is_admin = requester.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        if not is_admin and requester.member_id not in (
+            task.assignee_id,
+            task.created_by_id,
+        ):
+            raise TaskRequestForbiddenError(
+                "only the task assignee or creator may file a cross-team request"
+            )
+
+        created = await self.requests.create(
+            TaskRequest(
+                id=uuid4(),
+                source_task_id=task.id,
+                requested_team_id=request.requested_team_id,
+                requester_member_id=requester.member_id,
+                suggested_title=request.suggested_title,
+                suggested_description=request.suggested_description,
+                justification=request.justification,
+                status=RequestStatus.PENDING,
+            )
+        )
+        return await self._request_to_response(created)
+
+    async def list_requests_for_task(
+        self, task_id: UUID, requester: Principal
+    ) -> list[TaskRequestResponse]:
+        if self.requests is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("requests repo not wired")
+        await self._load_task(task_id, requester)
+        rows = await self.requests.list_for_task(task_id)
+        return [await self._request_to_response(r) for r in rows]
+
+    async def list_requests_for_team_inbox(
+        self,
+        team_id: UUID,
+        requester: Principal,
+        *,
+        status_filter: RequestStatus | None = None,
+    ) -> list[TaskRequestResponse]:
+        """Leadership inbox: requests filed against tasks living on
+        this team. Anyone in the workspace can read."""
+        if self.requests is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("requests repo not wired")
+        await self._require_workspace_team(team_id, requester)
+        rows = await self.requests.list_for_source_team(team_id, status=status_filter)
+        return [await self._request_to_response(r) for r in rows]
+
+    async def fulfill_request(
+        self,
+        request_id: UUID,
+        payload: FulfillRequestPayload,
+        requester: Principal,
+    ) -> TaskRequestResponse:
+        """A MANAGER / LEAD on the source task's team mints the
+        target task on requested_team_id and links the source via
+        BLOCKS. The request flips to FULFILLED."""
+        if self.requests is None or self.relations is None:  # pragma: no cover
+            raise RuntimeError("requests / relations repo not wired")
+
+        request_row = await self._load_workspace_request(request_id, requester)
+        if request_row.status is not RequestStatus.PENDING:
+            raise TaskRequestAlreadyResolvedError("request has already been resolved")
+        if request_row.requested_team_id is None:
+            raise TaskRequestForbiddenError(
+                "the requested team has been deleted; reject this request"
+            )
+
+        source = await self.tasks.get_by_id(request_row.source_task_id)
+        if source is None:  # pragma: no cover - FK guarantees this
+            raise TaskNotFoundError("source task not found")
+
+        await self._require_team_leadership_for_source(requester, source)
+
+        # Mint the target task. Re-uses the standard create flow so
+        # seq + activity recording happens. We bypass the cross-team
+        # rule by routing through the repo directly with admin-equiv
+        # validation (the leadership has already been verified).
+        seq, prefix = await self.seq_allocator.allocate_next_task_seq(requester.workspace_id)
+
+        title = payload.title or request_row.suggested_title
+        description = (
+            payload.description
+            if payload.description is not None
+            else request_row.suggested_description
+        )
+
+        if payload.assignee_id is not None:
+            assignee = await self.members.get_by_id(payload.assignee_id)
+            if assignee is None or assignee.workspace_id != requester.workspace_id:
+                raise TaskNotFoundError("assignee not found")
+
+        now = datetime.utcnow()
+        target = await self.tasks.create(
+            Task(
+                id=uuid4(),
+                workspace_id=requester.workspace_id,
+                created_by_id=requester.member_id,
+                title=title,
+                status=TaskStatus.PENDING,
+                priority=payload.priority,
+                seq=seq,
+                description=description,
+                assignee_id=payload.assignee_id,
+                project_id=source.project_id,  # inherit project from source
+                team_id=request_row.requested_team_id,
+                due_at=None,
+                is_blocked=False,
+                blocked_reason=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await self._record(
+            task_id=target.id,
+            actor=requester,
+            event_type=TaskActivityType.CREATED,
+            payload={
+                "title": target.title,
+                "via_request_id": str(request_row.id),
+            },
+        )
+
+        # Link: target task BLOCKS source task. From the source's
+        # perspective, source.blocked_by includes this new target.
+        await self.relations.create(
+            TaskRelation(
+                id=uuid4(),
+                source_task_id=target.id,
+                target_task_id=source.id,
+                relation_type=TaskRelationType.BLOCKS,
+            )
+        )
+        # And the source picks up an audit-log row noting the block.
+        await self._record(
+            task_id=source.id,
+            actor=requester,
+            event_type=TaskActivityType.BLOCKED,
+            payload={
+                "via_request_id": str(request_row.id),
+                "blocked_by_task_id": str(target.id),
+            },
+        )
+
+        updated = await self.requests.mark_fulfilled(
+            request_row.id,
+            fulfilled_task_id=target.id,
+            resolver_member_id=requester.member_id,
+            resolved_at=now,
+        )
+        return await self._request_to_response(updated)
+
+    async def reject_request(
+        self,
+        request_id: UUID,
+        payload: RejectRequestPayload,
+        requester: Principal,
+    ) -> TaskRequestResponse:
+        if self.requests is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("requests repo not wired")
+
+        request_row = await self._load_workspace_request(request_id, requester)
+        if request_row.status is not RequestStatus.PENDING:
+            raise TaskRequestAlreadyResolvedError("request has already been resolved")
+
+        source = await self.tasks.get_by_id(request_row.source_task_id)
+        if source is None:  # pragma: no cover
+            raise TaskNotFoundError("source task not found")
+        await self._require_team_leadership_for_source(requester, source)
+
+        now = datetime.utcnow()
+        updated = await self.requests.mark_rejected(
+            request_row.id,
+            reason=payload.reason,
+            resolver_member_id=requester.member_id,
+            resolved_at=now,
+        )
+        return await self._request_to_response(updated)
+
+    async def _load_workspace_request(self, request_id: UUID, requester: Principal) -> TaskRequest:
+        if self.requests is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("requests repo not wired")
+        request = await self.requests.get_by_id(request_id)
+        if request is None:
+            raise TaskRequestNotFoundError("request not found")
+        # Tenant isolation: load the source task and 404 if it isn't
+        # in the requester's workspace.
+        source = await self.tasks.get_by_id(request.source_task_id)
+        if source is None or source.workspace_id != requester.workspace_id:
+            raise TaskRequestNotFoundError("request not found")
+        return request
+
+    async def _require_team_leadership_for_source(self, requester: Principal, source: Task) -> None:
+        """Fulfill / reject permission: workspace admin OR a HEAD /
+        MANAGER / LEAD on the source task's team."""
+        if requester.role in (MemberRole.OWNER, MemberRole.ADMIN):
+            return
+        me = await self.members.get_by_id(requester.member_id)
+        if me is None:  # pragma: no cover
+            raise TaskRequestForbiddenError("requester not found")
+        if (
+            source.team_id is not None
+            and me.team_id == source.team_id
+            and me.team_role in (TeamRole.HEAD, TeamRole.MANAGER, TeamRole.LEAD)
+        ):
+            return
+        raise TaskRequestForbiddenError(
+            "only the source team's leadership (HEAD / MANAGER / LEAD) "
+            "or a workspace admin can resolve this request"
+        )
+
+    async def _request_to_response(self, row: TaskRequest) -> TaskRequestResponse:
+        requester_name: str | None = None
+        resolver_name: str | None = None
+        if row.requester_member_id is not None:
+            r = await self.members.get_by_id(row.requester_member_id)
+            requester_name = r.name if r is not None else None
+        if row.resolver_member_id is not None:
+            r = await self.members.get_by_id(row.resolver_member_id)
+            resolver_name = r.name if r is not None else None
+        return TaskRequestResponse(
+            id=row.id,
+            source_task_id=row.source_task_id,
+            requested_team_id=row.requested_team_id,
+            requester_member_id=row.requester_member_id,
+            requester_name=requester_name,
+            suggested_title=row.suggested_title,
+            suggested_description=row.suggested_description,
+            justification=row.justification,
+            status=row.status,
+            fulfilled_task_id=row.fulfilled_task_id,
+            reject_reason=row.reject_reason,
+            resolver_member_id=row.resolver_member_id,
+            resolver_name=resolver_name,
+            created_at=row.created_at,
+            resolved_at=row.resolved_at,
+        )
+
+    async def _enforce_cross_team_rule(self, requester: Principal, target_team_id: UUID) -> None:
+        """Section 3: standard MEMBERs can't create tasks on a team
+        they don't belong to. Workspace OWNER / ADMIN bypass; team
+        leadership (HEAD / MANAGER / LEAD) bypass — they're the
+        escalation path for the cross-team request workflow."""
+        # Workspace admins always get through.
+        if requester.role in (MemberRole.OWNER, MemberRole.ADMIN):
+            return
+
+        me = await self.members.get_by_id(requester.member_id)
+        if me is None:
+            # Defensive — JWT principal that doesn't resolve to a member
+            # is a tenant-isolation issue we should never see.
+            raise CrossTeamForbiddenError("requester not found in workspace")
+
+        # Same-team writes are fine.
+        if me.team_id == target_team_id:
+            return
+
+        # Leadership ranks can route work across teams.
+        if me.team_role in (TeamRole.HEAD, TeamRole.MANAGER, TeamRole.LEAD):
+            return
+
+        raise CrossTeamForbiddenError(
+            "MEMBERs can only create tasks on their own team — "
+            "use the cross-team request flow to ask another team for help"
         )
 
     async def _require_workspace_project(self, project_id: UUID, requester: Principal) -> None:

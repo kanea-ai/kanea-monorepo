@@ -73,6 +73,44 @@ export interface CreateCommentPayload {
   body: string;
 }
 
+export type RequestStatus = 'PENDING' | 'FULFILLED' | 'REJECTED';
+
+export interface TaskRequest {
+  id: string;
+  source_task_id: string;
+  requested_team_id: string | null;
+  requester_member_id: string | null;
+  requester_name: string | null;
+  suggested_title: string;
+  suggested_description: string | null;
+  justification: string | null;
+  status: RequestStatus;
+  fulfilled_task_id: string | null;
+  reject_reason: string | null;
+  resolver_member_id: string | null;
+  resolver_name: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface CreateRequestPayload {
+  requested_team_id: string;
+  suggested_title: string;
+  suggested_description?: string | null;
+  justification?: string | null;
+}
+
+export interface FulfillRequestPayload {
+  title?: string | null;
+  description?: string | null;
+  priority?: number;
+  assignee_id?: string | null;
+}
+
+export interface RejectRequestPayload {
+  reason?: string | null;
+}
+
 export type TaskActivityType =
   | 'CREATED'
   | 'STATUS_CHANGED'
@@ -318,6 +356,12 @@ export const tasksApi = {
       body: JSON.stringify(payload),
     }),
   listActivity: (id: string) => request<TaskActivity[]>(`${V1}/tasks/${id}/activity`),
+  listRequests: (id: string) => request<TaskRequest[]>(`${V1}/tasks/${id}/requests`),
+  createRequest: (id: string, payload: CreateRequestPayload) =>
+    request<TaskRequest>(`${V1}/tasks/${id}/requests`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   listComments: (id: string) => request<TaskComment[]>(`${V1}/tasks/${id}/comments`),
   postComment: (id: string, payload: CreateCommentPayload) =>
     request<TaskComment>(`${V1}/tasks/${id}/comments`, {
@@ -551,6 +595,23 @@ export interface TeamRecord {
 export interface CreateTeamPayload {
   name: string;
 }
+
+export const requestsApi = {
+  listInbox: (teamId: string, status?: RequestStatus) => {
+    const qs = status ? `?status_filter=${status}` : '';
+    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs}`);
+  },
+  fulfill: (requestId: string, payload: FulfillRequestPayload) =>
+    request<TaskRequest>(`${V1}/requests/${requestId}/fulfill`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  reject: (requestId: string, payload: RejectRequestPayload) =>
+    request<TaskRequest>(`${V1}/requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
 
 export const teamsApi = {
   list: () => request<TeamRecord[]>(`${V1}/teams`),

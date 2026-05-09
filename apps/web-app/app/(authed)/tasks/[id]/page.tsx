@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
 import { ActivityTimeline } from '../../../components/ActivityTimeline';
+import { CrossTeamRequestsPanel } from '../../../components/CrossTeamRequestsPanel';
 import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
 import {
@@ -74,6 +75,8 @@ export default function TaskDetailPage() {
           </section>
 
           <TaskRelationsPanel taskId={id} />
+
+          <CrossTeamRequestsPanel taskId={id} />
 
           <ActivityPanel taskId={id} />
 

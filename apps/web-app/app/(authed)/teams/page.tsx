@@ -7,6 +7,7 @@ import {
   type InviteCreateResponse,
   type Member,
   type MemberRole,
+  type TaskRequest,
   type TeamRecord,
   type TeamRole,
 } from '../../lib/api';
@@ -14,8 +15,11 @@ import { useCurrentPrincipal } from '../../lib/auth';
 import {
   useCreateInvite,
   useCreateTeam,
+  useFulfillRequest,
   useMembers,
+  useRejectRequest,
   useSetMemberTeam,
+  useTeamInboxRequests,
   useTeams,
 } from '../../lib/queries';
 
@@ -204,6 +208,183 @@ function TeamCard({
             </li>
           ))}
         </ul>
+      )}
+
+      <TeamInbox teamId={team.id} />
+    </li>
+  );
+}
+
+function TeamInbox({ teamId }: { teamId: string }) {
+  // Pending cross-team requests anchored to a task on *this* team.
+  // Surfaces what the team's leadership needs to act on. Visible to
+  // every workspace member; the actions are gated server-side.
+  const { data: requests, isLoading } = useTeamInboxRequests(teamId, 'PENDING');
+  const count = requests?.length ?? 0;
+
+  return (
+    <details className="border-t border-slate-100 [&_summary::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-1.5 text-xs hover:bg-slate-50">
+        <span className="font-medium text-slate-700">Pending requests</span>
+        <span
+          className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+            count > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'
+          }`}
+        >
+          {count}
+        </span>
+      </summary>
+      <div className="space-y-1.5 px-3 py-2">
+        {isLoading ? (
+          <p className="text-[11px] text-slate-500">Loading…</p>
+        ) : count === 0 ? (
+          <p className="text-[11px] italic text-slate-400">Nothing waiting.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {requests!.map((r) => (
+              <InboxRequestRow key={r.id} request={r} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function InboxRequestRow({ request }: { request: TaskRequest }) {
+  const fulfill = useFulfillRequest(request.id);
+  const reject = useRejectRequest(request.id);
+  const [open, setOpen] = useState<'fulfill' | 'reject' | null>(null);
+  const [title, setTitle] = useState(request.suggested_title);
+  const [description, setDescription] = useState(request.suggested_description ?? '');
+  const [priority, setPriority] = useState(0);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const onFulfill = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await fulfill.mutateAsync({
+        title: title.trim() || null,
+        description: description.trim() || null,
+        priority,
+      });
+      setOpen(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to fulfill');
+    }
+  };
+
+  const onReject = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await reject.mutateAsync({ reason: reason.trim() || null });
+      setOpen(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to reject');
+    }
+  };
+
+  return (
+    <li className="rounded-md border border-amber-200 bg-amber-50/40 p-2 text-[11px]">
+      <p className="font-medium text-slate-800">{request.suggested_title}</p>
+      <p className="mt-0.5 text-[10px] text-slate-500">
+        from {request.requester_name ?? 'unknown'} · {new Date(request.created_at).toLocaleString()}
+      </p>
+      {request.justification ? (
+        <p className="mt-1 whitespace-pre-wrap text-slate-700">{request.justification}</p>
+      ) : null}
+
+      {open === 'fulfill' ? (
+        <form onSubmit={onFulfill} className="mt-2 space-y-1">
+          <input
+            type="text"
+            value={title}
+            maxLength={200}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Final title for the new task"
+            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
+          />
+          <textarea
+            rows={2}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Description"
+            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
+          />
+          <input
+            type="number"
+            value={priority}
+            min={0}
+            max={1000}
+            onChange={(e) => setPriority(Number(e.target.value))}
+            placeholder="Priority"
+            className="w-24 rounded border border-slate-300 px-2 py-1 text-[11px]"
+          />
+          {error ? <p className="text-red-600">{error}</p> : null}
+          <div className="flex justify-end gap-1">
+            <button
+              type="button"
+              onClick={() => setOpen(null)}
+              className="rounded border border-slate-200 px-2 py-0.5 text-[10px] text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={fulfill.isPending}
+              className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {fulfill.isPending ? 'Fulfilling…' : 'Mint task & link'}
+            </button>
+          </div>
+        </form>
+      ) : open === 'reject' ? (
+        <form onSubmit={onReject} className="mt-2 space-y-1">
+          <textarea
+            rows={2}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Optional reason"
+            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
+          />
+          {error ? <p className="text-red-600">{error}</p> : null}
+          <div className="flex justify-end gap-1">
+            <button
+              type="button"
+              onClick={() => setOpen(null)}
+              className="rounded border border-slate-200 px-2 py-0.5 text-[10px] text-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={reject.isPending}
+              className="rounded bg-red-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {reject.isPending ? 'Rejecting…' : 'Reject'}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="mt-1 flex gap-1">
+          <button
+            type="button"
+            onClick={() => setOpen('fulfill')}
+            className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700"
+          >
+            Fulfill
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen('reject')}
+            className="rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] font-medium text-red-700 hover:bg-red-50"
+          >
+            Reject
+          </button>
+        </div>
       )}
     </li>
   );

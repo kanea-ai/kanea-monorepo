@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import {
   agentsApi,
   projectsApi,
+  requestsApi,
   tasksApi,
   teamsApi,
   tenantsApi,
@@ -15,8 +16,13 @@ import {
   type CreateCommentPayload,
   type CreateProjectPayload,
   type CreateRelationPayload,
+  type CreateRequestPayload,
   type CreateTaskPayload,
   type CreateTeamPayload,
+  type FulfillRequestPayload,
+  type RejectRequestPayload,
+  type RequestStatus,
+  type TaskRequest,
   type InviteCreatePayload,
   type InviteCreateResponse,
   type Member,
@@ -378,6 +384,65 @@ export function useTeams() {
   return useQuery<TeamRecord[]>({
     queryKey: teamKeys.all,
     queryFn: () => teamsApi.list(),
+  });
+}
+
+// ---------- Cross-team requests ----------
+
+export const requestKeys = {
+  all: ['requests'] as const satisfies QueryKey,
+  forTask: (id: string) => ['requests', 'task', id] as const satisfies QueryKey,
+  inbox: (teamId: string, status?: RequestStatus) =>
+    ['requests', 'team', teamId, status ?? 'ALL'] as const satisfies QueryKey,
+};
+
+export function useTaskRequests(taskId: string) {
+  return useQuery<TaskRequest[]>({
+    queryKey: requestKeys.forTask(taskId),
+    queryFn: () => tasksApi.listRequests(taskId),
+  });
+}
+
+export function useTeamInboxRequests(teamId: string, status: RequestStatus = 'PENDING') {
+  return useQuery<TaskRequest[]>({
+    queryKey: requestKeys.inbox(teamId, status),
+    queryFn: () => requestsApi.listInbox(teamId, status),
+    enabled: !!teamId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useCreateTaskRequest(taskId: string) {
+  const qc = useQueryClient();
+  return useMutation<TaskRequest, Error, CreateRequestPayload>({
+    mutationFn: (payload) => tasksApi.createRequest(taskId, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: requestKeys.forTask(taskId) });
+      qc.invalidateQueries({ queryKey: requestKeys.all });
+    },
+  });
+}
+
+export function useFulfillRequest(requestId: string) {
+  const qc = useQueryClient();
+  return useMutation<TaskRequest, Error, FulfillRequestPayload>({
+    mutationFn: (payload) => requestsApi.fulfill(requestId, payload),
+    onSuccess: () => {
+      // Fulfill creates a brand new task + a BLOCKS relation, so the
+      // task list, relations cache, and request inbox all get a refresh.
+      qc.invalidateQueries({ queryKey: requestKeys.all });
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+export function useRejectRequest(requestId: string) {
+  const qc = useQueryClient();
+  return useMutation<TaskRequest, Error, RejectRequestPayload>({
+    mutationFn: (payload) => requestsApi.reject(requestId, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: requestKeys.all });
+    },
   });
 }
 

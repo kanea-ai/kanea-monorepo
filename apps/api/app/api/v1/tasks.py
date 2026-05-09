@@ -10,6 +10,7 @@ from app.application.tasks.schemas import (
     CommentResponse,
     CreateCommentRequest,
     CreateRelationRequest,
+    CreateRequestPayload,
     CreateTaskRequest,
     DelegateTaskRequest,
     RateTaskRequest,
@@ -17,12 +18,14 @@ from app.application.tasks.schemas import (
     TaskDetailResponse,
     TaskRatingResponse,
     TaskRelationsResponse,
+    TaskRequestResponse,
     TaskResponse,
     UpdateTaskLinksRequest,
     UpdateTaskStatusRequest,
 )
 from app.domain.enums import TaskStatus
 from app.domain.exceptions import (
+    CrossTeamForbiddenError,
     DelegationForbiddenError,
     InvalidStatusTransitionError,
     ProjectNotFoundError,
@@ -33,6 +36,7 @@ from app.domain.exceptions import (
     TaskRelationAlreadyExistsError,
     TaskRelationNotFoundError,
     TaskRelationSelfLinkError,
+    TaskRequestForbiddenError,
     TeamNotFoundError,
 )
 
@@ -94,6 +98,8 @@ async def create_task(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    except CrossTeamForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
 @router.get(
@@ -174,6 +180,8 @@ async def update_task_links(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    except CrossTeamForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
 @router.patch(
@@ -311,6 +319,47 @@ async def delete_task_relation(
     except (TaskNotFoundError, TaskRelationNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{task_id}/requests",
+    response_model=TaskRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task_request(
+    task_id: UUID,
+    payload: CreateRequestPayload,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskRequestResponse:
+    """File a cross-team request anchored to this task. The source
+    team's leadership picks it up via /teams/{id}/inbox."""
+    try:
+        return await service.create_request(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TeamNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except TaskRequestForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{task_id}/requests",
+    response_model=list[TaskRequestResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_task_requests(
+    task_id: UUID,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> list[TaskRequestResponse]:
+    try:
+        return await service.list_requests_for_task(task_id, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post(

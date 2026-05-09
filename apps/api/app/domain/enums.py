@@ -104,6 +104,20 @@ class MemberRole(StrEnum):
     MEMBER = "MEMBER"
 
 
+class RequestStatus(StrEnum):
+    """Cross-team task request lifecycle.
+
+    PENDING   : created by a member, awaiting their team's leadership.
+    FULFILLED : a MANAGER / LEAD on the source team minted the target
+                task and linked it back via BLOCKS.
+    REJECTED  : leadership declined; reject_reason is the audit trail.
+    """
+
+    PENDING = "PENDING"
+    FULFILLED = "FULFILLED"
+    REJECTED = "REJECTED"
+
+
 class TeamRole(StrEnum):
     """A member's rank within a Team. Distinct from MemberRole, which
     governs workspace-level permissions; TeamRole is per-team and

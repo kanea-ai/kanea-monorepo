@@ -10,6 +10,7 @@ from app.domain.entities import Task
 from app.domain.enums import (
     MemberRole,
     MemberType,
+    RequestStatus,
     TaskActivityType,
     TaskRelationType,
     TaskStatus,
@@ -156,6 +157,57 @@ class TaskResponse(BaseModel):
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
+
+
+class CreateRequestPayload(BaseModel):
+    """A standard MEMBER files this from their source task. Their own
+    team's leadership picks it up via the inbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_team_id: UUID
+    suggested_title: str = Field(min_length=1, max_length=200)
+    suggested_description: str | None = Field(default=None, max_length=20_000)
+    justification: str | None = Field(default=None, max_length=2_000)
+
+
+class FulfillRequestPayload(BaseModel):
+    """The leadership-side payload. Lets MANAGER / LEAD edit the
+    suggested fields before minting the target task. priority +
+    assignee_id are optional; team_id is taken from the request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=20_000)
+    priority: int = Field(default=0, ge=0, le=1000)
+    assignee_id: UUID | None = None
+
+
+class RejectRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=2_000)
+
+
+class TaskRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    source_task_id: UUID
+    requested_team_id: UUID | None
+    requester_member_id: UUID | None
+    requester_name: str | None
+    suggested_title: str
+    suggested_description: str | None
+    justification: str | None
+    status: RequestStatus
+    fulfilled_task_id: UUID | None
+    reject_reason: str | None
+    resolver_member_id: UUID | None
+    resolver_name: str | None
+    created_at: datetime
+    resolved_at: datetime | None
 
 
 class CreateRelationRequest(BaseModel):

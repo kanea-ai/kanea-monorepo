@@ -32,6 +32,7 @@ from app.application.tasks.ports import (
     TaskRatingRepository,
     TaskRelationRepository,
     TaskRepository,
+    TaskRequestRepository,
     WorkspaceTaskSeqRepository,
 )
 from app.application.tasks.schemas import Principal
@@ -56,6 +57,7 @@ from app.infrastructure.repositories.task_activity import SqlAlchemyTaskActivity
 from app.infrastructure.repositories.task_comment import SqlAlchemyTaskCommentRepository
 from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
 from app.infrastructure.repositories.task_relation import SqlAlchemyTaskRelationRepository
+from app.infrastructure.repositories.task_request import SqlAlchemyTaskRequestRepository
 from app.infrastructure.repositories.team import SqlAlchemyTeamRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
@@ -151,6 +153,10 @@ def get_task_activity_repository(session: SessionDep) -> TaskActivityRepository:
     return SqlAlchemyTaskActivityRepository(session)
 
 
+def get_task_request_repository(session: SessionDep) -> TaskRequestRepository:
+    return SqlAlchemyTaskRequestRepository(session)
+
+
 def get_workspace_task_seq_repository(session: SessionDep) -> WorkspaceTaskSeqRepository:
     # Same SQLAlchemy class as the auth-side workspace repo; different
     # protocol surface (allocate_next_task_seq).
@@ -170,6 +176,7 @@ def get_task_service(
     projects: Annotated[ProjectRepository, Depends(get_project_repository)],
     team_lookup: Annotated[TeamRepository, Depends(get_team_repository)],
     activities: Annotated[TaskActivityRepository, Depends(get_task_activity_repository)],
+    requests: Annotated[TaskRequestRepository, Depends(get_task_request_repository)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -182,6 +189,7 @@ def get_task_service(
         projects=projects,
         team_lookup=team_lookup,
         activities=activities,
+        requests=requests,
     )
 
 

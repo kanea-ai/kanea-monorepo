@@ -91,6 +91,29 @@ class TeamNameConflictError(DomainError):
     name uniqueness constraint."""
 
 
+class CrossTeamForbiddenError(DomainError):
+    """Raised when a non-admin / non-leadership member tries to create
+    a task on a team they don't belong to. Pushes them through the
+    cross-team request flow instead of letting them dump tasks
+    arbitrarily."""
+
+
+class TaskRequestNotFoundError(DomainError):
+    """Raised when a task request id can't be resolved or is cross-tenant."""
+
+
+class TaskRequestAlreadyResolvedError(DomainError):
+    """Raised when fulfill / reject is called on a non-PENDING request.
+    Makes the lifecycle a strict state machine — once resolved, the
+    record is immutable."""
+
+
+class TaskRequestForbiddenError(DomainError):
+    """Raised when the requester lacks the team-leadership rank needed
+    to fulfill / reject a request, or when a non-admin tries to file
+    a request against a task they don't own."""
+
+
 class TaskRelationSelfLinkError(DomainError):
     """Raised when a caller tries to relate a task to itself. Caught at
     the service boundary; the DB-level CHECK is the belt to the service's
