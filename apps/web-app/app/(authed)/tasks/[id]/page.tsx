@@ -6,9 +6,13 @@ import { useState, type FormEvent } from 'react';
 
 import { ActivityTimeline } from '../../../components/ActivityTimeline';
 import { CrossTeamRequestsPanel } from '../../../components/CrossTeamRequestsPanel';
+import { MentionTextarea } from '../../../components/MentionTextarea';
+import { RenderWithMentions } from '../../../components/RenderWithMentions';
 import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
+import { useCurrentPrincipal } from '../../../lib/auth';
 import {
+  useMembers,
   usePostComment,
   useProjects,
   useSetTaskBlocked,
@@ -17,6 +21,7 @@ import {
   useTaskComments,
   useTeams,
   useUpdateTaskLinks,
+  useUpdateTaskPriority,
   useUpdateTaskStatus,
 } from '../../../lib/queries';
 
@@ -67,7 +72,10 @@ export default function TaskDetailPage() {
             </header>
             <div className="px-4 py-4">
               {task.description ? (
-                <p className="whitespace-pre-wrap text-sm text-slate-800">{task.description}</p>
+                <RenderWithMentions
+                  body={task.description}
+                  className="whitespace-pre-wrap text-sm text-slate-800"
+                />
               ) : (
                 <p className="text-sm italic text-slate-400">No description provided.</p>
               )}
@@ -123,10 +131,25 @@ function SidePanel({ task }: { task: Task }) {
   const updateStatus = useUpdateTaskStatus();
   const setBlocked = useSetTaskBlocked(task.id);
   const updateLinks = useUpdateTaskLinks(task.id);
+  const updatePriority = useUpdateTaskPriority();
   const { data: projects } = useProjects();
   const { data: teams } = useTeams();
+  const { data: members } = useMembers();
+  const principal = useCurrentPrincipal();
   const [reason, setReason] = useState('');
   const [openBlock, setOpenBlock] = useState(false);
+
+  // Priority editor RBAC mirrors the api: workspace OWNER/ADMIN, or
+  // a HEAD/MANAGER on the task's team. The api still enforces this
+  // — we hide the control to avoid showing actions that 403.
+  const me = (members ?? []).find((m) => m.id === principal?.member_id);
+  const canEditPriority =
+    principal?.role === 'WORKSPACE_OWNER' ||
+    principal?.role === 'WORKSPACE_ADMIN' ||
+    (me != null &&
+      task.team_id != null &&
+      me.team_id === task.team_id &&
+      (me.team_role === 'HEAD' || me.team_role === 'MANAGER'));
 
   const onChangeStatus = (e: React.ChangeEvent<HTMLSelectElement>) => {
     updateStatus.mutate({ id: task.id, payload: { status: e.target.value as Task['status'] } });
@@ -173,9 +196,26 @@ function SidePanel({ task }: { task: Task }) {
             </select>
           </Row>
           <Row label="Priority">
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-700">
-              P{task.priority}
-            </span>
+            {canEditPriority ? (
+              <select
+                value={task.priority}
+                disabled={updatePriority.isPending}
+                onChange={(e) =>
+                  updatePriority.mutate({ id: task.id, priority: Number(e.target.value) })
+                }
+                className="rounded border border-slate-300 px-2 py-1 text-xs"
+              >
+                {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    P{n}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-700">
+                P{task.priority}
+              </span>
+            )}
           </Row>
           <Row label="Blocked">
             <span
@@ -324,6 +364,7 @@ function ActivityPanel({ taskId }: { taskId: string }) {
 
 function CommentThread({ taskId }: { taskId: string }) {
   const { data: comments, isLoading, isError, error } = useTaskComments(taskId);
+  const { data: members } = useMembers();
   const post = usePostComment(taskId);
   const [body, setBody] = useState('');
   const [postError, setPostError] = useState<string | null>(null);
@@ -368,12 +409,12 @@ function CommentThread({ taskId }: { taskId: string }) {
       </div>
 
       <form onSubmit={onSubmit} className="space-y-2 border-t border-slate-100 px-4 py-3">
-        <textarea
+        <MentionTextarea
           rows={3}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Add a comment…"
-          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          onChange={setBody}
+          members={members ?? []}
+          placeholder="Add a comment… type @ to mention a teammate"
         />
         {postError ? (
           <p role="alert" className="text-xs text-red-600">
@@ -405,7 +446,10 @@ function CommentRow({ comment }: { comment: TaskComment }) {
           {new Date(comment.created_at).toLocaleString()}
         </p>
       </div>
-      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">{comment.body}</p>
+      <RenderWithMentions
+        body={comment.body}
+        className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800"
+      />
     </li>
   );
 }

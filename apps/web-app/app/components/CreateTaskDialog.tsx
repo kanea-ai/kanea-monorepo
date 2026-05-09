@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { ApiError, type Member } from '../lib/api';
 import { useCreateTask, useMembers, useProjects, useTeams } from '../lib/queries';
+import { MentionTextarea } from './MentionTextarea';
 
 // Modal-ish (centered dialog with backdrop) without pulling in a UI lib.
 // `useEffect` traps `Escape` and clicks on the backdrop close. The form
@@ -96,14 +97,13 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
         <Field
           label="Description"
           htmlFor="description"
-          hint="Optional. Markdown not yet rendered."
+          hint="Optional. Type @ to mention a teammate."
         >
-          <textarea
-            id="description"
+          <MentionTextarea
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={setDescription}
+            members={members ?? []}
             rows={3}
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </Field>
 

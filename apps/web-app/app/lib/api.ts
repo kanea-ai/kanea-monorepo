@@ -359,7 +359,31 @@ export const meApi = {
   changePassword: (payload: ChangePasswordPayload) =>
     requestVoid(`${V1}/me/password`, { method: 'POST', body: JSON.stringify(payload) }),
   stats: () => request<MeStats>(`${V1}/me/stats`),
+  // Phase 4 — notifications inbox
+  notifications: () => request<NotificationItem[]>(`${V1}/me/notifications`),
+  unreadCount: () => request<NotificationCount>(`${V1}/me/notifications/unread-count`),
+  markRead: (id: string) =>
+    requestVoid(`${V1}/me/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),
+  markAllRead: () => requestVoid(`${V1}/me/notifications/read-all`, { method: 'POST' }),
 };
+
+export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT';
+
+export interface NotificationItem {
+  id: string;
+  type: NotificationKind;
+  source_task_id: string | null;
+  source_comment_id: string | null;
+  source_member_id: string | null;
+  source_member_name: string | null;
+  preview: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationCount {
+  unread: number;
+}
 
 // ---------- Tenants ----------
 
@@ -469,13 +493,24 @@ export const tenantsApi = {
 
 export const tasksApi = {
   list: (
-    opts: { status?: TaskStatus; blockedOnly?: boolean; projectId?: string; teamId?: string } = {},
+    opts: {
+      status?: TaskStatus;
+      blockedOnly?: boolean;
+      projectId?: string;
+      teamId?: string;
+      assigneeId?: string;
+      priorityMin?: number;
+      priorityMax?: number;
+    } = {},
   ) => {
     const params = new URLSearchParams();
     if (opts.status) params.set('status_filter', opts.status);
     if (opts.blockedOnly) params.set('blocked_only', 'true');
     if (opts.projectId) params.set('project_id', opts.projectId);
     if (opts.teamId) params.set('team_id', opts.teamId);
+    if (opts.assigneeId) params.set('assignee_id', opts.assigneeId);
+    if (opts.priorityMin != null) params.set('priority_min', String(opts.priorityMin));
+    if (opts.priorityMax != null) params.set('priority_max', String(opts.priorityMax));
     const qs = params.toString();
     return request<Task[]>(`${V1}/tasks${qs ? `?${qs}` : ''}`);
   },
@@ -494,6 +529,11 @@ export const tasksApi = {
     request<Task>(`${V1}/tasks/${id}/block`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    }),
+  updatePriority: (id: string, priority: number) =>
+    request<Task>(`${V1}/tasks/${id}/priority`, {
+      method: 'PATCH',
+      body: JSON.stringify({ priority }),
     }),
   updateLinks: (id: string, payload: UpdateTaskLinksPayload) =>
     request<Task>(`${V1}/tasks/${id}/links`, {

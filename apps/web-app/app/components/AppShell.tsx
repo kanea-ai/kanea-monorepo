@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 
 import { useAuth, useRequireAuth } from '../lib/auth';
 import { useBlockedTasks } from '../lib/queries';
+import { NotificationsBell } from './NotificationsBell';
 
 // Tiny placeholder while auth state hydrates. Without this the page
 // is literally blank until localStorage has been read AND any redirect
@@ -85,27 +86,31 @@ function AppShellInner({ children }: { children: ReactNode }) {
         <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
           Kanea
         </Link>
-        <button
-          type="button"
-          aria-label="Toggle navigation"
-          aria-expanded={navOpen}
-          onClick={() => setNavOpen((v) => !v)}
-          className="rounded-md border border-slate-200 px-2 py-1 text-slate-700 hover:bg-slate-50"
-        >
-          <span className="block h-0.5 w-5 bg-current" />
-          <span className="mt-1 block h-0.5 w-5 bg-current" />
-          <span className="mt-1 block h-0.5 w-5 bg-current" />
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationsBell />
+          <button
+            type="button"
+            aria-label="Toggle navigation"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen((v) => !v)}
+            className="rounded-md border border-slate-200 px-2 py-1 text-slate-700 hover:bg-slate-50"
+          >
+            <span className="block h-0.5 w-5 bg-current" />
+            <span className="mt-1 block h-0.5 w-5 bg-current" />
+            <span className="mt-1 block h-0.5 w-5 bg-current" />
+          </button>
+        </div>
       </header>
 
       {/* Sidebar — fixed on desktop, collapsible drawer on mobile */}
       <aside
         className={`${navOpen ? 'block' : 'hidden'} border-b border-slate-200 bg-white lg:flex lg:w-56 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r`}
       >
-        <div className="hidden px-5 py-4 lg:block">
+        <div className="hidden items-center justify-between px-5 py-4 lg:flex">
           <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
             Kanea
           </Link>
+          <NotificationsBell />
         </div>
         <nav className="flex flex-col gap-0.5 px-2 py-2 lg:px-3">
           {items.map((item) => (

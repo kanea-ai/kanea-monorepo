@@ -157,7 +157,13 @@ function FilterBar({
     [members],
   );
 
-  const active = filters.teamId || filters.projectId || filters.assigneeId || filters.blockedOnly;
+  const active =
+    filters.teamId ||
+    filters.projectId ||
+    filters.assigneeId ||
+    filters.blockedOnly ||
+    filters.priorityMin != null ||
+    filters.priorityMax != null;
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 text-xs">
@@ -208,6 +214,38 @@ function FilterBar({
         />
         Blocked only
       </label>
+
+      <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-slate-700">
+        <span className="text-slate-500">Priority</span>
+        <select
+          value={filters.priorityMin ?? ''}
+          onChange={(e) =>
+            set('priorityMin', e.target.value === '' ? undefined : Number(e.target.value))
+          }
+          className="rounded border border-slate-300 px-1 py-0.5 text-[11px]"
+        >
+          <option value="">≥ any</option>
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              ≥ P{n}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filters.priorityMax ?? ''}
+          onChange={(e) =>
+            set('priorityMax', e.target.value === '' ? undefined : Number(e.target.value))
+          }
+          className="rounded border border-slate-300 px-1 py-0.5 text-[11px]"
+        >
+          <option value="">≤ any</option>
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              ≤ P{n}
+            </option>
+          ))}
+        </select>
+      </span>
 
       {active ? (
         <button

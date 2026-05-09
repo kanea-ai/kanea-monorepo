@@ -31,6 +31,8 @@ import {
   type MeProfile,
   type MeStats,
   type Member,
+  type NotificationCount,
+  type NotificationItem,
   type Project,
   type ProjectHistory,
   type RateTaskPayload,
@@ -60,6 +62,8 @@ export interface TaskListFilters {
   projectId?: string;
   teamId?: string;
   assigneeId?: string;
+  priorityMin?: number;
+  priorityMax?: number;
 }
 
 export const taskKeys = {
@@ -228,6 +232,63 @@ export function useUpdateMe() {
 export function useChangePassword() {
   return useMutation<void, Error, ChangePasswordPayload>({
     mutationFn: (payload) => meApi.changePassword(payload),
+  });
+}
+
+// ---------- Notifications ----------
+
+export const notificationKeys = {
+  all: ['notifications'] as const satisfies QueryKey,
+  unread: ['notifications', 'unread'] as const satisfies QueryKey,
+};
+
+export function useNotifications() {
+  return useQuery<NotificationItem[]>({
+    queryKey: notificationKeys.all,
+    queryFn: () => meApi.notifications(),
+  });
+}
+
+export function useUnreadCount(opts: { refetchMs?: number } = {}) {
+  return useQuery<NotificationCount>({
+    queryKey: notificationKeys.unread,
+    queryFn: () => meApi.unreadCount(),
+    // The bell needs to feel live without becoming a polling
+    // disaster. 30s default keeps the badge accurate without
+    // spamming the api.
+    refetchInterval: opts.refetchMs ?? 30_000,
+  });
+}
+
+export function useMarkNotificationRead() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => meApi.markRead(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: notificationKeys.all });
+    },
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, void>({
+    mutationFn: () => meApi.markAllRead(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: notificationKeys.all });
+    },
+  });
+}
+
+// ---------- Priority editor ----------
+
+export function useUpdateTaskPriority() {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, { id: string; priority: number }>({
+    mutationFn: ({ id, priority }) => tasksApi.updatePriority(id, priority),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+    },
   });
 }
 
