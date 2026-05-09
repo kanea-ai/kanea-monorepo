@@ -14,6 +14,7 @@ import {
   useUpdateTaskStatus,
   type TaskListFilters,
 } from '../lib/queries';
+import { Combobox } from './Combobox';
 
 // Status is the lifecycle column; being blocked is orthogonal and shown
 // as a red border on the card regardless of which column it sits in.
@@ -121,10 +122,40 @@ function FilterBar({
   const { data: teams } = useTeams();
   const { data: projects } = useProjects();
   const { data: members } = useMembers();
+  const principal = useCurrentPrincipal();
 
   const set = <K extends keyof TaskListFilters>(key: K, value: TaskListFilters[K]) => {
     onChange({ ...filters, [key]: value === '' ? undefined : value });
   };
+
+  // "Assigned to me" pins the assignee filter to the principal's
+  // member_id. We treat the checkbox as a derived view of the filter:
+  // checked iff assigneeId == me. Toggling it on overwrites whatever
+  // the combobox had; toggling off clears the filter.
+  const me = principal?.member_id ?? null;
+  const isAssignedToMe = me != null && filters.assigneeId === me;
+  const toggleAssignedToMe = (next: boolean) => {
+    if (next && me) set('assigneeId', me);
+    else set('assigneeId', undefined);
+  };
+
+  const teamOptions = useMemo(
+    () => (teams ?? []).map((t) => ({ value: t.id, label: t.name })),
+    [teams],
+  );
+  const projectOptions = useMemo(
+    () => (projects ?? []).map((p) => ({ value: p.id, label: p.name })),
+    [projects],
+  );
+  const memberOptions = useMemo(
+    () =>
+      (members ?? []).map((m) => ({
+        value: m.id,
+        label: m.name,
+        hint: m.type === 'AGENT' ? '(agent)' : undefined,
+      })),
+    [members],
+  );
 
   const active = filters.teamId || filters.projectId || filters.assigneeId || filters.blockedOnly;
 
@@ -134,45 +165,40 @@ function FilterBar({
         Filter
       </span>
 
-      <select
-        value={filters.teamId ?? ''}
-        onChange={(e) => set('teamId', e.target.value || undefined)}
-        className="rounded border border-slate-300 px-2 py-1"
-      >
-        <option value="">All teams</option>
-        {(teams ?? []).map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={filters.projectId ?? ''}
-        onChange={(e) => set('projectId', e.target.value || undefined)}
-        className="rounded border border-slate-300 px-2 py-1"
-      >
-        <option value="">All projects</option>
-        {(projects ?? []).map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={filters.assigneeId ?? ''}
-        onChange={(e) => set('assigneeId', e.target.value || undefined)}
-        className="rounded border border-slate-300 px-2 py-1"
-      >
-        <option value="">Any assignee</option>
-        {(members ?? []).map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name}
-            {m.type === 'AGENT' ? ' (agent)' : ''}
-          </option>
-        ))}
-      </select>
+      <Combobox
+        ariaLabel="Team"
+        placeholder="All teams"
+        options={teamOptions}
+        value={filters.teamId ?? null}
+        onChange={(v) => set('teamId', v ?? undefined)}
+        className="w-44"
+      />
+      <Combobox
+        ariaLabel="Project"
+        placeholder="All projects"
+        options={projectOptions}
+        value={filters.projectId ?? null}
+        onChange={(v) => set('projectId', v ?? undefined)}
+        className="w-44"
+      />
+      <Combobox
+        ariaLabel="Assignee"
+        placeholder="Any assignee"
+        options={memberOptions}
+        value={filters.assigneeId ?? null}
+        onChange={(v) => set('assigneeId', v ?? undefined)}
+        className="w-48"
+        disabled={isAssignedToMe}
+      />
+      <label className="inline-flex items-center gap-1 text-[11px] text-slate-700">
+        <input
+          type="checkbox"
+          checked={isAssignedToMe}
+          disabled={me == null}
+          onChange={(e) => toggleAssignedToMe(e.target.checked)}
+        />
+        Assigned to me
+      </label>
 
       <label className="ml-1 inline-flex items-center gap-1 text-[11px] text-slate-700">
         <input

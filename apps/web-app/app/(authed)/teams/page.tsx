@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
+import { Modal } from '../../components/Modal';
 import {
   ApiError,
   type InviteCreateResponse,
@@ -77,71 +78,61 @@ export default function TeamsPage() {
   );
 }
 
+const TEAMS_PAGE_SIZE = 20;
+
 function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const { data: teams, isLoading, isError, error } = useTeams();
   const { data: members } = useMembers();
-  const create = useCreateTeam();
-  const [name, setName] = useState('');
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setCreateError(null);
-    try {
-      await create.mutateAsync({ name: name.trim() });
-      setName('');
-    } catch (err) {
-      setCreateError(err instanceof ApiError ? err.detail : 'Failed to create team');
-    }
-  };
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return teams ?? [];
+    return (teams ?? []).filter((t) => t.name.toLowerCase().includes(q));
+  }, [teams, search]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / TEAMS_PAGE_SIZE));
+  // Clamp the page when results shrink under the cursor.
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * TEAMS_PAGE_SIZE, safePage * TEAMS_PAGE_SIZE);
 
   const membersByTeam = (teamId: string) => (members ?? []).filter((m) => m.team_id === teamId);
   const unassigned = (members ?? []).filter((m) => m.team_id == null);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+      <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">Teams</h2>
           <p className="mt-0.5 text-xs text-slate-500">
             Each team groups members under a head, managers, leads, and standard members.
           </p>
         </div>
+        {isAdmin ? (
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
+          >
+            Create team
+          </button>
+        ) : null}
       </header>
 
-      {isAdmin ? (
-        <form
-          className="flex flex-wrap items-end gap-2 border-b border-slate-100 px-4 py-3"
-          onSubmit={onSubmit}
-        >
-          <div className="min-w-[12rem] flex-1">
-            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600">
-              New team
-            </label>
-            <input
-              type="text"
-              required
-              value={name}
-              maxLength={120}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Backend"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={create.isPending || name.trim() === ''}
-            className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {create.isPending ? 'Creating…' : 'Create team'}
-          </button>
-        </form>
-      ) : null}
-      {createError ? (
-        <p role="alert" className="px-4 pt-2 text-sm text-red-600">
-          {createError}
-        </p>
-      ) : null}
+      <div className="border-b border-slate-100 px-4 py-2">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Search teams by name…"
+          className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      </div>
 
       <div className="p-1">
         {isError ? (
@@ -150,13 +141,17 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
           </p>
         ) : isLoading ? (
           <p className="px-3 py-6 text-sm text-slate-500">Loading teams…</p>
-        ) : !teams || teams.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <p className="px-3 py-6 text-center text-sm italic text-slate-500">
-            No teams yet. {isAdmin ? 'Create one above.' : 'Ask an admin to create one.'}
+            {search
+              ? 'No teams match your search.'
+              : isAdmin
+                ? 'No teams yet. Create one above.'
+                : 'No teams yet. Ask an admin to create one.'}
           </p>
         ) : (
           <ul className="space-y-2 px-2 py-2">
-            {teams.map((t) => (
+            {visible.map((t) => (
               <TeamCard key={t.id} team={t} members={membersByTeam(t.id)} isAdmin={isAdmin} />
             ))}
           </ul>
@@ -167,7 +162,167 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
           </p>
         ) : null}
       </div>
+
+      {filtered.length > 0 ? (
+        <Paginator
+          page={safePage}
+          pageCount={pageCount}
+          total={filtered.length}
+          onChange={setPage}
+        />
+      ) : null}
+
+      <CreateTeamDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </section>
+  );
+}
+
+function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateTeam();
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  // Reset state every time the modal is reopened so the previous error
+  // doesn't linger across attempts.
+  useEffect(() => {
+    if (open) {
+      setName('');
+      setError(null);
+    }
+  }, [open]);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await create.mutateAsync({ name: name.trim() });
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to create team');
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      pending={create.isPending}
+      title="Create team"
+      subtitle="Pick a short, descriptive name. You can rename later."
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={create.isPending}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="create-team-form"
+            disabled={create.isPending || name.trim() === ''}
+            className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {create.isPending ? 'Creating…' : 'Create team'}
+          </button>
+        </>
+      }
+    >
+      <form id="create-team-form" onSubmit={onSubmit} className="space-y-3">
+        <div>
+          <label
+            htmlFor="team_name"
+            className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
+          >
+            Name
+          </label>
+          <input
+            id="team_name"
+            type="text"
+            required
+            value={name}
+            maxLength={120}
+            placeholder="Backend"
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+        {error ? (
+          <p role="alert" className="text-sm text-red-600">
+            {error}
+          </p>
+        ) : null}
+      </form>
+    </Modal>
+  );
+}
+
+function Paginator({
+  page,
+  pageCount,
+  total,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  onChange: (next: number) => void;
+}) {
+  // Tight page-number row + "X of Y matches". Hides itself when there's
+  // only a single page worth of results.
+  if (pageCount <= 1) {
+    return (
+      <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
+        {total} match{total === 1 ? '' : 'es'}
+      </div>
+    );
+  }
+  const start = (page - 1) * 20 + 1;
+  const end = Math.min(page * 20, total);
+  return (
+    <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
+      <span>
+        Showing {start}–{end} of {total}
+      </span>
+      <nav className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          ‹
+        </button>
+        {Array.from({ length: pageCount }).map((_, i) => {
+          const n = i + 1;
+          const isCurrent = n === page;
+          return (
+            <button
+              key={n}
+              type="button"
+              onClick={() => onChange(n)}
+              className={`rounded px-2 py-0.5 ${
+                isCurrent
+                  ? 'bg-indigo-600 text-white'
+                  : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {n}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(pageCount, page + 1))}
+          disabled={page === pageCount}
+          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          ›
+        </button>
+      </nav>
+    </div>
   );
 }
 
