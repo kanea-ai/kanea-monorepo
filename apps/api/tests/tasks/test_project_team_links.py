@@ -208,4 +208,6 @@ async def test_list_passes_project_filter(service: TaskService, task_repo: Async
         project_id=project_id,
         team_id=None,
         assignee_id=None,
+        priority_min=None,
+        priority_max=None,
     )

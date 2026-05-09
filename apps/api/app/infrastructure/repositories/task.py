@@ -69,6 +69,8 @@ class SqlAlchemyTaskRepository:
         project_id: UUID | None = None,
         team_id: UUID | None = None,
         assignee_id: UUID | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
     ) -> list[Task]:
         stmt = select(TaskModel).where(TaskModel.workspace_id == workspace_id)
         if status is not None:
@@ -81,6 +83,10 @@ class SqlAlchemyTaskRepository:
             stmt = stmt.where(TaskModel.team_id == team_id)
         if assignee_id is not None:
             stmt = stmt.where(TaskModel.assignee_id == assignee_id)
+        if priority_min is not None:
+            stmt = stmt.where(TaskModel.priority >= priority_min)
+        if priority_max is not None:
+            stmt = stmt.where(TaskModel.priority <= priority_max)
         stmt = stmt.order_by(TaskModel.priority, TaskModel.created_at)
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
@@ -109,6 +115,15 @@ class SqlAlchemyTaskRepository:
             row.completed_at = _dt.now(UTC)
         else:
             row.completed_at = None
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
+
+    async def update_priority(self, task_id: UUID, priority: int) -> Task:
+        row = await self._session.get(TaskModel, task_id)
+        if row is None:
+            raise TaskNotFoundError("task not found")
+        row.priority = priority
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)

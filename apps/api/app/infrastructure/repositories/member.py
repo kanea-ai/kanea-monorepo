@@ -155,6 +155,28 @@ class SqlAlchemyMemberRepository:
         row.last_seen_at = datetime.now(UTC)
         await self._session.flush()
 
+    async def list_humans_by_email_locals(
+        self, workspace_id: UUID, locals_lc: list[str]
+    ) -> list[Member]:
+        """Mention-resolver lookup. Returns HUMAN members in the
+        workspace whose email's local-part matches one of the
+        provided lower-cased handles. Empty input → empty list."""
+        if not locals_lc:
+            return []
+        # Postgres SPLIT_PART(email, '@', 1) gets the local-part; we
+        # lower-case it for the comparison so '@Alice' resolves the
+        # same as '@alice'. Agents have no email and no User row, so
+        # the type filter is the belt to the JOIN's brace.
+        stmt = (
+            select(MemberModel)
+            .where(MemberModel.workspace_id == workspace_id)
+            .where(MemberModel.type == MemberType.HUMAN)
+            .where(MemberModel.email.is_not(None))
+            .where(func.lower(func.split_part(MemberModel.email, "@", 1)).in_(locals_lc))
+        )
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
     async def list_for_workspace(
         self,
         workspace_id: UUID,

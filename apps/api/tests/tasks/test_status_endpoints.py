@@ -487,6 +487,8 @@ async def test_list_for_workspace_passes_blocked_only(
         project_id=None,
         team_id=None,
         assignee_id=None,
+        priority_min=None,
+        priority_max=None,
     )
 
 
@@ -510,4 +512,6 @@ async def test_list_for_workspace_passes_status_filter(
         project_id=None,
         team_id=None,
         assignee_id=None,
+        priority_min=None,
+        priority_max=None,
     )

@@ -5,7 +5,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.enums import MemberRole, MemberType, OAuthProvider, TeamRole
+from app.domain.enums import (
+    MemberRole,
+    MemberType,
+    NotificationType,
+    OAuthProvider,
+    TeamRole,
+)
 
 
 class MeProfileResponse(BaseModel):
@@ -55,3 +61,25 @@ class MeStatsResponse(BaseModel):
     avg_resolution_seconds: float | None
     last_activity_at: datetime | None
     total_tokens_used: int
+
+
+class NotificationResponse(BaseModel):
+    """Inbox row. Source pointers may be null when the source row was
+    deleted; the denormalised `preview` survives so the bell still
+    reads sensibly."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    type: NotificationType
+    source_task_id: UUID | None
+    source_comment_id: UUID | None
+    source_member_id: UUID | None
+    source_member_name: str | None
+    preview: str
+    read_at: datetime | None
+    created_at: datetime
+
+
+class NotificationCountResponse(BaseModel):
+    unread: int

@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import PrincipalDep, get_me_service
 from app.application.me.schemas import (
     ChangePasswordRequest,
     MeProfileResponse,
     MeStatsResponse,
+    NotificationCountResponse,
+    NotificationResponse,
     UpdateMeRequest,
 )
 from app.application.me.service import MeService
-from app.domain.exceptions import AuthenticationError, InvalidMemberTypeError
+from app.domain.exceptions import (
+    AuthenticationError,
+    InvalidMemberTypeError,
+    NotificationNotFoundError,
+)
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -57,3 +64,43 @@ async def change_password(
 @router.get("/stats", response_model=MeStatsResponse)
 async def get_stats(principal: PrincipalDep, service: MeServiceDep) -> MeStatsResponse:
     return await service.get_stats(principal)
+
+
+@router.get("/notifications", response_model=list[NotificationResponse])
+async def list_notifications(
+    principal: PrincipalDep,
+    service: MeServiceDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[NotificationResponse]:
+    return await service.list_notifications(principal, limit=limit, offset=offset)
+
+
+@router.get("/notifications/unread-count", response_model=NotificationCountResponse)
+async def unread_count(principal: PrincipalDep, service: MeServiceDep) -> NotificationCountResponse:
+    return await service.unread_count(principal)
+
+
+@router.post(
+    "/notifications/{notification_id}/read",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def mark_notification_read(
+    notification_id: UUID, principal: PrincipalDep, service: MeServiceDep
+) -> Response:
+    try:
+        await service.mark_notification_read(principal, notification_id)
+    except NotificationNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/notifications/read-all",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def mark_all_notifications_read(principal: PrincipalDep, service: MeServiceDep) -> Response:
+    await service.mark_all_notifications_read(principal)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

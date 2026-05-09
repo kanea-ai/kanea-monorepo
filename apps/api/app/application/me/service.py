@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from app.application.auth.ports import (
     PasswordHasher,
@@ -12,10 +13,17 @@ from app.application.me.schemas import (
     ChangePasswordRequest,
     MeProfileResponse,
     MeStatsResponse,
+    NotificationCountResponse,
+    NotificationResponse,
     UpdateMeRequest,
 )
+from app.application.notifications.ports import NotificationRepository
 from app.application.tasks.schemas import Principal
-from app.domain.exceptions import AuthenticationError, InvalidMemberTypeError
+from app.domain.exceptions import (
+    AuthenticationError,
+    InvalidMemberTypeError,
+    NotificationNotFoundError,
+)
 
 
 @dataclass(slots=True)
@@ -24,6 +32,7 @@ class MeService:
     members: MeMemberRepository
     workspaces: WorkspaceRepository
     hasher: PasswordHasher
+    notifications: NotificationRepository | None = None
 
     async def get_profile(self, principal: Principal) -> MeProfileResponse:
         member = await self.members.get_by_id(principal.member_id)
@@ -96,3 +105,75 @@ class MeService:
             last_activity_at=stats.last_activity_at,
             total_tokens_used=stats.total_tokens_used,
         )
+
+    # ---------- notifications ----------
+
+    async def list_notifications(
+        self, principal: Principal, *, limit: int = 50, offset: int = 0
+    ) -> list[NotificationResponse]:
+        if self.notifications is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("notifications repo not wired")
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+        rows = await self.notifications.list_for_user(member.user_id, limit=limit, offset=offset)
+
+        # Resolve each actor's display name in one query so the bell
+        # can render "Alice mentioned you on TASK-12" without a per-row
+        # round-trip on the client.
+        actor_ids = {r.source_member_id for r in rows if r.source_member_id is not None}
+        actor_names: dict[UUID, str] = {}
+        for actor_id in actor_ids:
+            actor = await self.members.get_by_id(actor_id)
+            if actor is not None:
+                actor_names[actor_id] = actor.name
+
+        return [
+            NotificationResponse(
+                id=row.id,
+                type=row.type,
+                source_task_id=row.source_task_id,
+                source_comment_id=row.source_comment_id,
+                source_member_id=row.source_member_id,
+                source_member_name=(
+                    actor_names.get(row.source_member_id)
+                    if row.source_member_id is not None
+                    else None
+                ),
+                preview=row.preview,
+                read_at=row.read_at,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
+    async def unread_count(self, principal: Principal) -> NotificationCountResponse:
+        if self.notifications is None:  # pragma: no cover
+            raise RuntimeError("notifications repo not wired")
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+        return NotificationCountResponse(
+            unread=await self.notifications.unread_count(member.user_id)
+        )
+
+    async def mark_notification_read(self, principal: Principal, notification_id: UUID) -> None:
+        if self.notifications is None:  # pragma: no cover
+            raise RuntimeError("notifications repo not wired")
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+        rowcount = await self.notifications.mark_read(notification_id, member.user_id)
+        if rowcount == 0:
+            # Either the notification is owned by someone else, doesn't
+            # exist, or is already read. The 404 keeps the API honest
+            # for the first two; clients shouldn't double-mark.
+            raise NotificationNotFoundError("notification not found")
+
+    async def mark_all_notifications_read(self, principal: Principal) -> int:
+        if self.notifications is None:  # pragma: no cover
+            raise RuntimeError("notifications repo not wired")
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+        return await self.notifications.mark_all_read(member.user_id)

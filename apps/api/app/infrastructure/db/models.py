@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.domain.enums import (
     MemberRole,
     MemberType,
+    NotificationType,
     OAuthProvider,
     ProjectStatus,
     TaskRelationType,
@@ -473,3 +474,69 @@ class TaskRatingModel(TimestampMixin, Base):
     )
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# Created by migration 0019. The Postgres ENUM is built there; we mark
+# create_type=False so SQLAlchemy doesn't try to create it again on metadata.create_all.
+notification_type_enum = PgEnum(
+    NotificationType,
+    name="notification_type",
+    values_callable=lambda enum: [member.value for member in enum],
+    create_type=False,
+)
+
+
+class NotificationModel(Base):
+    """Per-user inbox row — one notification = one event the user
+    should know about. Today only @mentions create rows; the table is
+    intentionally generic (`type` enum + denormalised `preview` text)
+    so future event types plug in without schema churn."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "ix_notifications_user_created",
+            "user_id",
+            "created_at",
+            postgresql_using="btree",
+        ),
+        Index(
+            "ix_notifications_user_unread",
+            "user_id",
+            postgresql_where=text("read_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    type: Mapped[NotificationType] = mapped_column(notification_type_enum, nullable=False)
+    source_task_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_comment_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("task_comments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    preview: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )

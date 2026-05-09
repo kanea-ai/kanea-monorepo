@@ -66,6 +66,7 @@ class TaskActivityType(StrEnum):
     PROJECT_CHANGED = "PROJECT_CHANGED"
     TEAM_CHANGED = "TEAM_CHANGED"
     RATED = "RATED"
+    PRIORITY_CHANGED = "PRIORITY_CHANGED"
 
 
 class TaskRelationType(StrEnum):
@@ -115,6 +116,16 @@ class RequestStatus(StrEnum):
     PENDING = "PENDING"
     FULFILLED = "FULFILLED"
     REJECTED = "REJECTED"
+
+
+class NotificationType(StrEnum):
+    """Why a notification was sent. Phase 4 ships only mention sources;
+    the schema's payload column is JSONB so adding new types later
+    (assignments, status changes on watched tasks) won't need a
+    migration — only a new enum value here."""
+
+    MENTION_TASK = "MENTION_TASK"
+    MENTION_COMMENT = "MENTION_COMMENT"
 
 
 class TeamRole(StrEnum):

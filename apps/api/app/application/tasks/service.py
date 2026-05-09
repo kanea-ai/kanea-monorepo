@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from app.application.auth.ports import MemberRepository
+from app.application.notifications.service import NotificationService
 from app.application.projects.ports import ProjectRepository
 from app.application.tasks.ports import (
     TaskActivityRepository,
@@ -35,6 +36,7 @@ from app.application.tasks.schemas import (
     TaskRequestResponse,
     TaskResponse,
     UpdateTaskLinksRequest,
+    UpdateTaskPriorityRequest,
     UpdateTaskStatusRequest,
 )
 from app.application.teams.ports import TeamRepository
@@ -120,6 +122,10 @@ class TaskService:
     # Cross-team request workflow (section 3). Optional so legacy DI
     # paths that don't exercise the request endpoints stay valid.
     requests: TaskRequestRepository | None = None
+    # Phase 4: drives @mention notifications on task creation +
+    # comment posting. Optional so legacy tests that don't care
+    # about notifications can omit it.
+    notifications: NotificationService | None = None
 
     async def delegate(
         self,
@@ -153,6 +159,8 @@ class TaskService:
         project_id: UUID | None = None,
         team_id: UUID | None = None,
         assignee_id: UUID | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
     ) -> list[TaskResponse]:
         """Workspace task list with RBAC. Workspace OWNER / ADMIN see
         all tasks and can filter freely; other principals are forced
@@ -168,6 +176,8 @@ class TaskService:
             project_id=project_id,
             team_id=team_id,
             assignee_id=effective_assignee_id,
+            priority_min=priority_min,
+            priority_max=priority_max,
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return [TaskResponse.from_entity(row, prefix=prefix) for row in rows]
@@ -265,6 +275,15 @@ class TaskService:
             event_type=TaskActivityType.CREATED,
             payload={"title": created.title},
         )
+        # Phase 4 mentions: scan the description for @handles and notify.
+        # Best-effort — if the notification service isn't wired (legacy
+        # tests, stripped-down DI) we silently skip.
+        if self.notifications is not None and created.description:
+            await self.notifications.notify_mentions_in_task(
+                body=created.description,
+                task_id=created.id,
+                actor=requester,
+            )
         return TaskResponse.from_entity(created, prefix=prefix)
 
     async def update_links(
@@ -693,6 +712,48 @@ class TaskService:
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
 
+    async def update_priority(
+        self,
+        task_id: UUID,
+        request: UpdateTaskPriorityRequest,
+        requester: Principal,
+    ) -> TaskResponse:
+        """Phase 4: edit task priority. Allowed when the principal is
+        a workspace OWNER / ADMIN, or a team HEAD / MANAGER on the
+        task's team. Plain MEMBERs (and LEADs, who can re-delegate but
+        don't set scheduling priority) are denied."""
+        task = await self._load_task(task_id, requester)
+        if task.priority == request.priority:
+            prefix = await self._workspace_prefix(requester.workspace_id)
+            return TaskResponse.from_entity(task, prefix=prefix)
+
+        await self._require_priority_editor(requester, task)
+
+        updated = await self.tasks.update_priority(task.id, request.priority)
+        await self._record(
+            task_id=task.id,
+            actor=requester,
+            event_type=TaskActivityType.PRIORITY_CHANGED,
+            payload={"from": task.priority, "to": request.priority},
+        )
+        prefix = await self._workspace_prefix(requester.workspace_id)
+        return TaskResponse.from_entity(updated, prefix=prefix)
+
+    async def _require_priority_editor(self, requester: Principal, task: Task) -> None:
+        if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            return
+        me = await self.members.get_by_id(requester.member_id)
+        if (
+            me is not None
+            and task.team_id is not None
+            and me.team_id == task.team_id
+            and me.team_role in (TeamRole.HEAD, TeamRole.MANAGER)
+        ):
+            return
+        raise CrossTeamForbiddenError(
+            "only workspace admins/owners or the task's team head/manager " "can change priority"
+        )
+
     async def set_blocked(
         self,
         task_id: UUID,
@@ -803,6 +864,15 @@ class TaskService:
                 body=request.body,
             )
         )
+        # Phase 4 mentions on comments. Self-mentions are skipped at
+        # the NotificationService layer.
+        if self.notifications is not None:
+            await self.notifications.notify_mentions_in_comment(
+                body=comment.body,
+                task_id=task_id,
+                comment_id=comment.id,
+                actor=requester,
+            )
         return await self._comment_to_response(comment)
 
     # ---------- relations ----------

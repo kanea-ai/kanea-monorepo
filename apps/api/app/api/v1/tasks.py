@@ -21,6 +21,7 @@ from app.application.tasks.schemas import (
     TaskRequestResponse,
     TaskResponse,
     UpdateTaskLinksRequest,
+    UpdateTaskPriorityRequest,
     UpdateTaskStatusRequest,
 )
 from app.domain.enums import TaskStatus
@@ -56,6 +57,8 @@ async def list_tasks(
     project_id: UUID | None = None,
     team_id: UUID | None = None,
     assignee_id: UUID | None = None,
+    priority_min: int | None = None,
+    priority_max: int | None = None,
 ) -> list[TaskResponse]:
     """List tasks in the requester's workspace, optionally filtered.
 
@@ -70,6 +73,8 @@ async def list_tasks(
         project_id=project_id,
         team_id=team_id,
         assignee_id=assignee_id,
+        priority_min=priority_min,
+        priority_max=priority_max,
     )
 
 
@@ -180,6 +185,28 @@ async def update_task_links(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    except CrossTeamForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/{task_id}/priority",
+    response_model=TaskResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_task_priority(
+    task_id: UUID,
+    payload: UpdateTaskPriorityRequest,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    """Phase 4. Workspace OWNER / ADMIN can edit any task's priority;
+    a team's HEAD / MANAGER can edit priority on tasks owned by their
+    team. Everyone else gets 403."""
+    try:
+        return await service.update_priority(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except CrossTeamForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 

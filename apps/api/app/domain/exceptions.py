@@ -139,3 +139,9 @@ class TaskRelationNotFoundError(DomainError):
 class RatingForbiddenError(DomainError):
     """Raised when the rater isn't the task creator. Only the issuing party
     can rate the work — assignees can't self-rate or rate peers."""
+
+
+class NotificationNotFoundError(DomainError):
+    """Raised when a notification id doesn't resolve for the principal,
+    or when it's already read (the mark-read endpoint refuses no-op
+    second writes to keep the audit trail honest)."""

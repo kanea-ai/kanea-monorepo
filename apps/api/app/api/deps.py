@@ -27,6 +27,11 @@ from app.application.auth.ports import (
 from app.application.auth.service import AuthService
 from app.application.me.ports import MeMemberRepository
 from app.application.me.service import MeService
+from app.application.notifications.ports import (
+    MentionMemberLookup,
+    NotificationRepository,
+)
+from app.application.notifications.service import NotificationService
 from app.application.projects.ports import ProjectRepository
 from app.application.projects.service import ProjectService
 from app.application.tasks.ports import (
@@ -54,6 +59,7 @@ from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
+from app.infrastructure.repositories.notification import SqlAlchemyNotificationRepository
 from app.infrastructure.repositories.project import SqlAlchemyProjectRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
 from app.infrastructure.repositories.task_activity import SqlAlchemyTaskActivityRepository
@@ -187,6 +193,7 @@ def get_task_service(
     team_lookup: Annotated[TeamRepository, Depends(get_team_repository)],
     activities: Annotated[TaskActivityRepository, Depends(get_task_activity_repository)],
     requests: Annotated[TaskRequestRepository, Depends(get_task_request_repository)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -200,6 +207,7 @@ def get_task_service(
         team_lookup=team_lookup,
         activities=activities,
         requests=requests,
+        notifications=notifications,
     )
 
 
@@ -305,13 +313,41 @@ def get_me_member_repository(session: SessionDep) -> MeMemberRepository:
     return SqlAlchemyMemberRepository(session)
 
 
+def get_notification_repository(session: SessionDep) -> NotificationRepository:
+    return SqlAlchemyNotificationRepository(session)
+
+
+def get_mention_lookup(session: SessionDep) -> MentionMemberLookup:
+    # Same SQLAlchemy class as the rest of the member surface; declared
+    # under a distinct Protocol so the notifications service depends on
+    # only the slice it needs.
+    return SqlAlchemyMemberRepository(session)
+
+
+def get_notification_service(
+    notifications: Annotated[NotificationRepository, Depends(get_notification_repository)],
+    members: Annotated[MentionMemberLookup, Depends(get_mention_lookup)],
+) -> NotificationService:
+    return NotificationService(notifications=notifications, members=members)
+
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
+
+
 def get_me_service(
     users: Annotated[UserRepository, Depends(get_user_repository)],
     members: Annotated[MeMemberRepository, Depends(get_me_member_repository)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+    notifications: Annotated[NotificationRepository, Depends(get_notification_repository)],
 ) -> MeService:
-    return MeService(users=users, members=members, workspaces=workspaces, hasher=hasher)
+    return MeService(
+        users=users,
+        members=members,
+        workspaces=workspaces,
+        hasher=hasher,
+        notifications=notifications,
+    )
 
 
 _bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")

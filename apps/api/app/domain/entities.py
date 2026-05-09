@@ -7,6 +7,7 @@ from uuid import UUID
 from app.domain.enums import (
     MemberRole,
     MemberType,
+    NotificationType,
     OAuthProvider,
     ProjectStatus,
     RequestStatus,
@@ -285,3 +286,21 @@ class AgentStats:
     accuracy_percent: float | None
     last_activity_at: datetime | None
     total_tokens_used: int
+
+
+@dataclass(slots=True)
+class Notification:
+    """A single inbox row for a user. The pointer fields are nullable
+    so deleting the source task / comment doesn't cascade-delete the
+    history; the denormalised `preview` keeps the bell readable even
+    after the source is gone."""
+
+    id: UUID
+    user_id: UUID
+    type: NotificationType
+    source_task_id: UUID | None
+    source_comment_id: UUID | None
+    source_member_id: UUID | None
+    preview: str
+    read_at: datetime | None
+    created_at: datetime

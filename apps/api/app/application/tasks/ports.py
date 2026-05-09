@@ -27,6 +27,8 @@ class TaskRepository(Protocol):
         project_id: UUID | None = None,
         team_id: UUID | None = None,
         assignee_id: UUID | None = None,
+        priority_min: int | None = None,
+        priority_max: int | None = None,
     ) -> list[Task]: ...
     async def update_status(
         self,
@@ -35,6 +37,7 @@ class TaskRepository(Protocol):
         status: TaskStatus,
         tokens_used: int | None = None,
     ) -> Task: ...
+    async def update_priority(self, task_id: UUID, priority: int) -> Task: ...
     async def set_blocked(
         self,
         task_id: UUID,

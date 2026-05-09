@@ -53,6 +53,16 @@ class UpdateTaskStatusRequest(BaseModel):
     tokens_used: int | None = Field(default=None, ge=0)
 
 
+class UpdateTaskPriorityRequest(BaseModel):
+    """Phase 4: priority editor. Bound is 1..10 (lower = more urgent;
+    same convention as the rest of the app — assignee priority works
+    the same way)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    priority: int = Field(ge=1, le=10)
+
+
 class SetBlockedRequest(BaseModel):
     """Toggle the orthogonal `is_blocked` flag. `reason` is required when
     blocking, ignored when unblocking."""
