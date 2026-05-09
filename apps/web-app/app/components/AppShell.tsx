@@ -7,6 +7,39 @@ import { useState, type ReactNode } from 'react';
 import { useAuth, useRequireAuth } from '../lib/auth';
 import { useBlockedTasks } from '../lib/queries';
 
+// Tiny placeholder while auth state hydrates. Without this the page
+// is literally blank until localStorage has been read AND any redirect
+// to /login has fired — which can be visible (~1 frame in prod, longer
+// the first time chunks compile in dev). Showing "something" makes the
+// app feel alive even on the slowest first paint.
+function AuthGate({ children }: { children: ReactNode }) {
+  const { isReady, token } = useAuth();
+  if (!isReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        <div className="flex items-center gap-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600" />
+          Loading Kanea…
+        </div>
+      </div>
+    );
+  }
+  if (!token) {
+    // useRequireAuth's effect has already kicked off the redirect to
+    // /login. This is the in-between frame — don't render the shell
+    // (we'd flash an empty board), just show the same spinner.
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        <div className="flex items-center gap-3">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600" />
+          Redirecting to sign-in…
+        </div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 interface NavItem {
   href: string;
   label: string;
@@ -15,7 +48,17 @@ interface NavItem {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const ready = useRequireAuth();
+  // Trigger the redirect side-effect for unauthenticated users. The
+  // visible placeholder is rendered by AuthGate below.
+  useRequireAuth();
+  return (
+    <AuthGate>
+      <AppShellInner>{children}</AppShellInner>
+    </AuthGate>
+  );
+}
+
+function AppShellInner({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { logout } = useAuth();
   const [navOpen, setNavOpen] = useState(false);
@@ -34,10 +77,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     { href: '/agents', label: 'Agents' },
     { href: '/profile', label: 'My profile' },
   ];
-
-  // Until the auth state has been read from storage we render nothing — the
-  // useRequireAuth hook will redirect to /login if there's no token.
-  if (!ready) return null;
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 lg:flex-row">
