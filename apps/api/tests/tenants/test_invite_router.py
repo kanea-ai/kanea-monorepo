@@ -207,3 +207,104 @@ def test_accept_invite_validation_short_password_returns_422(client: TestClient)
         json={"full_name": "Bob", "password": "short"},  # pragma: allowlist secret
     )
     assert response.status_code == 422
+
+
+# ---------- GET /tenants/members ----------
+
+
+def test_list_members_passes_query_filters(
+    client: TestClient, invite_service: AsyncMock, jwt_service: JwtTokenService
+) -> None:
+    """Router must build a MemberFilters from the query string and
+    pass it to the service alongside the principal."""
+    from app.application.tenants.schemas import MemberFilters
+
+    invite_service.list_workspace_members.return_value = []
+    team_id = uuid4()
+    project_id = uuid4()
+    response = client.get(
+        f"/api/v1/tenants/members?name=al&role=WORKSPACE_MEMBER"
+        f"&team_id={team_id}&project_id={project_id}&humans_only=true",
+        headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
+    )
+    assert response.status_code == 200
+    invite_service.list_workspace_members.assert_awaited_once()
+    _principal_arg, filters_arg = invite_service.list_workspace_members.await_args.args
+    assert isinstance(filters_arg, MemberFilters)
+    assert filters_arg.name == "al"
+    assert filters_arg.role is MemberRole.WORKSPACE_MEMBER
+    assert filters_arg.team_id == team_id
+    assert filters_arg.project_id == project_id
+    assert filters_arg.humans_only is True
+
+
+# ---------- GET /tenants/members/{id} ----------
+
+
+def test_get_member_returns_member(
+    client: TestClient, invite_service: AsyncMock, jwt_service: JwtTokenService
+) -> None:
+    from tests.auth.factories import make_human
+
+    target = make_human()
+    invite_service.get_member.return_value = target
+    response = client.get(
+        f"/api/v1/tenants/members/{target.id}",
+        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == str(target.id)
+
+
+def test_get_member_404_when_not_found(
+    client: TestClient, invite_service: AsyncMock, jwt_service: JwtTokenService
+) -> None:
+    from app.domain.exceptions import InvalidMemberTypeError
+
+    invite_service.get_member.side_effect = InvalidMemberTypeError("nope")
+    response = client.get(
+        f"/api/v1/tenants/members/{uuid4()}",
+        headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
+    )
+    assert response.status_code == 404
+
+
+def test_get_member_403_when_visibility_denied(
+    client: TestClient, invite_service: AsyncMock, jwt_service: JwtTokenService
+) -> None:
+    invite_service.get_member.side_effect = ForbiddenError("nope")
+    response = client.get(
+        f"/api/v1/tenants/members/{uuid4()}",
+        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+    )
+    assert response.status_code == 403
+
+
+# ---------- PATCH /tenants/members/{id} ----------
+
+
+def test_update_member_profile_owner_can_rename(
+    client: TestClient, invite_service: AsyncMock, jwt_service: JwtTokenService
+) -> None:
+    from tests.auth.factories import make_human
+
+    target = make_human(name="Renamed")
+    invite_service.update_member_profile.return_value = target
+    response = client.patch(
+        f"/api/v1/tenants/members/{target.id}",
+        json={"name": "Renamed"},
+        headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == "Renamed"
+
+
+def test_update_member_profile_member_returns_403(
+    client: TestClient, jwt_service: JwtTokenService
+) -> None:
+    response = client.patch(
+        f"/api/v1/tenants/members/{uuid4()}",
+        json={"name": "Renamed"},
+        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+    )
+    assert response.status_code == 403

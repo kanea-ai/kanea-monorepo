@@ -506,30 +506,18 @@ function InviteSection({ isAdmin }: { isAdmin: boolean }) {
 }
 
 function InviteLinkReveal({ invite }: { invite: InviteCreateResponse }) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = async () => {
-    await navigator.clipboard.writeText(invite.accept_url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  // Phase 2: stop revealing the raw invite URL in the UI. Once Gmail is
+  // wired the api will deliver the link directly to the invitee; for
+  // now we just confirm the invite was queued.
   return (
     <div className="border-t border-slate-100 bg-emerald-50/50 px-4 py-3">
-      <p className="text-xs font-medium text-emerald-900">
-        Invite created for {invite.email} ({roleLabel(invite.role)}). Token is shown once — copy it
-        now.
+      <p className="text-sm font-medium text-emerald-900">
+        Invite queued for {invite.email} ({roleLabel(invite.role)}).
       </p>
-      <div className="mt-2 flex items-center gap-2">
-        <code className="flex-1 truncate rounded border border-emerald-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-800">
-          {invite.accept_url}
-        </code>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="shrink-0 rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
+      <p className="mt-1 text-xs text-emerald-800">
+        We&apos;ll email it shortly. The link expires {new Date(invite.expires_at).toLocaleString()}
+        .
+      </p>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import (
     InviteServiceDep,
@@ -15,9 +16,12 @@ from app.application.tenants.schemas import (
     InviteCreateRequest,
     InviteCreateResponse,
     InvitePreviewResponse,
+    MemberFilters,
     MemberResponse,
     SetMemberTeamRequest,
+    UpdateMemberProfileRequest,
 )
+from app.domain.enums import MemberRole
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
@@ -93,9 +97,72 @@ async def accept_invite(
     "/members",
     response_model=list[MemberResponse],
 )
-async def list_members(principal: PrincipalDep, service: InviteServiceDep) -> list[MemberResponse]:
-    members = await service.list_workspace_members(principal)
+async def list_members(
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+    name: Annotated[str | None, Query(max_length=120)] = None,
+    member_id: Annotated[UUID | None, Query()] = None,
+    role: Annotated[MemberRole | None, Query()] = None,
+    team_id: Annotated[UUID | None, Query()] = None,
+    project_id: Annotated[UUID | None, Query()] = None,
+    humans_only: Annotated[bool, Query()] = False,
+) -> list[MemberResponse]:
+    """Visibility-aware members directory. Admins/owners see everyone;
+    everyone else sees their team plus themselves. Filters narrow the
+    result on top of that scope."""
+    filters = MemberFilters(
+        name=name,
+        member_id=member_id,
+        role=role,
+        team_id=team_id,
+        project_id=project_id,
+        humans_only=humans_only,
+    )
+    members = await service.list_workspace_members(principal, filters)
     return [MemberResponse.from_entity(m) for m in members]
+
+
+@router.get(
+    "/members/{member_id}",
+    response_model=MemberResponse,
+)
+async def get_member(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Single-member fetch. Same visibility rule as the list endpoint:
+    admins see anyone in the workspace; everyone else can only fetch
+    themselves or a teammate."""
+    try:
+        member = await service.get_member(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.patch(
+    "/members/{member_id}",
+    response_model=MemberResponse,
+)
+async def update_member_profile(
+    member_id: UUID,
+    payload: UpdateMemberProfileRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Admin-only edit of a member's display name and/or workspace
+    role. The "last owner" invariant is enforced at the service layer:
+    you can't demote the last WORKSPACE_OWNER."""
+    try:
+        member = await service.update_member_profile(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
 
 
 @router.patch(

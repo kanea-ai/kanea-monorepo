@@ -328,10 +328,216 @@ async def test_accept_invite_rejects_when_email_already_in_workspace(
 # ---------- list_workspace_members ----------
 
 
-async def test_list_members_filters_to_principal_workspace(
+async def test_list_members_admin_sees_everyone(
     service: InviteService, tenant_members: AsyncMock
 ) -> None:
+    """OWNER/ADMIN principals get the workspace-wide listing — no
+    visibility scoping is layered on the repo call."""
     p = _principal(role=MemberRole.WORKSPACE_OWNER)
     tenant_members.list_for_workspace.return_value = []
     await service.list_workspace_members(p)
-    tenant_members.list_for_workspace.assert_awaited_once_with(p.workspace_id)
+    tenant_members.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id,
+        name=None,
+        member_id=None,
+        role=None,
+        team_id=None,
+        project_id=None,
+        humans_only=False,
+        visibility_team_id=None,
+        visibility_self_id=None,
+    )
+
+
+async def test_list_members_passes_filters_through(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.application.tenants.schemas import MemberFilters
+
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    tenant_members.list_for_workspace.return_value = []
+    project_id = uuid4()
+    team_id = uuid4()
+    await service.list_workspace_members(
+        p,
+        MemberFilters(
+            name="al",
+            role=MemberRole.WORKSPACE_MEMBER,
+            team_id=team_id,
+            project_id=project_id,
+            humans_only=True,
+        ),
+    )
+    tenant_members.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id,
+        name="al",
+        member_id=None,
+        role=MemberRole.WORKSPACE_MEMBER,
+        team_id=team_id,
+        project_id=project_id,
+        humans_only=True,
+        visibility_team_id=None,
+        visibility_self_id=None,
+    )
+
+
+async def test_list_members_non_admin_scoped_to_team(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    """A regular MEMBER who's on a team sees teammates + themselves."""
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
+    self_member.team_id = uuid4()
+    tenant_members.get_by_id.return_value = self_member
+    tenant_members.list_for_workspace.return_value = []
+
+    await service.list_workspace_members(p)
+    call = tenant_members.list_for_workspace.await_args
+    assert call.kwargs["visibility_team_id"] == self_member.team_id
+    assert call.kwargs["visibility_self_id"] == p.member_id
+
+
+async def test_list_members_non_admin_no_team_self_only(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    """A regular MEMBER who isn't on a team sees only themselves."""
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
+    self_member.team_id = None
+    tenant_members.get_by_id.return_value = self_member
+    tenant_members.list_for_workspace.return_value = []
+
+    await service.list_workspace_members(p)
+    call = tenant_members.list_for_workspace.await_args
+    assert call.kwargs["visibility_team_id"] is None
+    assert call.kwargs["visibility_self_id"] == p.member_id
+
+
+# ---------- get_member ----------
+
+
+async def test_get_member_admin_sees_anyone_in_workspace(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    target = make_human(workspace_id=p.workspace_id)
+    tenant_members.get_by_id.return_value = target
+    out = await service.get_member(target.id, p)
+    assert out.id == target.id
+
+
+async def test_get_member_non_admin_can_fetch_self(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
+    tenant_members.get_by_id.return_value = self_member
+    out = await service.get_member(p.member_id, p)
+    assert out.id == p.member_id
+
+
+async def test_get_member_non_admin_can_fetch_teammate(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.domain.exceptions import ForbiddenError
+
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    team_id = uuid4()
+    teammate = make_human(workspace_id=p.workspace_id)
+    teammate.team_id = team_id
+    self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
+    self_member.team_id = team_id
+    # First lookup is the target (teammate); second is "self".
+    tenant_members.get_by_id.side_effect = [teammate, self_member]
+    out = await service.get_member(teammate.id, p)
+    assert out.id == teammate.id
+
+    # Stranger (different team) -> ForbiddenError.
+    stranger = make_human(workspace_id=p.workspace_id)
+    stranger.team_id = uuid4()
+    tenant_members.get_by_id.side_effect = [stranger, self_member]
+    with pytest.raises(ForbiddenError):
+        await service.get_member(stranger.id, p)
+
+
+async def test_get_member_cross_workspace_404s(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.domain.exceptions import InvalidMemberTypeError
+
+    p = _principal(role=MemberRole.WORKSPACE_OWNER)
+    foreign = make_human()  # different workspace_id
+    tenant_members.get_by_id.return_value = foreign
+    with pytest.raises(InvalidMemberTypeError):
+        await service.get_member(foreign.id, p)
+
+
+# ---------- update_member_profile ----------
+
+
+async def test_update_member_profile_admin_can_rename(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.application.tenants.schemas import UpdateMemberProfileRequest
+
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    target = make_human(workspace_id=p.workspace_id)
+    tenant_members.get_by_id.return_value = target
+    tenant_members.update_profile.return_value = target
+
+    await service.update_member_profile(target.id, UpdateMemberProfileRequest(name="Renamed"), p)
+    tenant_members.update_profile.assert_awaited_once_with(target.id, name="Renamed", role=None)
+
+
+async def test_update_member_profile_member_forbidden(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.application.tenants.schemas import UpdateMemberProfileRequest
+    from app.domain.exceptions import ForbiddenError
+
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    with pytest.raises(ForbiddenError):
+        await service.update_member_profile(uuid4(), UpdateMemberProfileRequest(name="x"), p)
+
+
+async def test_update_member_profile_blocks_demoting_last_owner(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.application.tenants.schemas import UpdateMemberProfileRequest
+    from app.domain.exceptions import ForbiddenError
+
+    p = _principal(role=MemberRole.WORKSPACE_OWNER)
+    target = make_human(workspace_id=p.workspace_id)
+    target.role = MemberRole.WORKSPACE_OWNER
+    tenant_members.get_by_id.return_value = target
+    # Only the target is an OWNER -> demoting would leave none.
+    tenant_members.list_for_workspace.return_value = [target]
+
+    with pytest.raises(ForbiddenError, match="last workspace owner"):
+        await service.update_member_profile(
+            target.id,
+            UpdateMemberProfileRequest(role=MemberRole.WORKSPACE_ADMIN),
+            p,
+        )
+
+
+async def test_update_member_profile_demotion_ok_when_other_owner_exists(
+    service: InviteService, tenant_members: AsyncMock
+) -> None:
+    from app.application.tenants.schemas import UpdateMemberProfileRequest
+
+    p = _principal(role=MemberRole.WORKSPACE_OWNER)
+    target = make_human(workspace_id=p.workspace_id)
+    target.role = MemberRole.WORKSPACE_OWNER
+    other_owner = make_human(workspace_id=p.workspace_id)
+    other_owner.role = MemberRole.WORKSPACE_OWNER
+    tenant_members.get_by_id.return_value = target
+    tenant_members.list_for_workspace.return_value = [target, other_owner]
+    tenant_members.update_profile.return_value = target
+
+    await service.update_member_profile(
+        target.id,
+        UpdateMemberProfileRequest(role=MemberRole.WORKSPACE_ADMIN),
+        p,
+    )
+    tenant_members.update_profile.assert_awaited_once()

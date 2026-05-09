@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 
 import {
   agentsApi,
+  meApi,
   projectsApi,
   requestsApi,
   tasksApi,
@@ -16,6 +17,7 @@ import {
   type CreateCommentPayload,
   type CreateProjectPayload,
   type CreateRelationPayload,
+  type ChangePasswordPayload,
   type CreateRequestPayload,
   type CreateTaskPayload,
   type CreateTeamPayload,
@@ -25,6 +27,9 @@ import {
   type TaskRequest,
   type InviteCreatePayload,
   type InviteCreateResponse,
+  type MemberListFilters,
+  type MeProfile,
+  type MeStats,
   type Member,
   type Project,
   type ProjectHistory,
@@ -40,6 +45,8 @@ import {
   type TaskStatus,
   type TeamRecord,
   type UpdateAgentPayload,
+  type UpdateMePayload,
+  type UpdateMemberProfilePayload,
   type UpdateProjectPayload,
   type UpdateStatusPayload,
   type UpdateTaskLinksPayload,
@@ -161,12 +168,66 @@ export function useDeleteRelation(id: string) {
 
 export const tenantKeys = {
   members: ['tenants', 'members'] as const satisfies QueryKey,
+  membersList: (filters: MemberListFilters = {}) =>
+    ['tenants', 'members', filters] as const satisfies QueryKey,
+  member: (id: string) => ['tenants', 'members', id] as const satisfies QueryKey,
 };
 
-export function useMembers() {
+export function useMembers(filters: MemberListFilters = {}) {
   return useQuery<Member[]>({
-    queryKey: tenantKeys.members,
-    queryFn: () => tenantsApi.listMembers(),
+    queryKey: tenantKeys.membersList(filters),
+    queryFn: () => tenantsApi.listMembers(filters),
+  });
+}
+
+export function useMember(id: string) {
+  return useQuery<Member>({
+    queryKey: tenantKeys.member(id),
+    queryFn: () => tenantsApi.getMember(id),
+    enabled: !!id,
+  });
+}
+
+export function useUpdateMemberProfile() {
+  const qc = useQueryClient();
+  return useMutation<Member, Error, { memberId: string; payload: UpdateMemberProfilePayload }>({
+    mutationFn: ({ memberId, payload }) => tenantsApi.updateMemberProfile(memberId, payload),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+      qc.invalidateQueries({ queryKey: tenantKeys.member(vars.memberId) });
+    },
+  });
+}
+
+// ---------- Me ----------
+
+export const meKeys = {
+  profile: ['me'] as const satisfies QueryKey,
+  stats: ['me', 'stats'] as const satisfies QueryKey,
+};
+
+export function useMe() {
+  return useQuery<MeProfile>({ queryKey: meKeys.profile, queryFn: () => meApi.get() });
+}
+
+export function useMeStats() {
+  return useQuery<MeStats>({ queryKey: meKeys.stats, queryFn: () => meApi.stats() });
+}
+
+export function useUpdateMe() {
+  const qc = useQueryClient();
+  return useMutation<MeProfile, Error, UpdateMePayload>({
+    mutationFn: (payload) => meApi.update(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: meKeys.profile });
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
+  });
+}
+
+export function useChangePassword() {
+  return useMutation<void, Error, ChangePasswordPayload>({
+    mutationFn: (payload) => meApi.changePassword(payload),
   });
 }
 

@@ -25,6 +25,8 @@ from app.application.auth.ports import (
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
+from app.application.me.ports import MeMemberRepository
+from app.application.me.service import MeService
 from app.application.projects.ports import ProjectRepository
 from app.application.projects.service import ProjectService
 from app.application.tasks.ports import (
@@ -296,6 +298,20 @@ def get_agent_service(
 
 
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+
+
+def get_me_member_repository(session: SessionDep) -> MeMemberRepository:
+    # Same SQLAlchemy class as the others — distinct protocol surface.
+    return SqlAlchemyMemberRepository(session)
+
+
+def get_me_service(
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+    members: Annotated[MeMemberRepository, Depends(get_me_member_repository)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+) -> MeService:
+    return MeService(users=users, members=members, workspaces=workspaces, hasher=hasher)
 
 
 _bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")

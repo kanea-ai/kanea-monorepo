@@ -26,7 +26,9 @@ from app.application.tenants.schemas import (
     InviteCreateRequest,
     InviteCreateResponse,
     InvitePreviewResponse,
+    MemberFilters,
     SetMemberTeamRequest,
+    UpdateMemberProfileRequest,
     invite_create_response_from_entity,
 )
 from app.domain.entities import Invite, Member, User
@@ -167,8 +169,124 @@ class InviteService:
         token, ttl = self.tokens.issue_human_token(member)
         return TokenResponse(access_token=token, expires_in=ttl)
 
-    async def list_workspace_members(self, principal: Principal) -> list[Member]:
-        return await self.members.list_for_workspace(principal.workspace_id)
+    async def list_workspace_members(
+        self,
+        principal: Principal,
+        filters: MemberFilters | None = None,
+    ) -> list[Member]:
+        """Returns the workspace's members, narrowed by the optional
+        filters and by the caller's visibility scope.
+
+        Visibility:
+        - WORKSPACE_OWNER / WORKSPACE_ADMIN: see everyone.
+        - Anyone else: see members in their team plus themselves. If
+          they're not on a team, they see only themselves.
+
+        The filters layer applies on top of visibility, so a manager
+        narrowing by role still won't reach members outside their team.
+        Cross-workspace bleed-through is impossible — every query is
+        scoped by workspace_id from the principal.
+        """
+        f = filters or MemberFilters()
+
+        is_admin = principal.role in (
+            MemberRole.WORKSPACE_OWNER,
+            MemberRole.WORKSPACE_ADMIN,
+        )
+        visibility_team_id: UUID | None = None
+        visibility_self_id: UUID | None = None
+        if not is_admin:
+            # Non-admin: pull the caller's team to scope the listing.
+            # If they have no team we fall back to self-only.
+            self_member = await self.members.get_by_id(principal.member_id)
+            if self_member is not None and self_member.team_id is not None:
+                visibility_team_id = self_member.team_id
+                visibility_self_id = principal.member_id
+            else:
+                visibility_self_id = principal.member_id
+
+        return await self.members.list_for_workspace(
+            principal.workspace_id,
+            name=f.name,
+            member_id=f.member_id,
+            role=f.role,
+            team_id=f.team_id,
+            project_id=f.project_id,
+            humans_only=f.humans_only,
+            visibility_team_id=visibility_team_id,
+            visibility_self_id=visibility_self_id,
+        )
+
+    async def get_member(self, member_id: UUID, principal: Principal) -> Member:
+        """Fetch a single member, applying the same visibility rule as
+        the list endpoint. Admins see anyone; everyone else can only
+        see themselves or a teammate."""
+        target = await self.members.get_by_id(member_id)
+        if target is None or target.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+
+        is_admin = principal.role in (
+            MemberRole.WORKSPACE_OWNER,
+            MemberRole.WORKSPACE_ADMIN,
+        )
+        if is_admin:
+            return target
+
+        if target.id == principal.member_id:
+            return target
+
+        # Teammate visibility: same team_id as the caller, both not None.
+        self_member = await self.members.get_by_id(principal.member_id)
+        if (
+            self_member is not None
+            and self_member.team_id is not None
+            and target.team_id == self_member.team_id
+        ):
+            return target
+
+        raise ForbiddenError("not allowed to view this member")
+
+    async def update_member_profile(
+        self,
+        member_id: UUID,
+        request: UpdateMemberProfileRequest,
+        principal: Principal,
+    ) -> Member:
+        """Admin-only edit of a member's display name and/or workspace
+        role. Enforces:
+        - tenant isolation (target must be in the principal's workspace)
+        - last-owner invariant (can't demote the last WORKSPACE_OWNER)
+        - principals can't demote themselves into a non-admin role
+          unless another OWNER/ADMIN remains
+        """
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
+
+        target = await self.members.get_by_id(member_id)
+        if target is None or target.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+
+        # Last-owner protection: don't allow a role change that would
+        # leave the workspace without any OWNER. We only need this
+        # check when the target IS currently OWNER and the new role
+        # ISN'T OWNER.
+        if (
+            request.role is not None
+            and target.role is MemberRole.WORKSPACE_OWNER
+            and request.role is not MemberRole.WORKSPACE_OWNER
+        ):
+            others = await self.members.list_for_workspace(
+                principal.workspace_id, role=MemberRole.WORKSPACE_OWNER
+            )
+            still_owners_after = [m for m in others if m.id != target.id]
+            if not still_owners_after:
+                raise ForbiddenError("cannot demote the last workspace owner")
+
+        return await self.members.update_profile(
+            member_id,
+            name=request.name,
+            role=request.role,
+        )
 
     async def set_member_team(
         self,

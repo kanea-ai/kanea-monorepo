@@ -4,7 +4,7 @@ from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.domain.entities import Invite, Member, Workspace
-from app.domain.enums import TeamRole
+from app.domain.enums import MemberRole, TeamRole
 
 
 @runtime_checkable
@@ -20,8 +20,29 @@ class TenantMemberRepository(Protocol):
     from the auth-side MemberRepository (which only does single lookups
     + create) so each application module stays cohesive."""
 
-    async def list_for_workspace(self, workspace_id: UUID) -> list[Member]: ...
+    async def list_for_workspace(
+        self,
+        workspace_id: UUID,
+        *,
+        name: str | None = None,
+        member_id: UUID | None = None,
+        role: MemberRole | None = None,
+        team_id: UUID | None = None,
+        project_id: UUID | None = None,
+        humans_only: bool = False,
+        # Applied AFTER the filters above. Used by the service to
+        # restrict non-admins to their team's members + themselves.
+        visibility_team_id: UUID | None = None,
+        visibility_self_id: UUID | None = None,
+    ) -> list[Member]: ...
     async def get_by_id(self, member_id: UUID) -> Member | None: ...
+    async def update_profile(
+        self,
+        member_id: UUID,
+        *,
+        name: str | None = None,
+        role: MemberRole | None = None,
+    ) -> Member: ...
     async def set_team(
         self,
         member_id: UUID,

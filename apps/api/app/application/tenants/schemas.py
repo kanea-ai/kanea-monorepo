@@ -85,6 +85,37 @@ class MemberResponse(BaseModel):
         )
 
 
+class MemberFilters(BaseModel):
+    """Query-string filters for the members directory. All optional;
+    the service composes the SQL `WHERE` clause from whichever the
+    caller provides. Visibility (which members the caller is allowed
+    to see at all) is layered on top by the service — these are the
+    "narrowing" filters the user types into the directory page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    member_id: UUID | None = None
+    role: MemberRole | None = None
+    team_id: UUID | None = None
+    # Members who have at least one task assigned in this project.
+    project_id: UUID | None = None
+    # Excludes agents from the listing when True. Default keeps the
+    # legacy behaviour (everyone, including agents).
+    humans_only: bool = False
+
+
+class UpdateMemberProfileRequest(BaseModel):
+    """Admin-only edit of another member's profile. Both fields
+    optional so a single PATCH can rename, re-role, or both. The
+    last-OWNER demotion guard lives in the service."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    role: MemberRole | None = None
+
+
 class SetMemberTeamRequest(BaseModel):
     """Admin-only: assign / unassign a member to a team and set their
     intra-team role. team_id=null clears the assignment (and the

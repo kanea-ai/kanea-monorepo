@@ -318,6 +318,49 @@ export const authApi = {
     }),
 };
 
+// ---------- Me (self profile) ----------
+
+export interface MeProfile {
+  user_id: string;
+  email: string;
+  full_name: string;
+  has_password: boolean;
+  oauth_provider: 'GOOGLE' | 'GITHUB' | null;
+  member_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  type: 'HUMAN' | 'AGENT';
+  team_id: string | null;
+  team_role: 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER' | null;
+}
+
+export interface MeStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+export interface UpdateMePayload {
+  full_name: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+}
+
+export const meApi = {
+  get: () => request<MeProfile>(`${V1}/me`),
+  update: (payload: UpdateMePayload) =>
+    request<MeProfile>(`${V1}/me`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  changePassword: (payload: ChangePasswordPayload) =>
+    requestVoid(`${V1}/me/password`, { method: 'POST', body: JSON.stringify(payload) }),
+  stats: () => request<MeStats>(`${V1}/me/stats`),
+};
+
 // ---------- Tenants ----------
 
 // Org-level role. Renamed in Phase 1 to disambiguate from TeamRole
@@ -373,8 +416,38 @@ export interface InviteAcceptPayload {
   password: string;
 }
 
+export interface MemberListFilters {
+  name?: string;
+  memberId?: string;
+  role?: MemberRole;
+  teamId?: string;
+  projectId?: string;
+  humansOnly?: boolean;
+}
+
+export interface UpdateMemberProfilePayload {
+  name?: string | null;
+  role?: MemberRole | null;
+}
+
 export const tenantsApi = {
-  listMembers: () => request<Member[]>(`${V1}/tenants/members`),
+  listMembers: (filters: MemberListFilters = {}) => {
+    const params = new URLSearchParams();
+    if (filters.name) params.set('name', filters.name);
+    if (filters.memberId) params.set('member_id', filters.memberId);
+    if (filters.role) params.set('role', filters.role);
+    if (filters.teamId) params.set('team_id', filters.teamId);
+    if (filters.projectId) params.set('project_id', filters.projectId);
+    if (filters.humansOnly) params.set('humans_only', 'true');
+    const qs = params.toString();
+    return request<Member[]>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
+  },
+  getMember: (id: string) => request<Member>(`${V1}/tenants/members/${id}`),
+  updateMemberProfile: (id: string, payload: UpdateMemberProfilePayload) =>
+    request<Member>(`${V1}/tenants/members/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   createInvite: (payload: InviteCreatePayload) =>
     request<InviteCreateResponse>(`${V1}/tenants/invites`, {
       method: 'POST',

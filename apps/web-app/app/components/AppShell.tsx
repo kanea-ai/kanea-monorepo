@@ -30,7 +30,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     { href: '/projects', label: 'Projects' },
     { href: '/blocked', label: 'Blocked', badge: blocked?.length },
     { href: '/teams', label: 'Teams' },
+    { href: '/members', label: 'Members' },
     { href: '/agents', label: 'Agents' },
+    { href: '/profile', label: 'My profile' },
   ];
 
   // Until the auth state has been read from storage we render nothing — the

@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import AgentStats, Member
-from app.domain.enums import MemberType, TaskStatus, TeamRole
+from app.domain.enums import MemberRole, MemberType, TaskStatus, TeamRole
 from app.infrastructure.db.models import MemberModel, TaskModel, TaskRatingModel
 
 
@@ -155,14 +155,80 @@ class SqlAlchemyMemberRepository:
         row.last_seen_at = datetime.now(UTC)
         await self._session.flush()
 
-    async def list_for_workspace(self, workspace_id: UUID) -> list[Member]:
-        stmt = (
-            select(MemberModel)
-            .where(MemberModel.workspace_id == workspace_id)
-            .order_by(MemberModel.priority, MemberModel.created_at)
-        )
+    async def list_for_workspace(
+        self,
+        workspace_id: UUID,
+        *,
+        name: str | None = None,
+        member_id: UUID | None = None,
+        role: MemberRole | None = None,
+        team_id: UUID | None = None,
+        project_id: UUID | None = None,
+        humans_only: bool = False,
+        visibility_team_id: UUID | None = None,
+        visibility_self_id: UUID | None = None,
+    ) -> list[Member]:
+        stmt = select(MemberModel).where(MemberModel.workspace_id == workspace_id)
+
+        # Narrowing filters (applied first; see service for visibility).
+        if name is not None and name != "":
+            stmt = stmt.where(MemberModel.name.ilike(f"%{name}%"))
+        if member_id is not None:
+            stmt = stmt.where(MemberModel.id == member_id)
+        if role is not None:
+            stmt = stmt.where(MemberModel.role == role)
+        if team_id is not None:
+            stmt = stmt.where(MemberModel.team_id == team_id)
+        if humans_only:
+            stmt = stmt.where(MemberModel.type == MemberType.HUMAN)
+        if project_id is not None:
+            # "Members assigned to at least one task in the project."
+            project_member_ids = (
+                select(TaskModel.assignee_id)
+                .where(TaskModel.project_id == project_id)
+                .where(TaskModel.assignee_id.is_not(None))
+                .distinct()
+            )
+            stmt = stmt.where(MemberModel.id.in_(project_member_ids))
+
+        # Visibility scope: union of "members on this team" and "self".
+        # Either may be None — if both are None we leave the listing
+        # workspace-wide (admins / owners).
+        if visibility_team_id is not None or visibility_self_id is not None:
+            scope_clauses = []
+            if visibility_team_id is not None:
+                scope_clauses.append(MemberModel.team_id == visibility_team_id)
+            if visibility_self_id is not None:
+                scope_clauses.append(MemberModel.id == visibility_self_id)
+            stmt = stmt.where(or_(*scope_clauses))
+
+        stmt = stmt.order_by(MemberModel.priority, MemberModel.created_at)
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
+
+    async def update_profile(
+        self,
+        member_id: UUID,
+        *,
+        name: str | None = None,
+        role: MemberRole | None = None,
+    ) -> Member:
+        """Admin-side edit of a member's display name and/or workspace
+        role. Distinct from `update()` (which is for agent-only fields).
+        Raises if the row is missing — callers verify existence + the
+        last-OWNER invariant before calling."""
+        from app.domain.exceptions import InvalidMemberTypeError
+
+        row = await self._session.get(MemberModel, member_id)
+        if row is None:
+            raise InvalidMemberTypeError("member not found")
+        if name is not None:
+            row.name = name
+        if role is not None:
+            row.role = role
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
 
     async def list_agents_for_workspace(self, workspace_id: UUID) -> list[Member]:
         stmt = (

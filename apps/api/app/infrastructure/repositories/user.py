@@ -78,3 +78,12 @@ class SqlAlchemyUserRepository:
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
+
+    async def update_full_name(self, user_id: UUID, full_name: str) -> User:
+        row = await self._session.get(UserModel, user_id)
+        if row is None:  # pragma: no cover
+            raise ValueError("user not found")
+        row.full_name = full_name
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
