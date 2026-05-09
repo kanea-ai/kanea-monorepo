@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
+import { ActivityTimeline } from '../../../components/ActivityTimeline';
 import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
 import {
@@ -11,6 +12,7 @@ import {
   useProjects,
   useSetTaskBlocked,
   useTask,
+  useTaskActivity,
   useTaskComments,
   useTeams,
   useUpdateTaskLinks,
@@ -72,6 +74,8 @@ export default function TaskDetailPage() {
           </section>
 
           <TaskRelationsPanel taskId={id} />
+
+          <ActivityPanel taskId={id} />
 
           <CommentThread taskId={id} />
         </div>
@@ -276,6 +280,42 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</dt>
       <dd>{children}</dd>
     </div>
+  );
+}
+
+function ActivityPanel({ taskId }: { taskId: string }) {
+  const { data, isLoading, isError, error } = useTaskActivity(taskId);
+  return (
+    <details
+      open
+      className="group rounded-lg border border-slate-200 bg-white shadow-sm [&_summary::-webkit-details-marker]:hidden"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="text-[10px] text-slate-400 transition-transform group-open:rotate-90"
+          >
+            ▶
+          </span>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-700">Activity</h2>
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+            {data?.length ?? 0}
+          </span>
+        </div>
+      </summary>
+      <div className="px-3 py-2">
+        {isLoading ? (
+          <p className="text-xs text-slate-500">Loading…</p>
+        ) : isError ? (
+          <p className="text-xs text-red-600">
+            Failed to load activity: {(error as Error).message}
+          </p>
+        ) : (
+          <ActivityTimeline activities={data ?? []} />
+        )}
+      </div>
+    </details>
   );
 }
 

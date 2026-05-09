@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from app.api.deps import PrincipalDep, ProjectServiceDep, TaskServiceDep
 from app.application.projects.schemas import (
     CreateProjectRequest,
+    ProjectHistoryResponse,
     ProjectResponse,
     UpdateProjectRequest,
 )
@@ -97,6 +98,27 @@ async def delete_project(
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{project_id}/history",
+    response_model=ProjectHistoryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_history(
+    project_id: UUID,
+    principal: PrincipalDep,
+    project_service: ProjectServiceDep,
+) -> ProjectHistoryResponse:
+    """Single-shot bundle for the AI history endpoint. Returns the
+    project, its tasks, the audit log per task, the comment thread per
+    task, and per-task ratings — plus a summary of status mix, blocked
+    count, average resolution and total tokens. Cheaper for an agent
+    than walking the per-resource endpoints."""
+    try:
+        return await project_service.compute_history(project_id, principal)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get(

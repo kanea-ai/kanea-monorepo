@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from app.application.auth.ports import MemberRepository
 from app.application.projects.ports import ProjectRepository
 from app.application.tasks.ports import (
+    TaskActivityRepository,
     TaskCommentRepository,
     TaskRatingRepository,
     TaskRelationRepository,
@@ -14,6 +15,7 @@ from app.application.tasks.ports import (
     WorkspaceTaskSeqRepository,
 )
 from app.application.tasks.schemas import (
+    ActivityResponse,
     CommentResponse,
     CreateCommentRequest,
     CreateRelationRequest,
@@ -32,8 +34,15 @@ from app.application.tasks.schemas import (
 )
 from app.application.teams.ports import TeamRepository
 from app.application.tenants.ports import WorkspaceReadRepository
-from app.domain.entities import Member, Task, TaskComment, TaskRating, TaskRelation
-from app.domain.enums import TaskRelationType, TaskStatus
+from app.domain.entities import (
+    Member,
+    Task,
+    TaskActivity,
+    TaskComment,
+    TaskRating,
+    TaskRelation,
+)
+from app.domain.enums import TaskActivityType, TaskRelationType, TaskStatus
 from app.domain.exceptions import (
     DelegationForbiddenError,
     InvalidStatusTransitionError,
@@ -75,6 +84,10 @@ class TaskService:
     # 404 cross-tenant ids instead of letting the FK silently accept.
     projects: ProjectRepository | None = None
     team_lookup: TeamRepository | None = None
+    # Append-only audit log for the AI history endpoints. Defensive:
+    # all mutation paths no-op the recording if this isn't wired so
+    # legacy DI / unit tests stay green.
+    activities: TaskActivityRepository | None = None
 
     async def delegate(
         self,
@@ -87,6 +100,15 @@ class TaskService:
         self._enforce_hierarchy(requester, target)
 
         updated = await self.tasks.assign(task_id=task.id, assignee_id=target.id)
+        await self._record(
+            task_id=task.id,
+            actor=requester,
+            event_type=TaskActivityType.DELEGATED,
+            payload={
+                "from": str(task.assignee_id) if task.assignee_id else None,
+                "to": str(target.id),
+            },
+        )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
 
@@ -195,6 +217,12 @@ class TaskService:
                 updated_at=now,
             )
         )
+        await self._record(
+            task_id=created.id,
+            actor=requester,
+            event_type=TaskActivityType.CREATED,
+            payload={"title": created.title},
+        )
         return TaskResponse.from_entity(created, prefix=prefix)
 
     async def update_links(
@@ -223,8 +251,78 @@ class TaskService:
             clear_project=clear_project,
             clear_team=clear_team,
         )
+
+        # Record one event per dimension that actually changed. Either
+        # field omitted from the request leaves it untouched and emits
+        # nothing.
+        if "project_id" in request.model_fields_set and updated.project_id != task.project_id:
+            await self._record(
+                task_id=task.id,
+                actor=requester,
+                event_type=TaskActivityType.PROJECT_CHANGED,
+                payload={
+                    "from": str(task.project_id) if task.project_id else None,
+                    "to": str(updated.project_id) if updated.project_id else None,
+                },
+            )
+        if "team_id" in request.model_fields_set and updated.team_id != task.team_id:
+            await self._record(
+                task_id=task.id,
+                actor=requester,
+                event_type=TaskActivityType.TEAM_CHANGED,
+                payload={
+                    "from": str(task.team_id) if task.team_id else None,
+                    "to": str(updated.team_id) if updated.team_id else None,
+                },
+            )
+
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
+
+    async def _record(
+        self,
+        *,
+        task_id: UUID,
+        actor: Principal | None,
+        event_type: TaskActivityType,
+        payload: dict | None = None,
+    ) -> None:
+        """Append an immutable audit-log row. Best-effort: if the
+        activity repo isn't wired (legacy DI / unit tests), silently
+        skip — the mutation it accompanies has already succeeded."""
+        if self.activities is None:
+            return
+        await self.activities.create(
+            TaskActivity(
+                id=uuid4(),
+                task_id=task_id,
+                actor_member_id=actor.member_id if actor is not None else None,
+                event_type=event_type,
+                payload=payload or {},
+            )
+        )
+
+    async def list_activity(self, task_id: UUID, requester: Principal) -> list[ActivityResponse]:
+        if self.activities is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("list_activity called without activities repo")
+        await self._load_task(task_id, requester)
+        rows = await self.activities.list_for_task(task_id)
+        return [await self._activity_to_response(r) for r in rows]
+
+    async def _activity_to_response(self, row: TaskActivity) -> ActivityResponse:
+        actor_name: str | None = None
+        if row.actor_member_id is not None:
+            actor = await self.members.get_by_id(row.actor_member_id)
+            actor_name = actor.name if actor is not None else None
+        return ActivityResponse(
+            id=row.id,
+            task_id=row.task_id,
+            actor_member_id=row.actor_member_id,
+            actor_name=actor_name,
+            event_type=row.event_type,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
 
     async def _require_workspace_project(self, project_id: UUID, requester: Principal) -> None:
         if self.projects is None:  # pragma: no cover - DI invariant
@@ -257,6 +355,12 @@ class TaskService:
             status=request.status,
             tokens_used=request.tokens_used,
         )
+        await self._record(
+            task_id=task.id,
+            actor=requester,
+            event_type=TaskActivityType.STATUS_CHANGED,
+            payload={"from": task.status.value, "to": request.status.value},
+        )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
 
@@ -277,6 +381,21 @@ class TaskService:
             is_blocked=request.is_blocked,
             blocked_reason=reason,
         )
+        # The audit log distinguishes BLOCKED / UNBLOCKED so the agent
+        # can build a clean blocked-time histogram per task.
+        if request.is_blocked:
+            await self._record(
+                task_id=task.id,
+                actor=requester,
+                event_type=TaskActivityType.BLOCKED,
+                payload={"reason": reason} if reason else {},
+            )
+        else:
+            await self._record(
+                task_id=task.id,
+                actor=requester,
+                event_type=TaskActivityType.UNBLOCKED,
+            )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
 
@@ -311,6 +430,12 @@ class TaskService:
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
+        )
+        await self._record(
+            task_id=task.id,
+            actor=requester,
+            event_type=TaskActivityType.RATED,
+            payload={"score": rating.score, "feedback": rating.feedback},
         )
         return TaskRatingResponse(
             task_id=rating.task_id,

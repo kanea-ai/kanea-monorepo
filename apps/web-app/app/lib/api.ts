@@ -73,6 +73,30 @@ export interface CreateCommentPayload {
   body: string;
 }
 
+export type TaskActivityType =
+  | 'CREATED'
+  | 'STATUS_CHANGED'
+  | 'ASSIGNED'
+  | 'DELEGATED'
+  | 'BLOCKED'
+  | 'UNBLOCKED'
+  | 'PROJECT_CHANGED'
+  | 'TEAM_CHANGED'
+  | 'RATED';
+
+export interface TaskActivity {
+  id: string;
+  task_id: string;
+  actor_member_id: string | null;
+  actor_name: string | null;
+  event_type: TaskActivityType;
+  // Free-form payload, shape depends on event_type. The web view
+  // treats it as Record<string, unknown>; consumers that need stricter
+  // typing should narrow on event_type.
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export type RelationType = 'BLOCKS' | 'MITIGATES' | 'DUPLICATES' | 'RELATES_TO';
 
 export interface RelationItem {
@@ -278,6 +302,7 @@ export const tasksApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  listActivity: (id: string) => request<TaskActivity[]>(`${V1}/tasks/${id}/activity`),
   listComments: (id: string) => request<TaskComment[]>(`${V1}/tasks/${id}/comments`),
   postComment: (id: string, payload: CreateCommentPayload) =>
     request<TaskComment>(`${V1}/tasks/${id}/comments`, {
@@ -459,7 +484,44 @@ export const projectsApi = {
     }
   },
   listTasks: (id: string) => request<Task[]>(`${V1}/projects/${id}/tasks`),
+  history: (id: string) => request<ProjectHistory>(`${V1}/projects/${id}/history`),
 };
+
+export interface ProjectHistorySummary {
+  total_tasks: number;
+  by_status: Record<TaskStatus, number>;
+  blocked_now: number;
+  avg_resolution_seconds: number | null;
+  total_tokens_used: number;
+  rated_count: number;
+  avg_rating: number | null;
+}
+
+export interface ProjectTaskHistory {
+  id: string;
+  public_id: string;
+  title: string;
+  status: TaskStatus;
+  is_blocked: boolean;
+  blocked_reason: string | null;
+  description: string | null;
+  priority: number;
+  assignee_id: string | null;
+  project_id: string | null;
+  team_id: string | null;
+  tokens_used: number;
+  created_at: string;
+  completed_at: string | null;
+  rating: TaskRating | null;
+  activities: TaskActivity[];
+  comments: TaskComment[];
+}
+
+export interface ProjectHistory {
+  project: Project;
+  summary: ProjectHistorySummary;
+  tasks: ProjectTaskHistory[];
+}
 
 // ---------- Teams ----------
 

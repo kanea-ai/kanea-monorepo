@@ -9,6 +9,7 @@ from app.domain.enums import (
     MemberType,
     OAuthProvider,
     ProjectStatus,
+    TaskActivityType,
     TaskRelationType,
     TaskStatus,
 )
@@ -167,6 +168,22 @@ class TaskRelation:
     relation_type: TaskRelationType
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskActivity:
+    """One row of the append-only audit log on a task. The actor is
+    null after the member is deleted — the event still survives so the
+    agent can trace what happened."""
+
+    id: UUID
+    task_id: UUID
+    actor_member_id: UUID | None
+    event_type: TaskActivityType
+    # Free-form JSON payload — see TaskActivityType docstring for the
+    # per-event shape.
+    payload: dict
+    created_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)

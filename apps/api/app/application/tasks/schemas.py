@@ -7,7 +7,13 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.entities import Task
-from app.domain.enums import MemberRole, MemberType, TaskRelationType, TaskStatus
+from app.domain.enums import (
+    MemberRole,
+    MemberType,
+    TaskActivityType,
+    TaskRelationType,
+    TaskStatus,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -213,6 +219,23 @@ class TaskDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     relations: TaskRelationsResponse
+
+
+class ActivityResponse(BaseModel):
+    """One row of a task's audit log. The agent reads this to
+    reconstruct what happened on a task — status flips, blocks, moves,
+    ratings — and pair it with comments for the full story."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    task_id: UUID
+    actor_member_id: UUID | None
+    actor_name: str | None
+    event_type: TaskActivityType
+    # JSON payload, shape-per-event (see TaskActivityType docstring).
+    payload: dict
+    created_at: datetime
 
 
 class CreateCommentRequest(BaseModel):

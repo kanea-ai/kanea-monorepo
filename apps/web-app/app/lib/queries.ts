@@ -21,9 +21,11 @@ import {
   type InviteCreateResponse,
   type Member,
   type Project,
+  type ProjectHistory,
   type RateTaskPayload,
   type SetBlockedPayload,
   type Task,
+  type TaskActivity,
   type TaskComment,
   type TaskDetail,
   type TaskRating,
@@ -46,6 +48,7 @@ export const taskKeys = {
   detail: (id: string) => ['tasks', id] as const satisfies QueryKey,
   comments: (id: string) => ['tasks', id, 'comments'] as const satisfies QueryKey,
   relations: (id: string) => ['tasks', id, 'relations'] as const satisfies QueryKey,
+  activity: (id: string) => ['tasks', id, 'activity'] as const satisfies QueryKey,
 };
 
 export function useTasks() {
@@ -292,6 +295,20 @@ export function useProjectTasks(id: string) {
   return useQuery<Task[]>({
     queryKey: projectKeys.tasks(id),
     queryFn: () => projectsApi.listTasks(id),
+  });
+}
+
+export function useProjectHistory(id: string) {
+  return useQuery<ProjectHistory>({
+    queryKey: ['projects', id, 'history'],
+    queryFn: () => projectsApi.history(id),
+  });
+}
+
+export function useTaskActivity(id: string) {
+  return useQuery<TaskActivity[]>({
+    queryKey: taskKeys.activity(id),
+    queryFn: () => tasksApi.listActivity(id),
   });
 }
 

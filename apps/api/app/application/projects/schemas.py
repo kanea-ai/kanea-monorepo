@@ -5,8 +5,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.tasks.schemas import (
+    ActivityResponse,
+    CommentResponse,
+    TaskRatingResponse,
+)
 from app.domain.entities import Project
-from app.domain.enums import ProjectStatus
+from app.domain.enums import ProjectStatus, TaskStatus
 
 
 class CreateProjectRequest(BaseModel):
@@ -50,3 +55,53 @@ class ProjectResponse(BaseModel):
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
+
+
+# ---------- AI-facing history bundle ----------
+
+
+class ProjectHistorySummary(BaseModel):
+    """Per-project rollups so the agent can spot trends without
+    re-aggregating raw rows."""
+
+    total_tasks: int
+    by_status: dict[str, int]
+    blocked_now: int
+    avg_resolution_seconds: float | None
+    total_tokens_used: int
+    rated_count: int
+    avg_rating: float | None
+
+
+class ProjectTaskHistory(BaseModel):
+    """Per-task slice — task metadata, its full audit log, comment
+    thread, and (optional) issuer rating. The agent reads this to
+    reason about what went right/wrong on each piece of work."""
+
+    id: UUID
+    public_id: str
+    title: str
+    status: TaskStatus
+    is_blocked: bool
+    blocked_reason: str | None
+    description: str | None
+    priority: int
+    assignee_id: UUID | None
+    project_id: UUID | None
+    team_id: UUID | None
+    tokens_used: int
+    created_at: datetime
+    completed_at: datetime | None
+    rating: TaskRatingResponse | None
+    activities: list[ActivityResponse]
+    comments: list[CommentResponse]
+
+
+class ProjectHistoryResponse(BaseModel):
+    """Single-shot bundle for the agent to analyse a project. Avoids
+    N round-trips: project metadata + summary + per-task history with
+    activities + comments + ratings, all in one fetch."""
+
+    project: ProjectResponse
+    summary: ProjectHistorySummary
+    tasks: list[ProjectTaskHistory]

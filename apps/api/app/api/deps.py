@@ -27,6 +27,7 @@ from app.application.auth.service import AuthService
 from app.application.projects.ports import ProjectRepository
 from app.application.projects.service import ProjectService
 from app.application.tasks.ports import (
+    TaskActivityRepository,
     TaskCommentRepository,
     TaskRatingRepository,
     TaskRelationRepository,
@@ -51,6 +52,7 @@ from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.project import SqlAlchemyProjectRepository
 from app.infrastructure.repositories.task import SqlAlchemyTaskRepository
+from app.infrastructure.repositories.task_activity import SqlAlchemyTaskActivityRepository
 from app.infrastructure.repositories.task_comment import SqlAlchemyTaskCommentRepository
 from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepository
 from app.infrastructure.repositories.task_relation import SqlAlchemyTaskRelationRepository
@@ -145,6 +147,10 @@ def get_task_relation_repository(session: SessionDep) -> TaskRelationRepository:
     return SqlAlchemyTaskRelationRepository(session)
 
 
+def get_task_activity_repository(session: SessionDep) -> TaskActivityRepository:
+    return SqlAlchemyTaskActivityRepository(session)
+
+
 def get_workspace_task_seq_repository(session: SessionDep) -> WorkspaceTaskSeqRepository:
     # Same SQLAlchemy class as the auth-side workspace repo; different
     # protocol surface (allocate_next_task_seq).
@@ -163,6 +169,7 @@ def get_task_service(
     relations: Annotated[TaskRelationRepository, Depends(get_task_relation_repository)],
     projects: Annotated[ProjectRepository, Depends(get_project_repository)],
     team_lookup: Annotated[TeamRepository, Depends(get_team_repository)],
+    activities: Annotated[TaskActivityRepository, Depends(get_task_activity_repository)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -174,6 +181,7 @@ def get_task_service(
         relations=relations,
         projects=projects,
         team_lookup=team_lookup,
+        activities=activities,
     )
 
 
@@ -182,8 +190,22 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 
 def get_project_service(
     projects: Annotated[ProjectRepository, Depends(get_project_repository)],
+    tasks: Annotated[TaskRepository, Depends(get_task_repository)],
+    activities: Annotated[TaskActivityRepository, Depends(get_task_activity_repository)],
+    comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repository)],
+    ratings: Annotated[TaskRatingRepository, Depends(get_task_rating_repository)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
+    workspaces: Annotated[WorkspaceReadRepository, Depends(get_workspace_read_repository)],
 ) -> ProjectService:
-    return ProjectService(projects=projects)
+    return ProjectService(
+        projects=projects,
+        tasks=tasks,
+        activities=activities,
+        comments=comments,
+        ratings=ratings,
+        members=members,
+        workspaces=workspaces,
+    )
 
 
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]

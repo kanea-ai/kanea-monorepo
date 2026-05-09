@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import PrincipalDep, TaskServiceDep
 from app.application.tasks.schemas import (
+    ActivityResponse,
     CommentResponse,
     CreateCommentRequest,
     CreateRelationRequest,
@@ -222,6 +223,25 @@ async def post_task_comment(
     holder; agents can post too."""
     try:
         return await service.post_comment(task_id, payload, principal)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{task_id}/activity",
+    response_model=list[ActivityResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_task_activity(
+    task_id: UUID,
+    principal: PrincipalDep,
+    service: TaskServiceDep,
+) -> list[ActivityResponse]:
+    """Chronological audit log for the task — status flips, blocks,
+    moves, ratings. Agents read this alongside the comment thread to
+    reconstruct what happened on the task."""
+    try:
+        return await service.list_activity(task_id, principal)
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

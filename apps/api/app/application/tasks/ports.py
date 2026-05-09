@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import Task, TaskComment, TaskRating, TaskRelation
+from app.domain.entities import Task, TaskActivity, TaskComment, TaskRating, TaskRelation
 from app.domain.enums import TaskRelationType, TaskStatus
 
 
@@ -66,6 +66,13 @@ class TaskRatingRepository(Protocol):
 class TaskCommentRepository(Protocol):
     async def list_for_task(self, task_id: UUID) -> list[TaskComment]: ...
     async def create(self, comment: TaskComment) -> TaskComment: ...
+
+
+@runtime_checkable
+class TaskActivityRepository(Protocol):
+    async def list_for_task(self, task_id: UUID) -> list[TaskActivity]: ...
+    async def list_for_project(self, project_id: UUID) -> list[TaskActivity]: ...
+    async def create(self, activity: TaskActivity) -> TaskActivity: ...
 
 
 @runtime_checkable

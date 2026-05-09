@@ -33,6 +33,36 @@ class ProjectStatus(StrEnum):
     ARCHIVED = "ARCHIVED"
 
 
+class TaskActivityType(StrEnum):
+    """Vocabulary of events recorded in the task activity log. Stored
+    as a varchar in the DB so adding a new event type is code-only —
+    no migration required. The agent-facing history endpoint groups
+    these chronologically with comments to reconstruct the full story
+    of a task / project.
+
+    Payload shapes (JSONB column):
+    - CREATED:          {title}
+    - STATUS_CHANGED:   {from, to}
+    - ASSIGNED:         {from, to}        (null/uuid)
+    - DELEGATED:        {from, to}        (uuid/uuid via /delegate)
+    - BLOCKED:          {reason}
+    - UNBLOCKED:        {}
+    - PROJECT_CHANGED:  {from, to}        (null/uuid)
+    - TEAM_CHANGED:     {from, to}        (null/uuid)
+    - RATED:            {score, feedback} (issuer-only single-shot)
+    """
+
+    CREATED = "CREATED"
+    STATUS_CHANGED = "STATUS_CHANGED"
+    ASSIGNED = "ASSIGNED"
+    DELEGATED = "DELEGATED"
+    BLOCKED = "BLOCKED"
+    UNBLOCKED = "UNBLOCKED"
+    PROJECT_CHANGED = "PROJECT_CHANGED"
+    TEAM_CHANGED = "TEAM_CHANGED"
+    RATED = "RATED"
+
+
 class TaskRelationType(StrEnum):
     """Directed relations between two tasks. The inverse views
     (blocked_by, mitigated_by, duplicated_by) are not stored — they're
