@@ -11,7 +11,7 @@ import { agentKeys, useAgents, useCreateAgent } from '../../lib/queries';
 // One-time secret display: when an agent is provisioned the api returns
 // the plaintext key in the response, hashed on persist. The created
 // response is held in component state and surfaced inline; refreshing
-// the page erases it. Same pattern as invite tokens on /team.
+// the page erases it. Same pattern as invite tokens on /teams.
 
 type StatusFilter = 'ALL' | HealthStatus;
 
