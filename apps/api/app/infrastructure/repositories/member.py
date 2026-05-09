@@ -15,6 +15,7 @@ def _to_entity(row: MemberModel) -> Member:
     return Member(
         id=row.id,
         workspace_id=row.workspace_id,
+        user_id=row.user_id,
         team_id=row.team_id,
         type=row.type,
         name=row.name,
@@ -34,9 +35,31 @@ class SqlAlchemyMemberRepository:
         self._session = session
 
     async def get_by_email(self, email: str) -> Member | None:
-        stmt = select(MemberModel).where(MemberModel.email == email)
+        # Phase 1: a single email can map to multiple memberships
+        # (one per workspace). Auth no longer routes through this; it
+        # uses UserRepository.get_by_email instead. Kept for the
+        # invite-accept duplicate check, which expects at most one row
+        # per workspace because of uq_members_workspace_id_email.
+        # Picks the earliest membership when more than one exists.
+        stmt = (
+            select(MemberModel)
+            .where(MemberModel.email == email)
+            .order_by(MemberModel.created_at)
+            .limit(1)
+        )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _to_entity(row) if row is not None else None
+
+    async def list_for_user(self, user_id: UUID) -> list[Member]:
+        """All memberships a global User holds. Drives the
+        multi-workspace login picker."""
+        stmt = (
+            select(MemberModel)
+            .where(MemberModel.user_id == user_id)
+            .order_by(MemberModel.created_at, MemberModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
 
     async def get_by_id(self, member_id: UUID) -> Member | None:
         row = await self._session.get(MemberModel, member_id)
@@ -46,6 +69,7 @@ class SqlAlchemyMemberRepository:
         row = MemberModel(
             id=member.id,
             workspace_id=member.workspace_id,
+            user_id=member.user_id,
             team_id=member.team_id,
             type=member.type,
             name=member.name,

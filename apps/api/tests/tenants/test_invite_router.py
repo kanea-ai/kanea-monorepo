@@ -60,7 +60,7 @@ def _bearer(role: MemberRole, jwt_service: JwtTokenService) -> dict[str, str]:
         "exp": int((now + timedelta(hours=1)).timestamp()),
         "workspace_id": str(uuid4()),
         "type": MemberType.HUMAN.value,
-        "priority": 1 if role is MemberRole.OWNER else 5,
+        "priority": 1 if role is MemberRole.WORKSPACE_OWNER else 5,
         "role": role.value,
         "scope": "human",
     }
@@ -88,7 +88,7 @@ def test_create_invite_owner_returns_201(
         id=uuid4(),
         workspace_id=workspace_id,
         email="bob@kanea.ai",
-        role=MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_MEMBER,
         expires_at=datetime.utcnow() + timedelta(days=7),
         accept_url="https://app.kanea.ai/invite/the-token",
         token="the-token",
@@ -96,8 +96,8 @@ def test_create_invite_owner_returns_201(
 
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "MEMBER"},
-        headers=_bearer(MemberRole.OWNER, jwt_service),
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
+        headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
     )
 
     assert response.status_code == 201
@@ -110,8 +110,8 @@ def test_create_invite_owner_returns_201(
 def test_create_invite_member_returns_403(client: TestClient, jwt_service: JwtTokenService) -> None:
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "MEMBER"},
-        headers=_bearer(MemberRole.MEMBER, jwt_service),
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
+        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
     )
     # WorkspaceAdminDep blocks before the service is ever called.
     assert response.status_code == 403
@@ -121,7 +121,7 @@ def test_create_invite_member_returns_403(client: TestClient, jwt_service: JwtTo
 def test_create_invite_unauthenticated_returns_401_or_403(client: TestClient) -> None:
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "MEMBER"},
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
     )
     # FastAPI's HTTPBearer with auto_error=True returns 403 when the
     # header is entirely missing.
@@ -136,8 +136,8 @@ def test_create_invite_owner_role_returns_403(
     )
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "OWNER"},
-        headers=_bearer(MemberRole.OWNER, jwt_service),
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_OWNER"},
+        headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
     )
     assert response.status_code == 403
 
@@ -151,7 +151,7 @@ def test_get_invite_preview_returns_workspace_info(
     invite_service.get_invite_preview.return_value = InvitePreviewResponse(
         workspace_name="Acme",
         email="bob@kanea.ai",
-        role=MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_MEMBER,
         expires_at=datetime.utcnow() + timedelta(days=3),
     )
     # Anonymous — no Authorization header.

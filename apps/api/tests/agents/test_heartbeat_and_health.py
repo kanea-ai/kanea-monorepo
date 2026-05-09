@@ -44,7 +44,7 @@ def _principal(*, scope: str = "human", workspace_id=None, member_id=None) -> Pr
         type=MemberType.HUMAN if scope == "human" else MemberType.AGENT,
         priority=1 if scope == "human" else 5,
         scope=scope,
-        role=MemberRole.OWNER if scope == "human" else MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_OWNER if scope == "human" else MemberRole.WORKSPACE_MEMBER,
     )
 
 
@@ -56,7 +56,7 @@ def _agent(*, workspace_id=None, last_seen_at=None) -> Member:
         name="bot",
         priority=5,
         email=None,
-        role=MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_MEMBER,
         model="claude-opus-4-7",
         last_seen_at=last_seen_at,
         created_at=datetime.now(UTC),
@@ -204,7 +204,11 @@ def _bearer(scope: str) -> dict[str, str]:
         "workspace_id": str(uuid4()),
         "type": MemberType.HUMAN.value if scope == "human" else MemberType.AGENT.value,
         "priority": 1 if scope == "human" else 5,
-        "role": MemberRole.OWNER.value if scope == "human" else MemberRole.MEMBER.value,
+        "role": (
+            MemberRole.WORKSPACE_OWNER.value
+            if scope == "human"
+            else MemberRole.WORKSPACE_MEMBER.value
+        ),
         "scope": scope,
     }
     token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)

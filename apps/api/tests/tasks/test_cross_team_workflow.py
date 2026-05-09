@@ -57,7 +57,7 @@ def _member(
     member_id=None,
     team_id=None,
     team_role: TeamRole | None = None,
-    role: MemberRole = MemberRole.MEMBER,
+    role: MemberRole = MemberRole.WORKSPACE_MEMBER,
 ) -> Member:
     return Member(
         id=member_id or uuid4(),
@@ -134,7 +134,7 @@ async def test_member_cannot_target_another_team(
     teams_repo: AsyncMock,
     task_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     other_team = _team(p.workspace_id)
     teams_repo.get_by_id.return_value = other_team
     members.get_by_id.return_value = _member(
@@ -155,7 +155,7 @@ async def test_member_can_target_own_team(
     teams_repo: AsyncMock,
     task_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     own_team = _team(p.workspace_id)
     teams_repo.get_by_id.return_value = own_team
     members.get_by_id.return_value = _member(
@@ -178,7 +178,7 @@ async def test_lead_can_target_other_team(
 ) -> None:
     """Leadership rank bypasses the same-team check — that's the
     escalation path for cross-team work."""
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     own_team = _team(p.workspace_id, name="A")
     other_team = _team(p.workspace_id, name="B")
     teams_repo.get_by_id.return_value = other_team
@@ -199,7 +199,7 @@ async def test_admin_can_target_any_team_without_membership(
     teams_repo: AsyncMock,
     task_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.ADMIN)
+    p = make_principal(role=MemberRole.WORKSPACE_ADMIN)
     target = _team(p.workspace_id)
     teams_repo.get_by_id.return_value = target
     task_repo.create.side_effect = lambda t: t
@@ -218,7 +218,7 @@ async def test_member_can_request_on_own_task(
     requests_repo: AsyncMock,
     members: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     source = make_task(workspace_id=p.workspace_id, created_by_id=p.member_id)
     target_team = _team(p.workspace_id)
     task_repo.get_by_id.return_value = source
@@ -245,7 +245,7 @@ async def test_member_cannot_request_on_someone_elses_task(
     teams_repo: AsyncMock,
     requests_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     other_owner = uuid4()
     # Source task isn't created by or assigned to me.
     source = make_task(
@@ -299,7 +299,7 @@ async def test_lead_on_source_team_can_fulfill(
 ) -> None:
     """Fulfill mints a target task on requested_team_id and creates a
     BLOCKS relation pointing at the source task."""
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     source_team = _team(p.workspace_id, name="A")
     target_team = _team(p.workspace_id, name="B")
     source = make_task(workspace_id=p.workspace_id, created_by_id=uuid4())
@@ -353,7 +353,7 @@ async def test_plain_member_on_source_team_cannot_fulfill(
     members: AsyncMock,
     requests_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     source_team = _team(p.workspace_id)
     target_team = _team(p.workspace_id, name="B")
     source = make_task(workspace_id=p.workspace_id)
@@ -379,7 +379,7 @@ async def test_already_resolved_request_cannot_be_refulfilled(
     task_repo: AsyncMock,
     requests_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.ADMIN)
+    p = make_principal(role=MemberRole.WORKSPACE_ADMIN)
     source = make_task(workspace_id=p.workspace_id)
     requests_repo.get_by_id.return_value = _request(
         source_task_id=source.id,
@@ -401,7 +401,7 @@ async def test_lead_can_reject(
     members: AsyncMock,
     requests_repo: AsyncMock,
 ) -> None:
-    p = make_principal(role=MemberRole.MEMBER)
+    p = make_principal(role=MemberRole.WORKSPACE_MEMBER)
     source_team = _team(p.workspace_id)
     source = make_task(workspace_id=p.workspace_id)
     source.team_id = source_team.id
@@ -439,7 +439,7 @@ async def test_lead_can_reject(
 
 
 async def test_unknown_request_404s(service: TaskService, requests_repo: AsyncMock) -> None:
-    p = make_principal(role=MemberRole.ADMIN)
+    p = make_principal(role=MemberRole.WORKSPACE_ADMIN)
     requests_repo.get_by_id.return_value = None
     with pytest.raises(TaskRequestNotFoundError):
         await service.fulfill_request(uuid4(), FulfillRequestPayload(), p)
@@ -453,7 +453,7 @@ async def test_cross_tenant_request_404s(
     """Request anchored to a task in another workspace surfaces as
     not-found — same shape as truly-missing so cross-tenant probing
     leaks nothing."""
-    p = make_principal(role=MemberRole.ADMIN)
+    p = make_principal(role=MemberRole.WORKSPACE_ADMIN)
     other_workspace = uuid4()
     source = make_task(workspace_id=other_workspace)
     requests_repo.get_by_id.return_value = _request(

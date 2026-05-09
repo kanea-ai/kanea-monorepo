@@ -85,11 +85,33 @@ project_status_enum = PgEnum(
 )
 
 
+class UserModel(TimestampMixin, Base):
+    """Global human auth identity. One row per email across all
+    workspaces. Phase 1 split this out of `members`; AGENT members
+    don't get a user row."""
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("oauth_provider", "oauth_id", name="uq_users_oauth_provider_oauth_id"),
+        CheckConstraint(
+            "password_hash IS NOT NULL " "OR (oauth_provider IS NOT NULL AND oauth_id IS NOT NULL)",
+            name="users_at_least_one_secret",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True)
+    full_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oauth_provider: Mapped[OAuthProvider | None] = mapped_column(oauth_provider_enum, nullable=True)
+    oauth_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class WorkspaceModel(TimestampMixin, Base):
     __tablename__ = "workspaces"
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     task_prefix: Mapped[str] = mapped_column(String(8), nullable=False, default="TASK")
     next_task_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -146,11 +168,17 @@ class MemberModel(TimestampMixin, Base):
     __tablename__ = "members"
     __table_args__ = (
         UniqueConstraint("workspace_id", "email", name="uq_members_workspace_id_email"),
+        UniqueConstraint("workspace_id", "user_id", name="uq_members_workspace_id_user_id"),
         CheckConstraint(
             "(type = 'HUMAN' AND email IS NOT NULL) OR (type = 'AGENT')",
             name="human_must_have_email",
         ),
+        CheckConstraint(
+            "(type = 'HUMAN' AND user_id IS NOT NULL) " "OR (type = 'AGENT' AND user_id IS NULL)",
+            name="members_human_has_user",
+        ),
         Index("ix_members_workspace_id_type", "workspace_id", "type"),
+        Index("ix_members_user_id", "user_id"),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -158,6 +186,11 @@ class MemberModel(TimestampMixin, Base):
         PgUUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     team_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
@@ -170,7 +203,7 @@ class MemberModel(TimestampMixin, Base):
     email: Mapped[str | None] = mapped_column(String(254), nullable=True, index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     role: Mapped[MemberRole] = mapped_column(
-        member_role_enum, nullable=False, default=MemberRole.MEMBER
+        member_role_enum, nullable=False, default=MemberRole.WORKSPACE_MEMBER
     )
     team_role: Mapped[TeamRole | None] = mapped_column(team_role_enum, nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)

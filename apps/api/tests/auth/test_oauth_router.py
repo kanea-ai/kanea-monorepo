@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_service, get_settings
 from app.application.auth.oauth import OAuthIdentity
-from app.application.auth.schemas import TokenResponse
+from app.application.auth.schemas import LoginResponse
 from app.core.config import Settings
 from app.domain.enums import OAuthProvider
 from app.main import app
@@ -119,8 +119,8 @@ def test_oauth_callback_happy_path_redirects_to_frontend_with_token(
     )
     monkeypatch.setattr("app.api.v1.auth.get_oauth_client", lambda *_a, **_kw: mock_client)
 
-    auth_service.oauth_login.return_value = TokenResponse(
-        access_token="signed.jwt", expires_in=3600
+    auth_service.oauth_login.return_value = LoginResponse(
+        requires_selection=False, access_token="signed.jwt", expires_in=3600
     )
 
     client.cookies.set("kanea_oauth_state", "the-state-token")

@@ -18,7 +18,7 @@ def _principal(*, workspace_id=None, member_id=None) -> Principal:
         type=MemberType.HUMAN,
         priority=1,
         scope="human",
-        role=MemberRole.OWNER,
+        role=MemberRole.WORKSPACE_OWNER,
     )
 
 

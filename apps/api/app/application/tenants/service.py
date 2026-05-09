@@ -11,6 +11,7 @@ from app.application.auth.ports import (
     MemberRepository,
     PasswordHasher,
     TokenService,
+    UserRepository,
 )
 from app.application.auth.schemas import TokenResponse
 from app.application.tasks.schemas import Principal
@@ -28,7 +29,7 @@ from app.application.tenants.schemas import (
     SetMemberTeamRequest,
     invite_create_response_from_entity,
 )
-from app.domain.entities import Credentials, Invite, Member
+from app.domain.entities import Invite, Member, User
 from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
@@ -64,6 +65,10 @@ class InviteService:
     # Team repo for the team-assignment endpoint. Optional so existing
     # constructors / unit tests stay green.
     teams: TeamRepository | None = None
+    # Phase 1: invite acceptance creates-or-links the global User row.
+    # Optional so legacy constructors / unit tests stay valid; the
+    # accept_invite path raises if it's missing.
+    users: UserRepository | None = None
 
     async def create_invite(
         self, request: InviteCreateRequest, principal: Principal
@@ -74,7 +79,7 @@ class InviteService:
         # Authorization is also enforced at the route layer via
         # WorkspaceAdminDep; this is the defensive belt for service-level
         # callers (tests, future internal call-sites).
-        if principal.role not in (MemberRole.OWNER, MemberRole.ADMIN):
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             raise ForbiddenError("workspace owner or admin role required")
 
         raw_token = secrets.token_urlsafe(32)
@@ -109,40 +114,52 @@ class InviteService:
         )
 
     async def accept_invite(self, raw_token: str, request: InviteAcceptRequest) -> TokenResponse:
+        if self.users is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("users repo not wired")
+
         invite = await self._load_active_invite(raw_token)
 
-        # Reject if a member with the invited email already exists in this
-        # workspace — would violate uq_members_workspace_id_email anyway,
-        # surface a clearer error here.
+        # Reject if a member with the invited email already exists in
+        # this workspace — uq_members_workspace_id_email would catch
+        # it; surfacing a clean 409 here.
         existing = await self.auth_members.get_by_email(invite.email)
         if existing is not None and existing.workspace_id == invite.workspace_id:
             raise EmailAlreadyExistsError(
                 "a member with this email already exists in the workspace"
             )
 
-        # Priority: invited members default to a higher number (lower rank)
-        # than the workspace owner so they sit below in the delegation
-        # hierarchy. Owner is priority=1 by signup; we use 5 here, leaving
-        # 2-4 for explicit role tiers later.
+        # Phase 1 multi-tenancy: an invitee may already have a User
+        # row from a different workspace. If so, link the new
+        # membership to it; otherwise mint a User using the password
+        # the invitee just typed in.
+        user = await self.users.get_by_email(invite.email)
+        if user is None:
+            user = await self.users.create(
+                User(
+                    id=uuid4(),
+                    email=invite.email,
+                    full_name=request.full_name,
+                    password_hash=self.hasher.hash(request.password),
+                )
+            )
+        # If the User already exists, we don't reset their password —
+        # they'd be confused why their existing password stopped
+        # working. The accept payload password is silently ignored
+        # in that branch (the user can change it later in settings).
+
+        # Priority: invited members default to a higher number (lower
+        # rank) than the workspace owner so they sit below in the
+        # delegation hierarchy.
         member = await self.auth_members.create(
             Member(
                 id=uuid4(),
                 workspace_id=invite.workspace_id,
+                user_id=user.id,
                 type=MemberType.HUMAN,
                 name=request.full_name,
                 email=invite.email,
                 priority=5,
                 role=invite.role,
-            )
-        )
-        await self.credentials.create(
-            Credentials(
-                id=uuid4(),
-                member_id=member.id,
-                password_hash=self.hasher.hash(request.password),
-                agent_secret_hash=None,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
             )
         )
         await self.invites.mark_accepted(invite.id)
@@ -166,7 +183,7 @@ class InviteService:
 
         Route-level RBAC (WorkspaceAdminDep) is the primary guard;
         this service-level check is the belt for direct callers."""
-        if principal.role not in (MemberRole.OWNER, MemberRole.ADMIN):
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             raise ForbiddenError("workspace owner or admin role required")
 
         if request.team_id is None and request.team_role is not None:

@@ -25,13 +25,13 @@ from tests.auth.factories import make_human
 
 
 def _principal(
-    *, role: MemberRole = MemberRole.OWNER, workspace_id=None, member_id=None
+    *, role: MemberRole = MemberRole.WORKSPACE_OWNER, workspace_id=None, member_id=None
 ) -> Principal:
     return Principal(
         member_id=member_id or uuid4(),
         workspace_id=workspace_id or uuid4(),
         type=MemberType.HUMAN,
-        priority=1 if role is MemberRole.OWNER else 5,
+        priority=1 if role is MemberRole.WORKSPACE_OWNER else 5,
         scope="human",
         role=role,
     )
@@ -77,6 +77,11 @@ def tokens() -> MagicMock:
 
 
 @pytest.fixture
+def users() -> AsyncMock:
+    return AsyncMock()
+
+
+@pytest.fixture
 def service(
     invites: AsyncMock,
     tenant_members: AsyncMock,
@@ -85,6 +90,7 @@ def service(
     credentials: AsyncMock,
     hasher: MagicMock,
     tokens: MagicMock,
+    users: AsyncMock,
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -95,6 +101,7 @@ def service(
         hasher=hasher,
         tokens=tokens,
         accept_url_base="https://app.kanea.ai",
+        users=users,
     )
 
 
@@ -103,14 +110,14 @@ def service(
 
 async def test_create_invite_owner_can_invite(service: InviteService, invites: AsyncMock) -> None:
     invites.create.side_effect = lambda i: i
-    principal = _principal(role=MemberRole.OWNER)
+    principal = _principal(role=MemberRole.WORKSPACE_OWNER)
 
     response = await service.create_invite(
-        InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.MEMBER), principal
+        InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.WORKSPACE_MEMBER), principal
     )
 
     assert response.email == "bob@kanea.ai"
-    assert response.role is MemberRole.MEMBER
+    assert response.role is MemberRole.WORKSPACE_MEMBER
     assert response.workspace_id == principal.workspace_id
     # Raw token leaks once; the URL embeds it.
     assert response.token
@@ -131,13 +138,13 @@ async def test_create_invite_owner_can_invite(service: InviteService, invites: A
 
 async def test_create_invite_admin_can_invite(service: InviteService, invites: AsyncMock) -> None:
     invites.create.side_effect = lambda i: i
-    principal = _principal(role=MemberRole.ADMIN)
+    principal = _principal(role=MemberRole.WORKSPACE_ADMIN)
     response = await service.create_invite(InviteCreateRequest(email="bob@kanea.ai"), principal)
     assert response.email == "bob@kanea.ai"
 
 
 async def test_create_invite_member_forbidden(service: InviteService) -> None:
-    principal = _principal(role=MemberRole.MEMBER)
+    principal = _principal(role=MemberRole.WORKSPACE_MEMBER)
     with pytest.raises(ForbiddenError):
         await service.create_invite(InviteCreateRequest(email="bob@kanea.ai"), principal)
 
@@ -145,10 +152,10 @@ async def test_create_invite_member_forbidden(service: InviteService) -> None:
 async def test_create_invite_owner_role_rejected(service: InviteService) -> None:
     """OWNER must be created via signup, never via invite — the schema's
     is_role_inviteable() check is enforced at the service layer too."""
-    principal = _principal(role=MemberRole.OWNER)
+    principal = _principal(role=MemberRole.WORKSPACE_OWNER)
     with pytest.raises(ForbiddenError, match="OWNER"):
         await service.create_invite(
-            InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.OWNER),
+            InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.WORKSPACE_OWNER),
             principal,
         )
 
@@ -162,7 +169,7 @@ def _active_invite(**overrides) -> Invite:
         "workspace_id": uuid4(),
         "invited_by_id": uuid4(),
         "email": "bob@kanea.ai",
-        "role": MemberRole.MEMBER,
+        "role": MemberRole.WORKSPACE_MEMBER,
         "token_hash": "ignored-by-mocks",
         "expires_at": datetime.utcnow() + timedelta(days=3),
         "accepted_at": None,
@@ -196,7 +203,7 @@ async def test_preview_returns_workspace_summary(
 
     assert preview.workspace_name == "Acme Corp"
     assert preview.email == invite.email
-    assert preview.role is MemberRole.MEMBER
+    assert preview.role is MemberRole.WORKSPACE_MEMBER
 
 
 async def test_preview_unknown_token(service: InviteService, invites: AsyncMock) -> None:
@@ -222,43 +229,83 @@ async def test_preview_already_accepted(service: InviteService, invites: AsyncMo
 # ---------- accept_invite ----------
 
 
-async def test_accept_invite_creates_member_and_credentials(
+async def test_accept_invite_creates_user_and_member(
     service: InviteService,
     invites: AsyncMock,
     auth_members: AsyncMock,
-    credentials: AsyncMock,
+    users: AsyncMock,
     tokens: MagicMock,
 ) -> None:
-    invite = _active_invite(role=MemberRole.ADMIN)
+    """Phase 1: invite acceptance creates a global User + a Member
+    linked to it. No more credentials row for human auth — that lives
+    on users now."""
+    invite = _active_invite(role=MemberRole.WORKSPACE_ADMIN)
     invites.get_by_token_hash.return_value = invite
     auth_members.get_by_email.return_value = None
+    users.get_by_email.return_value = None  # brand-new user
+    users.create.side_effect = lambda u: u
     auth_members.create.side_effect = lambda m: m
-    credentials.create.side_effect = lambda c: c
     invites.mark_accepted.return_value = invite
 
     response = await service.accept_invite(
         "raw",
         InviteAcceptRequest(full_name="Bob", password="hunter2hunter2"),  # pragma: allowlist secret
     )
-
     assert response.access_token == "human.jwt"
 
-    # Member created with the invited role + workspace.
+    # Global User created with the hashed password.
+    users.create.assert_awaited_once()
+    created_user = users.create.await_args.args[0]
+    assert created_user.email == invite.email
+    assert created_user.password_hash == "bcrypt$hunter2hunter2"  # pragma: allowlist secret
+
+    # Member links to that user, carries the invited role.
     auth_members.create.assert_awaited_once()
-    created = auth_members.create.await_args.args[0]
-    assert created.workspace_id == invite.workspace_id
-    assert created.email == invite.email
-    assert created.role is MemberRole.ADMIN
-    assert created.type is MemberType.HUMAN
-
-    # Credentials carry hashed password (not plaintext).
-    credentials.create.assert_awaited_once()
-    creds = credentials.create.await_args.args[0]
-    assert creds.member_id == created.id
-    assert creds.password_hash == "bcrypt$hunter2hunter2"  # pragma: allowlist secret
-
-    # Invite is consumed.
+    created_member = auth_members.create.await_args.args[0]
+    assert created_member.workspace_id == invite.workspace_id
+    assert created_member.user_id == created_user.id
+    assert created_member.role is MemberRole.WORKSPACE_ADMIN
+    assert created_member.type is MemberType.HUMAN
     invites.mark_accepted.assert_awaited_once_with(invite.id)
+
+
+async def test_accept_invite_links_to_existing_user(
+    service: InviteService,
+    invites: AsyncMock,
+    auth_members: AsyncMock,
+    users: AsyncMock,
+) -> None:
+    """If the invitee's email already has a User from another
+    workspace, accept just creates a new Member pointing at that user
+    — without resetting the password."""
+    invite = _active_invite()
+    invites.get_by_token_hash.return_value = invite
+    auth_members.get_by_email.return_value = None
+
+    from datetime import UTC, datetime
+
+    from app.domain.entities import User as UserEntity
+
+    existing = UserEntity(
+        id=uuid4(),
+        email=invite.email,
+        full_name="Bob",
+        password_hash="bcrypt$existing",  # pragma: allowlist secret
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    users.get_by_email.return_value = existing
+    auth_members.create.side_effect = lambda m: m
+    invites.mark_accepted.return_value = invite
+
+    await service.accept_invite(
+        "raw",
+        InviteAcceptRequest(full_name="Bob", password="ignored-pwd!!"),  # pragma: allowlist secret
+    )
+    # No user was created — the existing one is reused.
+    users.create.assert_not_called()
+    created_member = auth_members.create.await_args.args[0]
+    assert created_member.user_id == existing.id
 
 
 async def test_accept_invite_rejects_when_email_already_in_workspace(
@@ -284,7 +331,7 @@ async def test_accept_invite_rejects_when_email_already_in_workspace(
 async def test_list_members_filters_to_principal_workspace(
     service: InviteService, tenant_members: AsyncMock
 ) -> None:
-    p = _principal(role=MemberRole.OWNER)
+    p = _principal(role=MemberRole.WORKSPACE_OWNER)
     tenant_members.list_for_workspace.return_value = []
     await service.list_workspace_members(p)
     tenant_members.list_for_workspace.assert_awaited_once_with(p.workspace_id)

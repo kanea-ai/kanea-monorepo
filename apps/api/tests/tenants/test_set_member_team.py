@@ -35,7 +35,7 @@ from app.domain.exceptions import ForbiddenError, InvalidMemberTypeError
 from app.main import app
 
 
-def _principal(*, role: MemberRole = MemberRole.OWNER, workspace_id=None) -> Principal:
+def _principal(*, role: MemberRole = MemberRole.WORKSPACE_OWNER, workspace_id=None) -> Principal:
     return Principal(
         member_id=uuid4(),
         workspace_id=workspace_id or uuid4(),
@@ -54,7 +54,7 @@ def _member(workspace_id) -> Member:
         name="Alice",
         email="a@example.com",
         priority=3,
-        role=MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_MEMBER,
     )
 
 
@@ -119,7 +119,7 @@ def service(
 
 
 async def test_member_role_is_forbidden(service: InviteService) -> None:
-    p = _principal(role=MemberRole.MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
     with pytest.raises(ForbiddenError):
         await service.set_member_team(
             uuid4(), SetMemberTeamRequest(team_id=uuid4(), team_role=TeamRole.LEAD), p
@@ -176,7 +176,7 @@ async def test_happy_path_assigns_member(
     members_repo: AsyncMock,
     teams_repo: AsyncMock,
 ) -> None:
-    p = _principal(role=MemberRole.ADMIN)
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
     target = _member(p.workspace_id)
     team = _team(p.workspace_id)
     members_repo.get_by_id.return_value = target
@@ -197,7 +197,7 @@ async def test_happy_path_assigns_member(
 async def test_clear_team_assignment_when_team_id_null(
     service: InviteService, members_repo: AsyncMock
 ) -> None:
-    p = _principal(role=MemberRole.ADMIN)
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
     target = _member(p.workspace_id)
     members_repo.get_by_id.return_value = target
     members_repo.set_team.side_effect = lambda _id, **kw: target
@@ -248,7 +248,7 @@ def test_post_teams_rejects_member_role(client: TestClient, team_service_mock: A
     response = client.post(
         "/api/v1/teams",
         json={"name": "Backend"},
-        headers=_bearer("MEMBER"),
+        headers=_bearer("WORKSPACE_MEMBER"),
     )
     assert response.status_code == 403
     team_service_mock.create.assert_not_called()
@@ -269,7 +269,7 @@ def test_post_teams_accepts_admin(client: TestClient, team_service_mock: AsyncMo
     response = client.post(
         "/api/v1/teams",
         json={"name": "Backend"},
-        headers=_bearer("ADMIN"),
+        headers=_bearer("WORKSPACE_ADMIN"),
     )
     assert response.status_code == 201
     team_service_mock.create.assert_awaited_once()
@@ -281,7 +281,7 @@ def test_set_member_team_route_rejects_member_role(client: TestClient) -> None:
     response = client.patch(
         f"/api/v1/tenants/members/{uuid4()}/team",
         json={"team_id": str(uuid4()), "team_role": "LEAD"},
-        headers=_bearer("MEMBER"),
+        headers=_bearer("WORKSPACE_MEMBER"),
     )
     assert response.status_code == 403
 
@@ -299,7 +299,7 @@ def test_set_member_team_route_404s_for_unknown_member(client: TestClient) -> No
         response = client.patch(
             f"/api/v1/tenants/members/{uuid4()}/team",
             json={"team_id": str(uuid4()), "team_role": "LEAD"},
-            headers=_bearer("ADMIN"),
+            headers=_bearer("WORKSPACE_ADMIN"),
         )
         assert response.status_code == 404
     finally:

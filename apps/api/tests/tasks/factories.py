@@ -18,8 +18,8 @@ def make_principal(
     # Default to OWNER so existing service-level tests (which pre-date
     # the board-level RBAC in section 2) keep their full visibility on
     # /tasks list calls. Tests that need to exercise non-admin scoping
-    # pass role=MemberRole.MEMBER explicitly.
-    role: MemberRole = MemberRole.OWNER,
+    # pass role=MemberRole.WORKSPACE_MEMBER explicitly.
+    role: MemberRole = MemberRole.WORKSPACE_OWNER,
 ) -> Principal:
     return Principal(
         member_id=member_id or uuid4(),

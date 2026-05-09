@@ -41,6 +41,38 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class WorkspaceOption(BaseModel):
+    """One pickable workspace in the multi-workspace login response.
+    Returned to the UI alongside a short-lived selection token; the
+    caller exchanges (selection_token, workspace_id) at
+    /auth/select-workspace for the final access_token."""
+
+    workspace_id: UUID
+    name: str
+    role: str  # WORKSPACE_OWNER / ADMIN / MEMBER
+
+
+class LoginResponse(BaseModel):
+    """Branched response. Single-workspace users get an `access_token`
+    immediately; multi-workspace users get a `selection_token` and a
+    list of `workspaces` to pick from. `requires_selection` makes the
+    branch easy to switch on client-side."""
+
+    requires_selection: bool
+    access_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int | None = None
+    selection_token: str | None = None
+    workspaces: list[WorkspaceOption] | None = None
+
+
+class SelectWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection_token: str = Field(min_length=1)
+    workspace_id: UUID
+
+
 class OAuthCallbackRequest(BaseModel):
     """Internal value object — the auth route hands these to the service
     after parsing the GET callback's query params."""

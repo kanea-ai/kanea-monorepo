@@ -18,6 +18,28 @@ from app.domain.enums import (
 
 
 @dataclass(slots=True)
+class User:
+    """Global human identity. One row per email across the whole tenant.
+    A User can hold memberships in multiple Workspaces (the
+    `members.user_id` FK is the join). Auth — password / OAuth — lives
+    here, not on members; multi-workspace login becomes a single
+    credential check.
+
+    AGENT-typed members don't have an associated User row; they auth
+    via the per-workspace API-key handshake (Credentials.agent_secret_hash).
+    """
+
+    id: UUID
+    email: str
+    full_name: str
+    password_hash: str | None = None
+    oauth_provider: OAuthProvider | None = None
+    oauth_id: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
 class Workspace:
     id: UUID
     name: str
@@ -64,9 +86,12 @@ class Member:
     type: MemberType
     name: str
     priority: int
+    # Phase 1: HUMAN members link to a global User row; AGENTs don't.
+    # Enforced by a CHECK constraint in migration 0017.
+    user_id: UUID | None = None
     team_id: UUID | None = None
     email: str | None = None
-    role: MemberRole = MemberRole.MEMBER
+    role: MemberRole = MemberRole.WORKSPACE_MEMBER
     # Underlying LLM model identifier for AGENT-typed members. Free-form
     # so the user can label however they want ("claude-opus-4-7", "gpt-5",
     # "Custom: agent-pipeline-v2", etc.). Null on humans.
@@ -94,7 +119,7 @@ class Member:
     def can_invite(self) -> bool:
         """OWNER and ADMIN can invite; MEMBER cannot. Same shape applies
         to most workspace-management actions."""
-        return self.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        return self.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
 
 
 @dataclass(slots=True)

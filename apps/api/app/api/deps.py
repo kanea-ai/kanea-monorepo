@@ -21,6 +21,7 @@ from app.application.auth.ports import (
     MemberRepository,
     PasswordHasher,
     TokenService,
+    UserRepository,
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
@@ -59,6 +60,7 @@ from app.infrastructure.repositories.task_rating import SqlAlchemyTaskRatingRepo
 from app.infrastructure.repositories.task_relation import SqlAlchemyTaskRelationRepository
 from app.infrastructure.repositories.task_request import SqlAlchemyTaskRequestRepository
 from app.infrastructure.repositories.team import SqlAlchemyTeamRepository
+from app.infrastructure.repositories.user import SqlAlchemyUserRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService
@@ -102,6 +104,10 @@ def get_workspace_repository(session: SessionDep) -> WorkspaceRepository:
     return SqlAlchemyWorkspaceRepository(session)
 
 
+def get_user_repository(session: SessionDep) -> UserRepository:
+    return SqlAlchemyUserRepository(session)
+
+
 def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
     return SqlAlchemyWorkspaceRepository(session)
 
@@ -112,6 +118,7 @@ def get_auth_service(
     credentials: Annotated[CredentialsRepository, Depends(get_credentials_repository)],
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> AuthService:
     return AuthService(
         workspaces=workspaces,
@@ -119,6 +126,7 @@ def get_auth_service(
         credentials=credentials,
         hasher=hasher,
         tokens=tokens,
+        users=users,
     )
 
 
@@ -247,6 +255,7 @@ def get_invite_service(
     tokens: Annotated[TokenService, Depends(get_token_service)],
     config: Annotated[Settings, Depends(get_settings)],
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -260,6 +269,7 @@ def get_invite_service(
         # frontend serves /invite/[token].
         accept_url_base=config.oauth_post_login_redirect.rsplit("/auth/callback", 1)[0],
         teams=teams,
+        users=users,
     )
 
 
@@ -318,7 +328,7 @@ def get_current_principal(
         # `role` was added in migration 0004. Tokens minted before the
         # claim existed default to MEMBER — least-privileged so they
         # can't perform OWNER/ADMIN actions until they re-auth.
-        role = MemberRole(str(payload.get("role", MemberRole.MEMBER.value)))
+        role = MemberRole(str(payload.get("role", MemberRole.WORKSPACE_MEMBER.value)))
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -342,7 +352,7 @@ PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
 def require_workspace_admin(principal: PrincipalDep) -> Principal:
     """RBAC guard: rejects MEMBER and AGENT principals on routes that only
     workspace owners/admins should hit (invites, team management)."""
-    if principal.role not in (MemberRole.OWNER, MemberRole.ADMIN):
+    if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="workspace owner or admin role required",

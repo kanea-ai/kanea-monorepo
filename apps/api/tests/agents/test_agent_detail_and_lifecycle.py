@@ -33,7 +33,7 @@ def _principal(*, workspace_id=None, member_id=None) -> Principal:
         type=MemberType.HUMAN,
         priority=1,
         scope="human",
-        role=MemberRole.OWNER,
+        role=MemberRole.WORKSPACE_OWNER,
     )
 
 
@@ -45,7 +45,7 @@ def _agent(*, agent_id=None, workspace_id=None, name="bot", priority=5, model=No
         name=name,
         priority=priority,
         email=None,
-        role=MemberRole.MEMBER,
+        role=MemberRole.WORKSPACE_MEMBER,
         model=model,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
@@ -160,7 +160,7 @@ async def test_detail_404s_for_human_member(
         name="alice",
         priority=1,
         email="alice@example.com",
-        role=MemberRole.OWNER,
+        role=MemberRole.WORKSPACE_OWNER,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )

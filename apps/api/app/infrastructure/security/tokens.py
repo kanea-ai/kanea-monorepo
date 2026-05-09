@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import jwt
 
-from app.domain.entities import Member
+from app.domain.entities import Member, User
 from app.domain.enums import MemberType
+
+# How long a multi-workspace selection token is valid. Short by design
+# — it only spans the few seconds between password verification and the
+# workspace-pick click. Longer doesn't help anyone and widens the blast
+# radius if a bearer leaks.
+SELECTION_TTL_SECONDS = 300
 
 
 @dataclass(slots=True)
@@ -36,6 +43,30 @@ class JwtTokenService:
             issuer=self._settings.issuer,
             options={"require": ["exp", "iat", "sub"]},
         )
+
+    def issue_selection_token(self, user: User) -> tuple[str, int]:
+        """Short-lived token used during the multi-workspace login
+        picker. Carries scope='select' and only the user_id — has no
+        workspace_id and can't be used to call any business endpoint.
+        Exchanged at /auth/select-workspace for a real human token."""
+        now = datetime.now(UTC)
+        payload: dict[str, object] = {
+            "iss": self._settings.issuer,
+            "sub": str(user.id),
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(seconds=SELECTION_TTL_SECONDS)).timestamp()),
+            "scope": "select",
+        }
+        token = jwt.encode(payload, self._settings.secret, algorithm=self._settings.algorithm)
+        return token, SELECTION_TTL_SECONDS
+
+    def decode_selection_token(self, token: str) -> UUID:
+        """Verify a selection token and return the user_id sub. Raises
+        jwt.PyJWTError on bad signature / expired / wrong scope."""
+        payload = self.decode(token)
+        if payload.get("scope") != "select":
+            raise jwt.InvalidTokenError("not a selection token")
+        return UUID(str(payload["sub"]))
 
     def _issue(self, member: Member, *, ttl: int, scope: str) -> tuple[str, int]:
         if scope == "human" and member.type is not MemberType.HUMAN:

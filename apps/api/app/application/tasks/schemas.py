@@ -33,7 +33,7 @@ class Principal:
     type: MemberType
     priority: int
     scope: str
-    role: MemberRole = MemberRole.MEMBER
+    role: MemberRole = MemberRole.WORKSPACE_MEMBER
 
 
 class DelegateTaskRequest(BaseModel):

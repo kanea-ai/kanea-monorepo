@@ -9,6 +9,7 @@ from app.api.deps import (
     get_password_hasher,
     get_settings,
     get_token_service,
+    get_user_repository,
     get_workspace_repository,
 )
 from app.application.auth.service import AuthService
@@ -65,5 +66,6 @@ def test_get_auth_service_wires_dependencies() -> None:
         credentials=get_credentials_repository(session),
         hasher=get_password_hasher(),
         tokens=get_token_service(config),
+        users=get_user_repository(session),
     )
     assert isinstance(service, AuthService)

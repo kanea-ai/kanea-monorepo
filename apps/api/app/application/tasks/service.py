@@ -158,7 +158,7 @@ class TaskService:
         all tasks and can filter freely; other principals are forced
         to see only their own assigned tasks regardless of any
         ?assignee_id query — the filter is silently overridden."""
-        is_admin = requester.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        is_admin = requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
         effective_assignee_id = assignee_id if is_admin else requester.member_id
 
         rows = await self.tasks.list_by_workspace(
@@ -388,7 +388,7 @@ class TaskService:
         task = await self._load_task(task_id, requester)
         await self._require_workspace_team(request.requested_team_id, requester)
 
-        is_admin = requester.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        is_admin = requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
         if not is_admin and requester.member_id not in (
             task.assignee_id,
             task.created_by_id,
@@ -582,7 +582,7 @@ class TaskService:
     async def _require_team_leadership_for_source(self, requester: Principal, source: Task) -> None:
         """Fulfill / reject permission: workspace admin OR a HEAD /
         MANAGER / LEAD on the source task's team."""
-        if requester.role in (MemberRole.OWNER, MemberRole.ADMIN):
+        if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             return
         me = await self.members.get_by_id(requester.member_id)
         if me is None:  # pragma: no cover
@@ -631,7 +631,7 @@ class TaskService:
         leadership (HEAD / MANAGER / LEAD) bypass — they're the
         escalation path for the cross-team request workflow."""
         # Workspace admins always get through.
-        if requester.role in (MemberRole.OWNER, MemberRole.ADMIN):
+        if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             return
 
         me = await self.members.get_by_id(requester.member_id)

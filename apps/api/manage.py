@@ -73,7 +73,7 @@ def main() -> int:
     promote.add_argument(
         "--role",
         type=_parse_role,
-        default=MemberRole.OWNER,
+        default=MemberRole.WORKSPACE_OWNER,
         help="Target role (default: OWNER).",
     )
 

@@ -13,6 +13,12 @@ class EmailAlreadyExistsError(DomainError):
     """Raised on signup when the email collides with an existing member."""
 
 
+class WorkspaceNameConflictError(DomainError):
+    """Raised on signup when the requested workspace name collides
+    with an existing one. Phase 1 enforces global uniqueness on
+    workspaces.name."""
+
+
 class InvalidMemberTypeError(DomainError):
     """Raised when an operation receives a member of the wrong type."""
 

@@ -88,20 +88,19 @@ class TaskRelationType(StrEnum):
 
 
 class MemberRole(StrEnum):
-    """Role a member holds within their workspace.
+    """Workspace-level role a member holds. Distinct from TeamRole,
+    which is the intra-team rank.
 
-    OWNER  : full control; signed up first or invited as owner. Cannot be
-             removed without ownership transfer (rule enforced at the
-             service layer, not here).
-    ADMIN  : everything except destroying the workspace and managing the
-             OWNER. Can invite + manage other ADMINs and MEMBERs.
-    MEMBER : default for invited collaborators. Can interact with tasks
-             but not the team or billing.
+    Phase 1 renamed the values from OWNER/ADMIN/MEMBER to the explicit
+    WORKSPACE_* form so the JWT, audit log, and UI never confuse a
+    workspace owner with a team member. The class is still called
+    MemberRole because it sits on the Member entity; the *values*
+    are the org-level roles.
     """
 
-    OWNER = "OWNER"
-    ADMIN = "ADMIN"
-    MEMBER = "MEMBER"
+    WORKSPACE_OWNER = "WORKSPACE_OWNER"
+    WORKSPACE_ADMIN = "WORKSPACE_ADMIN"
+    WORKSPACE_MEMBER = "WORKSPACE_MEMBER"
 
 
 class RequestStatus(StrEnum):
