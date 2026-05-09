@@ -69,3 +69,5 @@ override.tf.json
 *_override.tf.json
 # Provider lock file is intentionally tracked.
 !**/.terraform.lock.hcl
+.claude/
+worktrees/
