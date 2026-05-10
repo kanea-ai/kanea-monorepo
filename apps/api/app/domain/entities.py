@@ -56,12 +56,31 @@ class Workspace:
 
 
 @dataclass(slots=True)
+class Department:
+    """Workspace-scoped grouping that sits one level above Teams.
+
+    A Department holds zero-or-more Teams (the join is on
+    teams.department_id, SET NULL on delete). Departments don't grant
+    permissions on their own — they're an organisational tag for the
+    UI's directory and team views."""
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    description: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
 class Team:
     id: UUID
     workspace_id: UUID
     name: str
-    created_at: datetime
-    updated_at: datetime
+    description: str | None = None
+    department_id: UUID | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)
@@ -105,6 +124,10 @@ class Member:
     # Intra-team rank when team_id is set. Null when the member isn't
     # on a team. Distinct from `role` (which is workspace-level).
     team_role: TeamRole | None = None
+    # Workspace-scoped soft lock. When True, every workspace-scoped
+    # JWT this member holds is rejected at the auth dep with 403; the
+    # underlying User can still log in to other workspaces.
+    is_suspended: bool = False
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

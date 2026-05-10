@@ -128,6 +128,25 @@ class WorkspaceModel(TimestampMixin, Base):
     )
 
 
+class DepartmentModel(TimestampMixin, Base):
+    __tablename__ = "departments"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "name", name="uq_departments_workspace_id_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    teams: Mapped[list[TeamModel]] = relationship(back_populates="department")
+
+
 class TeamModel(TimestampMixin, Base):
     __tablename__ = "teams"
     __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_teams_workspace_id_name"),)
@@ -140,9 +159,20 @@ class TeamModel(TimestampMixin, Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # SET NULL so deleting a department un-files the team rather than
+    # losing it. Nullable: a fresh team has no department until an
+    # admin files it.
+    department_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("departments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="teams")
     members: Mapped[list[MemberModel]] = relationship(back_populates="team")
+    department: Mapped[DepartmentModel | None] = relationship(back_populates="teams")
 
 
 class ProjectModel(TimestampMixin, Base):
@@ -209,6 +239,12 @@ class MemberModel(TimestampMixin, Base):
     team_role: Mapped[TeamRole | None] = mapped_column(team_role_enum, nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Workspace-scoped soft lock. Suspended members can still log in
+    # and use other workspaces; the auth dep rejects every workspace-
+    # scoped JWT they hold for THIS workspace with 403.
+    is_suspended: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     workspace: Mapped[WorkspaceModel] = relationship(back_populates="members")
     team: Mapped[TeamModel | None] = relationship(back_populates="members")

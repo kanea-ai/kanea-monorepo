@@ -5,16 +5,23 @@ from unittest.mock import MagicMock
 from app.api.deps import (
     get_auth_service,
     get_credentials_repository,
+    get_department_repository,
+    get_department_service,
     get_member_repository,
     get_password_hasher,
     get_settings,
+    get_team_repository,
+    get_team_service,
     get_token_service,
     get_user_repository,
     get_workspace_repository,
 )
 from app.application.auth.service import AuthService
+from app.application.departments.service import DepartmentService
+from app.application.teams.service import TeamService
 from app.core.config import Settings
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
+from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.workspace import SqlAlchemyWorkspaceRepository
 from app.infrastructure.security.password import BcryptPasswordHasher
@@ -55,6 +62,30 @@ def test_get_workspace_repository_wraps_session() -> None:
     session = MagicMock()
     repo = get_workspace_repository(session)
     assert isinstance(repo, SqlAlchemyWorkspaceRepository)
+
+
+def test_get_department_repository_wraps_session() -> None:
+    session = MagicMock()
+    repo = get_department_repository(session)
+    assert isinstance(repo, SqlAlchemyDepartmentRepository)
+
+
+def test_get_department_service_wires_dependencies() -> None:
+    session = MagicMock()
+    service = get_department_service(departments=get_department_repository(session))
+    assert isinstance(service, DepartmentService)
+
+
+def test_get_team_service_wires_dependencies() -> None:
+    """The team service now also depends on the department repo for
+    cross-tenant validation of department_id; the factory needs to
+    pass it through."""
+    session = MagicMock()
+    service = get_team_service(
+        teams=get_team_repository(session),
+        departments=get_department_repository(session),
+    )
+    assert isinstance(service, TeamService)
 
 
 def test_get_auth_service_wires_dependencies() -> None:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import PrincipalDep, TeamServiceDep, WorkspaceAdminDep
 from app.application.teams.schemas import (
@@ -10,7 +11,11 @@ from app.application.teams.schemas import (
     TeamResponse,
     UpdateTeamRequest,
 )
-from app.domain.exceptions import TeamNameConflictError, TeamNotFoundError
+from app.domain.exceptions import (
+    DepartmentNotFoundError,
+    TeamNameConflictError,
+    TeamNotFoundError,
+)
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -23,8 +28,12 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 async def list_teams(
     principal: PrincipalDep,
     service: TeamServiceDep,
+    department_id: Annotated[UUID | None, Query()] = None,
 ) -> list[TeamResponse]:
-    return await service.list_for_workspace(principal)
+    """List teams in the requester's workspace. Pass ``?department_id``
+    to scope to a single department — used by the Departments view to
+    show member teams under each card."""
+    return await service.list_for_workspace(principal, department_id=department_id)
 
 
 @router.post(
@@ -42,6 +51,8 @@ async def create_team(
         return await service.create(payload, principal)
     except TeamNameConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DepartmentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.patch(
@@ -58,6 +69,8 @@ async def update_team(
     try:
         return await service.update(team_id, payload, principal)
     except TeamNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DepartmentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except TeamNameConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

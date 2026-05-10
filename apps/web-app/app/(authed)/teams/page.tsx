@@ -14,6 +14,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Modal } from '../../components/Modal';
 import {
   ApiError,
+  type Department,
   type Member,
   type TaskRequest,
   type TeamRecord,
@@ -23,6 +24,7 @@ import { useCurrentPrincipal } from '../../lib/auth';
 import {
   useCreateTeam,
   useDeleteTeam,
+  useDepartments,
   useFulfillRequest,
   useMembers,
   useRejectRequest,
@@ -61,16 +63,33 @@ const TEAMS_PAGE_SIZE = 20;
 function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const { data: teams, isLoading, isError, error } = useTeams();
   const { data: members } = useMembers();
+  const { data: departments } = useDepartments();
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState('');
+  // 'all' = show every team, '' (empty string) = unfiled-only, else
+  // a specific department id. Stored in state so the dropdown sticks
+  // around while the user pages.
+  const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const [openTeam, setOpenTeam] = useState<TeamRecord | null>(null);
 
+  const departmentsById = useMemo(() => {
+    const map = new Map<string, Department>();
+    for (const d of departments ?? []) map.set(d.id, d);
+    return map;
+  }, [departments]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return teams ?? [];
-    return (teams ?? []).filter((t) => t.name.toLowerCase().includes(q));
-  }, [teams, search]);
+    let rows = teams ?? [];
+    if (departmentFilter === '') {
+      rows = rows.filter((t) => t.department_id == null);
+    } else if (departmentFilter !== 'all') {
+      rows = rows.filter((t) => t.department_id === departmentFilter);
+    }
+    if (q) rows = rows.filter((t) => t.name.toLowerCase().includes(q));
+    return rows;
+  }, [teams, search, departmentFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / TEAMS_PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -97,7 +116,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         ) : null}
       </header>
 
-      <div className="border-b border-slate-100 px-4 py-2">
+      <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-2 sm:flex-row">
         <input
           type="search"
           value={search}
@@ -106,8 +125,24 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
             setPage(1);
           }}
           placeholder="Search teams by name…"
-          className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
+        <select
+          value={departmentFilter}
+          onChange={(e) => {
+            setDepartmentFilter(e.target.value);
+            setPage(1);
+          }}
+          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          <option value="all">All departments</option>
+          <option value="">Unfiled (no department)</option>
+          {(departments ?? []).map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {isError ? (
@@ -133,6 +168,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
                 key={t.id}
                 team={t}
                 memberCount={teamMembers.length}
+                department={t.department_id ? (departmentsById.get(t.department_id) ?? null) : null}
                 onOpen={() => setOpenTeam(t)}
               />
             );
@@ -156,13 +192,18 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         />
       ) : null}
 
-      <CreateTeamDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreateTeamDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        departments={departments ?? []}
+      />
 
       {openTeam ? (
         <TeamDetailDrawer
           team={openTeam}
           isAdmin={isAdmin}
           members={members ?? []}
+          departments={departments ?? []}
           onClose={() => setOpenTeam(null)}
         />
       ) : null}
@@ -173,10 +214,12 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
 function TeamRow({
   team,
   memberCount,
+  department,
   onOpen,
 }: {
   team: TeamRecord;
   memberCount: number;
+  department: Department | null;
   onOpen: () => void;
 }) {
   // Pending cross-team-request count surfaces inline so admins know
@@ -188,10 +231,22 @@ function TeamRow({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full items-center justify-between gap-3 px-4 py-2 text-left transition-colors hover:bg-slate-50"
+        className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
       >
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-slate-900">{team.name}</p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-medium text-slate-900">{team.name}</p>
+            {department ? (
+              <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-700">
+                {department.name}
+              </span>
+            ) : null}
+          </div>
+          {team.description ? (
+            <p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{team.description}</p>
+          ) : (
+            <p className="mt-0.5 text-xs italic text-slate-400">No description.</p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-3 text-xs">
           <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
@@ -209,14 +264,26 @@ function TeamRow({
   );
 }
 
-function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function CreateTeamDialog({
+  open,
+  onClose,
+  departments,
+}: {
+  open: boolean;
+  onClose: () => void;
+  departments: Department[];
+}) {
   const create = useCreateTeam();
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [departmentId, setDepartmentId] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setName('');
+      setDescription('');
+      setDepartmentId('');
       setError(null);
     }
   }, [open]);
@@ -225,7 +292,11 @@ function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => voi
     e.preventDefault();
     setError(null);
     try {
-      await create.mutateAsync({ name: name.trim() });
+      await create.mutateAsync({
+        name: name.trim(),
+        description: description.trim() || null,
+        department_id: departmentId || null,
+      });
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to create team');
@@ -238,7 +309,7 @@ function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => voi
       onClose={onClose}
       pending={create.isPending}
       title="Create team"
-      subtitle="Pick a short, descriptive name. You can rename later."
+      subtitle="Pick a short, descriptive name. Description and department are optional."
       footer={
         <>
           <button
@@ -279,6 +350,44 @@ function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => voi
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
+        <div>
+          <label
+            htmlFor="team_description"
+            className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
+          >
+            Description
+          </label>
+          <textarea
+            id="team_description"
+            value={description}
+            rows={3}
+            maxLength={20_000}
+            placeholder="What this team is responsible for."
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+        <div>
+          <label
+            htmlFor="team_department"
+            className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
+          >
+            Department
+          </label>
+          <select
+            id="team_department"
+            value={departmentId}
+            onChange={(e) => setDepartmentId(e.target.value)}
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            <option value="">No department (file later)</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+        </div>
         {error ? (
           <p role="alert" className="text-sm text-red-600">
             {error}
@@ -295,25 +404,31 @@ function TeamDetailDrawer({
   team,
   isAdmin,
   members,
+  departments,
   onClose,
 }: {
   team: TeamRecord;
   isAdmin: boolean;
   members: Member[];
+  departments: Department[];
   onClose: () => void;
 }) {
   const update = useUpdateTeam();
   const remove = useDeleteTeam();
   const setMemberTeam = useSetMemberTeam();
   const [name, setName] = useState(team.name);
+  const [description, setDescription] = useState(team.description ?? '');
+  const [departmentId, setDepartmentId] = useState<string>(team.department_id ?? '');
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // Reset name when a different team is opened.
+  // Reset when a different team is opened.
   useEffect(() => {
     setName(team.name);
+    setDescription(team.description ?? '');
+    setDepartmentId(team.department_id ?? '');
     setError(null);
-  }, [team.id, team.name]);
+  }, [team.id, team.name, team.description, team.department_id]);
 
   // Escape closes the drawer.
   useEffect(() => {
@@ -327,14 +442,29 @@ function TeamDetailDrawer({
   const onTeam = members.filter((m) => m.team_id === team.id);
   const ranked = [...onTeam].sort((a, b) => roleRank(a.team_role) - roleRank(b.team_role));
 
-  const onSaveName = async (e: FormEvent) => {
+  const onSaveDetails = async (e: FormEvent) => {
     e.preventDefault();
-    if (name.trim() === '' || name.trim() === team.name) return;
     setError(null);
+    const trimmedName = name.trim();
+    const trimmedDesc = description.trim();
+    const nameChanged = trimmedName !== team.name && trimmedName !== '';
+    const descChanged = trimmedDesc !== (team.description ?? '');
+    // department_id select stores '' for "no department"; the api takes
+    // null to mean the same. Both clear the FK.
+    const newDept = departmentId === '' ? null : departmentId;
+    const deptChanged = newDept !== team.department_id;
+    if (!nameChanged && !descChanged && !deptChanged) return;
     try {
-      await update.mutateAsync({ id: team.id, payload: { name: name.trim() } });
+      await update.mutateAsync({
+        id: team.id,
+        payload: {
+          ...(nameChanged ? { name: trimmedName } : {}),
+          ...(descChanged ? { description: trimmedDesc === '' ? null : trimmedDesc } : {}),
+          ...(deptChanged ? { department_id: newDept } : {}),
+        },
+      });
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to rename');
+      setError(err instanceof ApiError ? err.detail : 'Failed to save');
     }
   };
 
@@ -382,14 +512,14 @@ function TeamDetailDrawer({
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {isAdmin ? (
-              <form onSubmit={onSaveName} className="mb-5 space-y-2">
-                <label
-                  htmlFor="team_drawer_name"
-                  className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-                >
-                  Rename
-                </label>
-                <div className="flex items-center gap-2">
+              <form onSubmit={onSaveDetails} className="mb-5 space-y-3">
+                <div>
+                  <label
+                    htmlFor="team_drawer_name"
+                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                  >
+                    Name
+                  </label>
                   <input
                     id="team_drawer_name"
                     type="text"
@@ -397,18 +527,85 @@ function TeamDetailDrawer({
                     value={name}
                     maxLength={120}
                     onChange={(e) => setName(e.target.value)}
-                    className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
+                </div>
+                <div>
+                  <label
+                    htmlFor="team_drawer_description"
+                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                  >
+                    Description
+                  </label>
+                  <textarea
+                    id="team_drawer_description"
+                    rows={3}
+                    value={description}
+                    maxLength={20_000}
+                    placeholder="What this team is responsible for."
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="team_drawer_department"
+                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                  >
+                    Department
+                  </label>
+                  <select
+                    id="team_drawer_department"
+                    value={departmentId}
+                    onChange={(e) => setDepartmentId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">No department</option>
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex justify-end">
                   <button
                     type="submit"
-                    disabled={update.isPending || name.trim() === '' || name.trim() === team.name}
+                    disabled={update.isPending}
                     className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {update.isPending ? 'Saving…' : 'Save'}
+                    {update.isPending ? 'Saving…' : 'Save changes'}
                   </button>
                 </div>
               </form>
-            ) : null}
+            ) : (
+              <section className="mb-5 space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Description
+                  </p>
+                  <p className="mt-1 text-sm text-slate-800">
+                    {team.description ? (
+                      team.description
+                    ) : (
+                      <span className="italic text-slate-500">No description.</span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Department
+                  </p>
+                  <p className="mt-1 text-sm text-slate-800">
+                    {team.department_id ? (
+                      (departments.find((d) => d.id === team.department_id)?.name ?? '—')
+                    ) : (
+                      <span className="italic text-slate-500">Unfiled.</span>
+                    )}
+                  </p>
+                </div>
+              </section>
+            )}
 
             <div className="mb-3 flex items-baseline justify-between">
               <h3 className="text-sm font-semibold text-slate-900">

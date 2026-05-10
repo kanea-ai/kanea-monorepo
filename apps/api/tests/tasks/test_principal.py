@@ -10,7 +10,11 @@ import jwt
 import pytest
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.api.deps import get_current_principal
+# The DB-touching ``get_current_principal`` wraps ``_decode_principal``
+# with a workspace-suspension lookup. Direct unit tests of the JWT
+# decoding path import the raw decoder so they don't need to seed a
+# member row.
+from app.api.deps import _decode_principal as get_current_principal
 from app.application.tasks.schemas import Principal
 from app.domain.enums import MemberType
 from app.infrastructure.security.tokens import JwtSettings, JwtTokenService

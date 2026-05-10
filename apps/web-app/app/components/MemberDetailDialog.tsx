@@ -12,7 +12,14 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type Member, type MemberRole, type TeamRole } from '../lib/api';
-import { useMemberStats, useSetMemberTeam, useTeams, useUpdateMemberProfile } from '../lib/queries';
+import {
+  useMemberStats,
+  useSetMemberSuspension,
+  useSetMemberTeam,
+  useTeams,
+  useUpdateMemberProfile,
+} from '../lib/queries';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const ROLE_PILL: Record<MemberRole, string> = {
   WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
@@ -33,8 +40,13 @@ export function MemberDetailDialog({
 }) {
   const update = useUpdateMemberProfile();
   const setTeam = useSetMemberTeam();
+  const setSuspension = useSetMemberSuspension();
   const { data: teams } = useTeams();
   const { data: stats, isLoading: statsLoading } = useMemberStats(member.id);
+  // The suspension flow is destructive enough (kicks the member out
+  // of every workspace request) that we route it through a confirm
+  // dialog. Revoking is one click — no second prompt.
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
 
   const [name, setName] = useState(member.name);
   const [role, setRole] = useState<MemberRole>(member.role);
@@ -102,7 +114,31 @@ export function MemberDetailDialog({
   };
 
   const isHuman = member.type === 'HUMAN';
-  const pending = update.isPending || setTeam.isPending;
+  const pending = update.isPending || setTeam.isPending || setSuspension.isPending;
+
+  const onSuspend = async () => {
+    setError(null);
+    try {
+      await setSuspension.mutateAsync({
+        memberId: member.id,
+        payload: { is_suspended: true },
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to suspend');
+    }
+  };
+
+  const onRevoke = async () => {
+    setError(null);
+    try {
+      await setSuspension.mutateAsync({
+        memberId: member.id,
+        payload: { is_suspended: false },
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to revoke');
+    }
+  };
 
   return (
     <div
@@ -117,7 +153,14 @@ export function MemberDetailDialog({
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">{member.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold text-slate-900">{member.name}</h2>
+              {member.is_suspended ? (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                  Suspended
+                </span>
+              ) : null}
+            </div>
             {member.email ? <p className="text-xs text-slate-500">{member.email}</p> : null}
           </div>
           <TypePill type={member.type} />
@@ -278,6 +321,51 @@ export function MemberDetailDialog({
           )}
         </Section>
 
+        {/* Suspension is workspace-scoped: a flipped member can still
+            log in and use other workspaces, but every request bound to
+            THIS workspace 403s at the api. Admin-only; the api enforces
+            the last-active-owner invariant and refuses self-suspend. */}
+        {isAdmin && !isSelf ? (
+          <Section title="Workspace access">
+            {member.is_suspended ? (
+              <div className="space-y-2">
+                <p className="text-sm text-red-700">
+                  This member is currently suspended. They cannot use this workspace until the
+                  suspension is revoked. They can still access other workspaces they belong to.
+                </p>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={onRevoke}
+                    disabled={pending}
+                    className="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {setSuspension.isPending ? 'Revoking…' : 'Revoke suspension'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-600">
+                  Suspending blocks every request this member sends to this workspace (403). They
+                  can still use other workspaces they belong to. The last active workspace owner
+                  cannot be suspended.
+                </p>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmSuspend(true)}
+                    disabled={pending}
+                    className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Suspend member
+                  </button>
+                </div>
+              </div>
+            )}
+          </Section>
+        ) : null}
+
         {error ? (
           <p role="alert" className="px-5 pb-2 text-sm text-red-600">
             {error}
@@ -296,6 +384,19 @@ export function MemberDetailDialog({
             Close
           </button>
         </div>
+
+        <ConfirmDialog
+          open={confirmSuspend}
+          title={`Suspend ${member.name}?`}
+          message="Every request this member sends to this workspace will be blocked with 403 until you revoke the suspension. Their tasks, comments and history are kept."
+          confirmLabel="Suspend"
+          pending={setSuspension.isPending}
+          onCancel={() => setConfirmSuspend(false)}
+          onConfirm={async () => {
+            await onSuspend();
+            setConfirmSuspend(false);
+          }}
+        />
       </div>
     </div>
   );

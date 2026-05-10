@@ -87,6 +87,24 @@ class ProjectNameConflictError(DomainError):
     uniqueness constraint."""
 
 
+class DepartmentNotFoundError(DomainError):
+    """Raised when a department id doesn't resolve in the requester's
+    workspace. Returned as 404 — same shape as truly-missing so
+    cross-tenant probing reveals nothing."""
+
+
+class DepartmentNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace
+    department name uniqueness constraint."""
+
+
+class MemberSuspendedError(DomainError):
+    """Raised when a workspace-scoped JWT belongs to a suspended member.
+    The auth dependency catches this and maps to 403 Forbidden so the UI
+    can show a clear "your access to this workspace was revoked"
+    message; the underlying user can still log in to other workspaces."""
+
+
 class TeamNotFoundError(DomainError):
     """Raised when a team id doesn't resolve in the requester's
     workspace."""

@@ -25,6 +25,8 @@ from app.application.auth.ports import (
     WorkspaceRepository,
 )
 from app.application.auth.service import AuthService
+from app.application.departments.ports import DepartmentRepository
+from app.application.departments.service import DepartmentService
 from app.application.me.ports import MeMemberRepository
 from app.application.me.service import MeService
 from app.application.notifications.ports import (
@@ -57,6 +59,7 @@ from app.core.config import Settings, settings
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
+from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
 from app.infrastructure.repositories.member import SqlAlchemyMemberRepository
 from app.infrastructure.repositories.notification import SqlAlchemyNotificationRepository
@@ -237,10 +240,24 @@ def get_project_service(
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
 
 
+def get_department_repository(session: SessionDep) -> DepartmentRepository:
+    return SqlAlchemyDepartmentRepository(session)
+
+
+def get_department_service(
+    departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
+) -> DepartmentService:
+    return DepartmentService(departments=departments)
+
+
+DepartmentServiceDep = Annotated[DepartmentService, Depends(get_department_service)]
+
+
 def get_team_service(
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
+    departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
 ) -> TeamService:
-    return TeamService(teams=teams)
+    return TeamService(teams=teams, departments=departments)
 
 
 TeamServiceDep = Annotated[TeamService, Depends(get_team_service)]
@@ -357,10 +374,13 @@ def get_me_service(
 _bearer_scheme = HTTPBearer(auto_error=True, description="Bearer JWT issued by /auth")
 
 
-def get_current_principal(
+def _decode_principal(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
 ) -> Principal:
+    """JWT-only principal builder. Doesn't touch the DB — used inside
+    ``get_current_principal`` and inside paths (e.g. selection-token
+    exchange) that intentionally bypass the suspension gate."""
     if not isinstance(tokens, JwtTokenService):  # pragma: no cover - DI invariant
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -402,7 +422,56 @@ def get_current_principal(
     )
 
 
+async def get_current_principal(
+    principal: Annotated[Principal, Depends(_decode_principal)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
+) -> Principal:
+    """Decode the JWT AND enforce the workspace-scoped suspension lock.
+
+    A suspended member can still hold a valid (non-expired) JWT — the
+    gate sits here, in front of every workspace-scoped route, so the
+    moment an admin flips ``is_suspended`` on the member row the next
+    request bounces with 403. The underlying User row is untouched, so
+    the human can still log in and use any *other* workspace they
+    belong to: the lock is per-membership, not per-user.
+
+    Tokens with the ``select`` scope (the short-lived
+    multi-workspace-picker token) are not workspace-bound — they don't
+    target a specific member, so this check is skipped. Workspace
+    binding happens on the subsequent ``select_workspace`` call, which
+    re-issues a fresh JWT.
+
+    A 401 is returned (not 403) when the member row no longer exists
+    so a freshly deleted member can't keep using their old token.
+    """
+    if principal.scope == "select":
+        return principal
+
+    member = await members.get_by_id(principal.member_id)
+    if member is None or member.workspace_id != principal.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if member.is_suspended:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="your access to this workspace has been suspended",
+        )
+    return principal
+
+
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
+
+
+# Variant that skips the suspension check. Reserved for the few
+# endpoints that a suspended user must still be able to reach — e.g.
+# /auth/switch-workspace, where the whole point is to escape the
+# suspended workspace into one the user still has access to. Do NOT
+# apply this anywhere else — every other route MUST go through the
+# suspension gate.
+RawPrincipalDep = Annotated[Principal, Depends(_decode_principal)]
 
 
 def require_workspace_admin(principal: PrincipalDep) -> Principal:

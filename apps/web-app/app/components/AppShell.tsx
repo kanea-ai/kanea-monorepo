@@ -74,6 +74,7 @@ function AppShellInner({ children }: { children: ReactNode }) {
     { href: '/board', label: 'Board' },
     { href: '/projects', label: 'Projects' },
     { href: '/blocked', label: 'Blocked', badge: blocked?.length },
+    { href: '/departments', label: 'Departments' },
     { href: '/teams', label: 'Teams' },
     { href: '/directory', label: 'Directory' },
     { href: '/profile', label: 'My profile' },

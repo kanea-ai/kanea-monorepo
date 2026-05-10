@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import AuthServiceDep, PrincipalDep, get_oauth_client, get_settings
+from app.api.deps import AuthServiceDep, RawPrincipalDep, get_oauth_client, get_settings
 from app.application.auth.schemas import (
     AgentTokenRequest,
     LoginRequest,
@@ -87,13 +87,19 @@ async def select_workspace(
 )
 async def switch_workspace(
     payload: SwitchWorkspaceRequest,
-    principal: PrincipalDep,
+    principal: RawPrincipalDep,
     service: AuthServiceDep,
 ) -> TokenResponse:
     """Already-signed-in user reissues their access token bound to a
     different workspace they belong to. Distinct from
     /auth/select-workspace, which is the post-login picker that
     requires a selection_token. Drives the sidebar switcher.
+
+    Uses ``RawPrincipalDep`` so a member who is suspended in their
+    *current* workspace can still hit this endpoint to escape into
+    another workspace where their membership is active. The auth
+    service still verifies the requester holds a membership in the
+    target workspace.
     Returns 401 when the user has no membership in the requested
     workspace — same shape we use for cross-tenant attempts."""
     try:

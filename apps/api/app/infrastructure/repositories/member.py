@@ -25,6 +25,7 @@ def _to_entity(row: MemberModel) -> Member:
         team_role=row.team_role,
         model=row.model,
         last_seen_at=row.last_seen_at,
+        is_suspended=row.is_suspended,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -141,6 +142,19 @@ class SqlAlchemyMemberRepository:
             raise InvalidMemberTypeError("member not found")
         row.team_id = team_id
         row.team_role = team_role
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
+
+    async def set_suspended(self, member_id: UUID, *, is_suspended: bool) -> Member:
+        """Flip the workspace-scoped soft lock. Caller validates RBAC
+        and the last-owner invariant before invoking."""
+        from app.domain.exceptions import InvalidMemberTypeError
+
+        row = await self._session.get(MemberModel, member_id)
+        if row is None:
+            raise InvalidMemberTypeError("member not found")
+        row.is_suspended = is_suspended
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)

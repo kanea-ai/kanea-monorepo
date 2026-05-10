@@ -52,6 +52,8 @@ class TenantMemberRepository(Protocol):
         team_role: TeamRole | None,
     ) -> Member: ...
 
+    async def set_suspended(self, member_id: UUID, *, is_suspended: bool) -> Member: ...
+
     # Phase 5 batch 2 follow-up: per-member stats panel in the directory
     # detail dialog. Same SQL that backs /me/stats and the agent detail
     # page; it works for any member id.

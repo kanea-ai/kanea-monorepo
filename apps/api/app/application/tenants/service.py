@@ -27,6 +27,7 @@ from app.application.tenants.schemas import (
     InviteCreateResponse,
     InvitePreviewResponse,
     MemberFilters,
+    SetMemberSuspensionRequest,
     SetMemberTeamRequest,
     UpdateMemberProfileRequest,
     invite_create_response_from_entity,
@@ -336,6 +337,48 @@ class InviteService:
             team_id=request.team_id,
             team_role=request.team_role,
         )
+
+    async def set_member_suspension(
+        self,
+        member_id: UUID,
+        request: SetMemberSuspensionRequest,
+        principal: Principal,
+    ) -> Member:
+        """Workspace-scoped soft lock. Admins can suspend any member
+        in the workspace and revoke later — the auth dep does the
+        actual blocking on subsequent requests.
+
+        Guards:
+        - Tenant isolation: target must belong to ``principal.workspace_id``.
+        - Self-lock prevention: a principal can't suspend themselves
+          (they'd lock themselves out of the workspace they're
+          currently administering).
+        - Last-owner protection: can't suspend the last remaining
+          ``WORKSPACE_OWNER`` — same invariant the role-demotion path
+          enforces, for the same reason (the workspace must always
+          have at least one usable admin path).
+        """
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
+
+        target = await self.members.get_by_id(member_id)
+        if target is None or target.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+
+        if request.is_suspended and target.id == principal.member_id:
+            raise ForbiddenError("you cannot suspend your own membership")
+
+        # Last-owner protection on the suspend path. Revoking is
+        # always safe.
+        if request.is_suspended and target.role is MemberRole.WORKSPACE_OWNER:
+            owners = await self.members.list_for_workspace(
+                principal.workspace_id, role=MemberRole.WORKSPACE_OWNER
+            )
+            still_active_owners = [m for m in owners if m.id != target.id and not m.is_suspended]
+            if not still_active_owners:
+                raise ForbiddenError("cannot suspend the last active workspace owner")
+
+        return await self.members.set_suspended(member_id, is_suspended=request.is_suspended)
 
     async def _load_active_invite(self, raw_token: str) -> Invite:
         invite = await self.invites.get_by_token_hash(_hash_token(raw_token))

@@ -19,6 +19,7 @@ from app.application.tenants.schemas import (
     MemberFilters,
     MemberResponse,
     MemberStatsResponse,
+    SetMemberSuspensionRequest,
     SetMemberTeamRequest,
     UpdateMemberProfileRequest,
 )
@@ -187,6 +188,30 @@ async def update_member_profile(
     you can't demote the last WORKSPACE_OWNER."""
     try:
         member = await service.update_member_profile(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.patch(
+    "/members/{member_id}/suspension",
+    response_model=MemberResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_member_suspension(
+    member_id: UUID,
+    payload: SetMemberSuspensionRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Toggle the workspace-scoped soft lock. POST with
+    ``is_suspended=true`` to suspend, ``false`` to revoke. The
+    requester must be a workspace OWNER/ADMIN; you cannot suspend
+    yourself; the last active owner can't be suspended."""
+    try:
+        member = await service.set_member_suspension(member_id, payload, admin)
     except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ForbiddenError as exc:

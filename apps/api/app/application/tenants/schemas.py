@@ -69,6 +69,7 @@ class MemberResponse(BaseModel):
     priority: int
     team_id: UUID | None
     team_role: TeamRole | None
+    is_suspended: bool
 
     @classmethod
     def from_entity(cls, member: Member) -> MemberResponse:
@@ -82,6 +83,7 @@ class MemberResponse(BaseModel):
             priority=member.priority,
             team_id=member.team_id,
             team_role=member.team_role,
+            is_suspended=member.is_suspended,
         )
 
 
@@ -133,6 +135,17 @@ class UpdateMemberProfileRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     role: MemberRole | None = None
     priority: int | None = Field(default=None, ge=1, le=100)
+
+
+class SetMemberSuspensionRequest(BaseModel):
+    """Admin-only flip of the workspace-scoped soft lock. ``true``
+    suspends; ``false`` revokes. The service refuses to suspend the
+    last remaining workspace owner so a workspace can't be left with
+    no admin path back."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_suspended: bool
 
 
 class SetMemberTeamRequest(BaseModel):

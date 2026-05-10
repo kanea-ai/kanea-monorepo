@@ -455,6 +455,15 @@ export interface Member {
   // Team. Null when unassigned.
   team_id: string | null;
   team_role: TeamRole | null;
+  // Workspace-scoped soft lock. When true, every workspace-scoped
+  // request from this member's JWT is rejected with 403 by the api.
+  // The user can still log in to OTHER workspaces where they're not
+  // suspended.
+  is_suspended: boolean;
+}
+
+export interface SetMemberSuspensionPayload {
+  is_suspended: boolean;
 }
 
 export interface SetMemberTeamPayload {
@@ -547,6 +556,11 @@ export const tenantsApi = {
     }),
   setMemberTeam: (memberId: string, payload: SetMemberTeamPayload) =>
     request<Member>(`${V1}/tenants/members/${memberId}/team`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  setMemberSuspension: (memberId: string, payload: SetMemberSuspensionPayload) =>
+    request<Member>(`${V1}/tenants/members/${memberId}/suspension`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -792,18 +806,68 @@ export interface ProjectHistory {
   tasks: ProjectTaskHistory[];
 }
 
+// ---------- Departments ----------
+
+export interface Department {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDepartmentPayload {
+  name: string;
+  description?: string | null;
+}
+
+export interface UpdateDepartmentPayload {
+  name?: string | null;
+  description?: string | null;
+}
+
+export const departmentsApi = {
+  list: (name?: string) => {
+    const qs = name ? `?name=${encodeURIComponent(name)}` : '';
+    return request<Department[]>(`${V1}/departments${qs}`);
+  },
+  get: (id: string) => request<Department>(`${V1}/departments/${id}`),
+  create: (payload: CreateDepartmentPayload) =>
+    request<Department>(`${V1}/departments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateDepartmentPayload) =>
+    request<Department>(`${V1}/departments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) => requestVoid(`${V1}/departments/${id}`, { method: 'DELETE' }),
+};
+
 // ---------- Teams ----------
 
 export interface TeamRecord {
   id: string;
   workspace_id: string;
   name: string;
+  description: string | null;
+  department_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateTeamPayload {
   name: string;
+  description?: string | null;
+  department_id?: string | null;
+}
+
+export interface UpdateTeamPayload {
+  name?: string | null;
+  description?: string | null;
+  department_id?: string | null;
 }
 
 export const requestsApi = {
@@ -824,13 +888,16 @@ export const requestsApi = {
 };
 
 export const teamsApi = {
-  list: () => request<TeamRecord[]>(`${V1}/teams`),
+  list: (departmentId?: string) => {
+    const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : '';
+    return request<TeamRecord[]>(`${V1}/teams${qs}`);
+  },
   create: (payload: CreateTeamPayload) =>
     request<TeamRecord>(`${V1}/teams`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  update: (id: string, payload: CreateTeamPayload) =>
+  update: (id: string, payload: UpdateTeamPayload) =>
     request<TeamRecord>(`${V1}/teams/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 import {
   agentsApi,
   authSwitchApi,
+  departmentsApi,
   meApi,
   projectsApi,
   requestsApi,
@@ -16,6 +17,7 @@ import {
   type CreateAgentPayload,
   type CreateAgentResponse,
   type CreateCommentPayload,
+  type CreateDepartmentPayload,
   type CreateProjectPayload,
   type CreateRelationPayload,
   type ChangePasswordPayload,
@@ -24,6 +26,7 @@ import {
   type CreateRequestPayload,
   type CreateTaskPayload,
   type CreateTeamPayload,
+  type Department,
   type FulfillRequestPayload,
   type RejectRequestPayload,
   type RequestStatus,
@@ -44,6 +47,7 @@ import {
   type ProjectHistory,
   type RateTaskPayload,
   type SetBlockedPayload,
+  type SetMemberSuspensionPayload,
   type SetMemberTeamPayload,
   type Task,
   type TaskActivity,
@@ -54,11 +58,13 @@ import {
   type TaskStatus,
   type TeamRecord,
   type UpdateAgentPayload,
+  type UpdateDepartmentPayload,
   type UpdateMePayload,
   type UpdateMemberProfilePayload,
   type UpdateProjectPayload,
   type UpdateStatusPayload,
   type UpdateTaskLinksPayload,
+  type UpdateTeamPayload,
 } from './api';
 
 // Filters the kanban + dashboard pass to /tasks. The query cache key
@@ -211,6 +217,20 @@ export function useUpdateMemberProfile() {
   const qc = useQueryClient();
   return useMutation<Member, Error, { memberId: string; payload: UpdateMemberProfilePayload }>({
     mutationFn: ({ memberId, payload }) => tenantsApi.updateMemberProfile(memberId, payload),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+      qc.invalidateQueries({ queryKey: tenantKeys.member(vars.memberId) });
+    },
+  });
+}
+
+// Workspace-scoped soft-lock toggle. After flipping, the directory and
+// the member detail panel both need to refresh — the suspended pill is
+// painted from the member's `is_suspended` field.
+export function useSetMemberSuspension() {
+  const qc = useQueryClient();
+  return useMutation<Member, Error, { memberId: string; payload: SetMemberSuspensionPayload }>({
+    mutationFn: ({ memberId, payload }) => tenantsApi.setMemberSuspension(memberId, payload),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: tenantKeys.members });
       qc.invalidateQueries({ queryKey: tenantKeys.member(vars.memberId) });
@@ -554,12 +574,75 @@ export function useDeleteProject() {
 
 export const teamKeys = {
   all: ['teams'] as const satisfies QueryKey,
+  byDepartment: (departmentId: string) =>
+    ['teams', 'department', departmentId] as const satisfies QueryKey,
 };
 
-export function useTeams() {
+export function useTeams(departmentId?: string) {
   return useQuery<TeamRecord[]>({
-    queryKey: teamKeys.all,
-    queryFn: () => teamsApi.list(),
+    queryKey: departmentId ? teamKeys.byDepartment(departmentId) : teamKeys.all,
+    queryFn: () => teamsApi.list(departmentId),
+  });
+}
+
+// ---------- Departments ----------
+
+export const departmentKeys = {
+  all: ['departments'] as const satisfies QueryKey,
+  list: (name?: string) =>
+    (name ? (['departments', { name }] as const) : (['departments'] as const)) satisfies QueryKey,
+  detail: (id: string) => ['departments', id] as const satisfies QueryKey,
+};
+
+export function useDepartments(name?: string) {
+  return useQuery<Department[]>({
+    queryKey: departmentKeys.list(name),
+    queryFn: () => departmentsApi.list(name),
+  });
+}
+
+export function useDepartment(id: string | null) {
+  return useQuery<Department>({
+    queryKey: departmentKeys.detail(id ?? ''),
+    queryFn: () => departmentsApi.get(id as string),
+    enabled: !!id,
+  });
+}
+
+export function useCreateDepartment() {
+  const qc = useQueryClient();
+  return useMutation<Department, Error, CreateDepartmentPayload>({
+    mutationFn: (payload) => departmentsApi.create(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: departmentKeys.all });
+    },
+  });
+}
+
+export function useUpdateDepartment() {
+  const qc = useQueryClient();
+  return useMutation<Department, Error, { id: string; payload: UpdateDepartmentPayload }>({
+    mutationFn: ({ id, payload }) => departmentsApi.update(id, payload),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: departmentKeys.all });
+      qc.invalidateQueries({ queryKey: departmentKeys.detail(vars.id) });
+      // Team cards show the dept name → team list cache needs a refresh.
+      qc.invalidateQueries({ queryKey: teamKeys.all });
+    },
+  });
+}
+
+export function useDeleteDepartment() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => departmentsApi.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: departmentKeys.all });
+      // Teams that pointed at the deleted dept have their FK set to
+      // null on the server — refresh the team list so the UI doesn't
+      // claim a stale department label.
+      qc.invalidateQueries({ queryKey: teamKeys.all });
+    },
   });
 }
 
@@ -634,7 +717,7 @@ export function useCreateTeam() {
 
 export function useUpdateTeam() {
   const qc = useQueryClient();
-  return useMutation<TeamRecord, Error, { id: string; payload: CreateTeamPayload }>({
+  return useMutation<TeamRecord, Error, { id: string; payload: UpdateTeamPayload }>({
     mutationFn: ({ id, payload }) => teamsApi.update(id, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: teamKeys.all });

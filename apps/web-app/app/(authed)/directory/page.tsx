@@ -351,32 +351,54 @@ function Row({
   onOpen: () => void;
 }) {
   const teamName = member.team_id ? (teams.find((t) => t.id === member.team_id)?.name ?? '—') : '—';
+  // Suspended rows are visually muted across the whole row so admins
+  // see at a glance who's locked out — not just by the pill in the
+  // name column.
+  const rowTone = member.is_suspended
+    ? 'cursor-pointer border-t border-slate-100 bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100'
+    : 'cursor-pointer border-t border-slate-100 transition-colors hover:bg-slate-50';
   return (
-    <tr
-      onClick={onOpen}
-      className="cursor-pointer border-t border-slate-100 transition-colors hover:bg-slate-50"
-    >
-      <td className="px-4 py-2.5 font-medium text-slate-900">{member.name}</td>
+    <tr onClick={onOpen} className={rowTone}>
+      <td className="px-4 py-2.5 font-medium">
+        <div className="flex items-center gap-2">
+          <span className={member.is_suspended ? 'text-slate-500' : 'text-slate-900'}>
+            {member.name}
+          </span>
+          {member.is_suspended ? (
+            <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-800">
+              Suspended
+            </span>
+          ) : null}
+        </div>
+      </td>
       <td className="px-4 py-2.5">
         <TypePill type={member.type} />
       </td>
       <td className="px-4 py-2.5">
         <RolePill role={member.role} />
       </td>
-      <td className="px-4 py-2.5 text-slate-700">
-        {teamName}
+      <td className="px-4 py-2.5">
+        <span className={member.is_suspended ? 'text-slate-500' : 'text-slate-700'}>
+          {teamName}
+        </span>
         {member.team_role ? (
           <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">
             {member.team_role}
           </span>
         ) : null}
       </td>
-      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+      <td className="px-4 py-2.5 text-right tabular-nums">
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
           P{member.priority}
         </span>
       </td>
-      <td className="hidden px-4 py-2.5 text-slate-500 lg:table-cell">{member.email ?? '—'}</td>
+      <td
+        className={`hidden px-4 py-2.5 lg:table-cell ${
+          member.is_suspended ? 'text-slate-400' : 'text-slate-500'
+        }`}
+      >
+        {member.email ?? '—'}
+      </td>
     </tr>
   );
 }

@@ -262,6 +262,8 @@ def test_post_teams_accepts_admin(client: TestClient, team_service_mock: AsyncMo
             "id": uuid4(),
             "workspace_id": uuid4(),
             "name": "Backend",
+            "description": None,
+            "department_id": None,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
         },
