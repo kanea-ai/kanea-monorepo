@@ -454,7 +454,7 @@ function TeamDetailDrawer({
             )}
 
             {isAdmin ? (
-              <UnassignedSection
+              <AddMembersSection
                 team={team}
                 members={members}
                 pending={setMemberTeam.isPending}
@@ -567,7 +567,7 @@ function DrawerMemberRow({
   );
 }
 
-function UnassignedSection({
+function AddMembersSection({
   team,
   members,
   onAssign,
@@ -578,33 +578,77 @@ function UnassignedSection({
   onAssign: (memberId: string) => Promise<void>;
   pending: boolean;
 }) {
-  const unassigned = members.filter((m) => m.team_id == null && m.type === 'HUMAN');
-  if (unassigned.length === 0) {
+  // Anyone in the workspace who isn't already on THIS team is fair
+  // game. That includes humans/agents on other teams — moving someone
+  // across teams is a one-click action; the previous "unassigned only"
+  // list missed that flow entirely.
+  const candidates = members.filter((m) => m.team_id !== team.id);
+  const [search, setSearch] = useState('');
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = q ? candidates.filter((m) => m.name.toLowerCase().includes(q)) : candidates;
+    // Show unassigned first, then alphabetical inside each group.
+    return [...rows].sort((a, b) => {
+      const aFree = a.team_id == null ? 0 : 1;
+      const bFree = b.team_id == null ? 0 : 1;
+      if (aFree !== bFree) return aFree - bFree;
+      return a.name.localeCompare(b.name);
+    });
+  }, [candidates, search]);
+
+  if (candidates.length === 0) {
     return (
       <p className="mt-4 text-[11px] italic text-slate-400">
-        Everyone in the workspace is already on a team.
+        Everyone in the workspace is already on this team.
       </p>
     );
   }
+
   return (
     <div className="mt-5 rounded-md border border-dashed border-slate-200 p-3">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-        Unassigned humans
+        Add members
       </p>
-      <ul className="space-y-1">
-        {unassigned.map((m) => (
-          <li key={m.id} className="flex items-center justify-between text-xs">
-            <span className="truncate text-slate-800">{m.name}</span>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => onAssign(m.id)}
-              className="rounded border border-indigo-200 bg-white px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-            >
-              Add to {team.name}
-            </button>
-          </li>
-        ))}
+      <input
+        type="search"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search…"
+        className="mb-2 w-full rounded-md border border-slate-300 px-2 py-1 text-xs shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+      />
+      <ul className="max-h-48 space-y-1 overflow-y-auto">
+        {filtered.length === 0 ? (
+          <li className="text-[11px] italic text-slate-400">No matches.</li>
+        ) : (
+          filtered.map((m) => {
+            const onOther = m.team_id != null;
+            return (
+              <li key={m.id} className="flex items-center justify-between text-xs">
+                <span className="min-w-0 truncate text-slate-800">
+                  {m.name}
+                  {m.type === 'AGENT' ? (
+                    <span className="ml-1 rounded bg-violet-100 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700">
+                      Agent
+                    </span>
+                  ) : null}
+                  {onOther ? (
+                    <span className="ml-1 text-[10px] italic text-slate-500">
+                      (was on another team)
+                    </span>
+                  ) : null}
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => onAssign(m.id)}
+                  className="ml-2 shrink-0 rounded border border-indigo-200 bg-white px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                >
+                  {onOther ? 'Move' : 'Add'}
+                </button>
+              </li>
+            );
+          })
+        )}
       </ul>
     </div>
   );

@@ -31,7 +31,7 @@ from app.application.tenants.schemas import (
     UpdateMemberProfileRequest,
     invite_create_response_from_entity,
 )
-from app.domain.entities import Invite, Member, User
+from app.domain.entities import AgentStats, Invite, Member, User
 from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
@@ -246,6 +246,16 @@ class InviteService:
 
         raise ForbiddenError("not allowed to view this member")
 
+    async def get_member_stats(self, member_id: UUID, principal: Principal) -> AgentStats:
+        """Per-member stats. Visibility mirrors get_member exactly —
+        the route layer calls get_member first, so by the time we hit
+        compute_agent_stats we already know the principal can see this
+        member."""
+        # The visibility check throws InvalidMemberTypeError / ForbiddenError;
+        # we let it propagate — the router maps both to the right HTTP code.
+        await self.get_member(member_id, principal)
+        return await self.members.compute_agent_stats(member_id)
+
     async def update_member_profile(
         self,
         member_id: UUID,
@@ -286,6 +296,7 @@ class InviteService:
             member_id,
             name=request.name,
             role=request.role,
+            priority=request.priority,
         )
 
     async def set_member_team(

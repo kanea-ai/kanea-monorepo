@@ -486,7 +486,9 @@ async def test_update_member_profile_admin_can_rename(
     tenant_members.update_profile.return_value = target
 
     await service.update_member_profile(target.id, UpdateMemberProfileRequest(name="Renamed"), p)
-    tenant_members.update_profile.assert_awaited_once_with(target.id, name="Renamed", role=None)
+    tenant_members.update_profile.assert_awaited_once_with(
+        target.id, name="Renamed", role=None, priority=None
+    )
 
 
 async def test_update_member_profile_member_forbidden(

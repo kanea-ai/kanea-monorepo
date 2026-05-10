@@ -31,6 +31,7 @@ import {
   type InviteCreatePayload,
   type InviteCreateResponse,
   type MemberListFilters,
+  type MemberStats,
   type MeProfile,
   type MeStats,
   type Member,
@@ -193,6 +194,14 @@ export function useMember(id: string) {
   return useQuery<Member>({
     queryKey: tenantKeys.member(id),
     queryFn: () => tenantsApi.getMember(id),
+    enabled: !!id,
+  });
+}
+
+export function useMemberStats(id: string | null) {
+  return useQuery<MemberStats>({
+    queryKey: ['tenants', 'members', id ?? '', 'stats'],
+    queryFn: () => tenantsApi.getMemberStats(id as string),
     enabled: !!id,
   });
 }

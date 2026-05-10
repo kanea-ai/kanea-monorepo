@@ -18,6 +18,7 @@ from app.application.tenants.schemas import (
     InvitePreviewResponse,
     MemberFilters,
     MemberResponse,
+    MemberStatsResponse,
     SetMemberTeamRequest,
     UpdateMemberProfileRequest,
 )
@@ -141,6 +142,34 @@ async def get_member(
     except ForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return MemberResponse.from_entity(member)
+
+
+@router.get(
+    "/members/{member_id}/stats",
+    response_model=MemberStatsResponse,
+)
+async def get_member_stats(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberStatsResponse:
+    """Per-member stats panel for the directory detail dialog. Same
+    visibility rule as GET /members/{id}: admins see anyone, everyone
+    else only sees themselves or a teammate."""
+    try:
+        stats = await service.get_member_stats(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberStatsResponse(
+        assigned_count=stats.assigned_count,
+        completed_count=stats.completed_count,
+        avg_resolution_seconds=stats.avg_resolution_seconds,
+        accuracy_percent=stats.accuracy_percent,
+        last_activity_at=stats.last_activity_at,
+        total_tokens_used=stats.total_tokens_used,
+    )
 
 
 @router.patch(

@@ -487,6 +487,16 @@ export interface MemberListFilters {
 export interface UpdateMemberProfilePayload {
   name?: string | null;
   role?: MemberRole | null;
+  priority?: number | null;
+}
+
+export interface MemberStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  accuracy_percent: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
 }
 
 export const tenantsApi = {
@@ -502,6 +512,7 @@ export const tenantsApi = {
     return request<Member[]>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
   },
   getMember: (id: string) => request<Member>(`${V1}/tenants/members/${id}`),
+  getMemberStats: (id: string) => request<MemberStats>(`${V1}/tenants/members/${id}/stats`),
   updateMemberProfile: (id: string, payload: UpdateMemberProfilePayload) =>
     request<Member>(`${V1}/tenants/members/${id}`, {
       method: 'PATCH',

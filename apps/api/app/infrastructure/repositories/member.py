@@ -234,11 +234,12 @@ class SqlAlchemyMemberRepository:
         *,
         name: str | None = None,
         role: MemberRole | None = None,
+        priority: int | None = None,
     ) -> Member:
-        """Admin-side edit of a member's display name and/or workspace
-        role. Distinct from `update()` (which is for agent-only fields).
-        Raises if the row is missing — callers verify existence + the
-        last-OWNER invariant before calling."""
+        """Admin-side edit of a member's display name, workspace role,
+        and/or priority. Distinct from `update()` (which is for agent-
+        only fields). Raises if the row is missing — callers verify
+        existence + the last-OWNER invariant before calling."""
         from app.domain.exceptions import InvalidMemberTypeError
 
         row = await self._session.get(MemberModel, member_id)
@@ -248,6 +249,8 @@ class SqlAlchemyMemberRepository:
             row.name = name
         if role is not None:
             row.role = role
+        if priority is not None:
+            row.priority = priority
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)

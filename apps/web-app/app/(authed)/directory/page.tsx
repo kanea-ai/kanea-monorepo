@@ -15,7 +15,6 @@
 // read-only contact card (others) — same component the old /members
 // page used.
 
-import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
 import { CreateAgentDialog } from '../../components/CreateAgentDialog';
@@ -26,12 +25,19 @@ import { useCurrentPrincipal } from '../../lib/auth';
 import { useMembers, useProjects, useTeams } from '../../lib/queries';
 
 type ScopeToggle = 'ALL' | 'HUMAN' | 'AGENT';
+type SortKey = 'PRIORITY_ASC' | 'PRIORITY_DESC' | 'NAME';
 
 const ROLE_OPTIONS: { value: MemberRole | ''; label: string }[] = [
   { value: '', label: 'Any role' },
   { value: 'WORKSPACE_OWNER', label: 'Owner' },
   { value: 'WORKSPACE_ADMIN', label: 'Admin' },
   { value: 'WORKSPACE_MEMBER', label: 'Member' },
+];
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'PRIORITY_ASC', label: 'Priority (high → low)' },
+  { value: 'PRIORITY_DESC', label: 'Priority (low → high)' },
+  { value: 'NAME', label: 'Name (A → Z)' },
 ];
 
 export default function DirectoryPage() {
@@ -43,6 +49,7 @@ export default function DirectoryPage() {
   const [role, setRole] = useState<MemberRole | ''>('');
   const [teamId, setTeamId] = useState('');
   const [projectId, setProjectId] = useState('');
+  const [sort, setSort] = useState<SortKey>('PRIORITY_ASC');
   const [openMember, setOpenMember] = useState<Member | null>(null);
   const [addOpen, setAddOpen] = useState<'invite' | 'agent' | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -69,11 +76,18 @@ export default function DirectoryPage() {
   const { data: projects } = useProjects();
 
   const visible = useMemo(() => {
-    const rows = members ?? [];
-    if (scope === 'HUMAN') return rows.filter((m) => m.type === 'HUMAN');
-    if (scope === 'AGENT') return rows.filter((m) => m.type === 'AGENT');
-    return rows;
-  }, [members, scope]);
+    let rows = members ?? [];
+    if (scope === 'HUMAN') rows = rows.filter((m) => m.type === 'HUMAN');
+    else if (scope === 'AGENT') rows = rows.filter((m) => m.type === 'AGENT');
+    const sorted = [...rows];
+    sorted.sort((a, b) => {
+      if (sort === 'NAME') return a.name.localeCompare(b.name);
+      if (sort === 'PRIORITY_DESC') return b.priority - a.priority || a.name.localeCompare(b.name);
+      // PRIORITY_ASC = lower numeric value first (= higher rank).
+      return a.priority - b.priority || a.name.localeCompare(b.name);
+    });
+    return sorted;
+  }, [members, scope, sort]);
 
   // Counts come from the full filtered set, NOT `visible` — we want
   // the badges stable across scope flips so the user sees how many
@@ -113,7 +127,7 @@ export default function DirectoryPage() {
       <ScopeTabs scope={scope} setScope={setScope} counts={counts} />
 
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="grid gap-2 border-b border-slate-100 p-3 sm:grid-cols-[1fr_auto_auto_auto]">
+        <div className="grid gap-2 border-b border-slate-100 p-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
           <input
             type="search"
             value={name}
@@ -156,6 +170,18 @@ export default function DirectoryPage() {
               </option>
             ))}
           </select>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            aria-label="Sort"
+            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <table className="w-full text-sm">
@@ -165,25 +191,26 @@ export default function DirectoryPage() {
               <th className="px-4 py-2 text-left">Type</th>
               <th className="px-4 py-2 text-left">Workspace role</th>
               <th className="px-4 py-2 text-left">Team</th>
+              <th className="px-4 py-2 text-right">Priority</th>
               <th className="hidden px-4 py-2 text-left lg:table-cell">Email</th>
             </tr>
           </thead>
           <tbody>
             {isError ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-red-600">
+                <td colSpan={6} className="px-4 py-6 text-center text-sm text-red-600">
                   Failed to load directory: {(error as ApiError).detail ?? (error as Error).message}
                 </td>
               </tr>
             ) : isLoading ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">
+                <td colSpan={6} className="px-4 py-6 text-center text-sm text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visible.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm italic text-slate-500">
+                <td colSpan={6} className="px-4 py-6 text-center text-sm italic text-slate-500">
                   No matches.
                 </td>
               </tr>
@@ -195,14 +222,6 @@ export default function DirectoryPage() {
           </tbody>
         </table>
       </section>
-
-      <p className="text-xs text-slate-500">
-        Looking for the agent details? Click an agent row, or open it from the{' '}
-        <Link href="/agents" className="text-indigo-700 hover:underline">
-          legacy agents view
-        </Link>
-        .
-      </p>
 
       {openMember ? (
         <MemberDetailDialog
@@ -351,6 +370,11 @@ function Row({
             {member.team_role}
           </span>
         ) : null}
+      </td>
+      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+          P{member.priority}
+        </span>
       </td>
       <td className="hidden px-4 py-2.5 text-slate-500 lg:table-cell">{member.email ?? '—'}</td>
     </tr>

@@ -85,6 +85,22 @@ class MemberResponse(BaseModel):
         )
 
 
+class MemberStatsResponse(BaseModel):
+    """Stats for any member (human or agent). Mirrors the agent
+    detail's AgentStats shape — same SQL feeds both — so the
+    directory detail dialog can render the same numbers regardless
+    of type."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    assigned_count: int
+    completed_count: int
+    avg_resolution_seconds: float | None
+    accuracy_percent: float | None
+    last_activity_at: datetime | None
+    total_tokens_used: int
+
+
 class MemberFilters(BaseModel):
     """Query-string filters for the members directory. All optional;
     the service composes the SQL `WHERE` clause from whichever the
@@ -106,14 +122,17 @@ class MemberFilters(BaseModel):
 
 
 class UpdateMemberProfileRequest(BaseModel):
-    """Admin-only edit of another member's profile. Both fields
-    optional so a single PATCH can rename, re-role, or both. The
-    last-OWNER demotion guard lives in the service."""
+    """Admin-only edit of another member's profile. All fields
+    optional so a single PATCH can rename, re-role, re-prioritise,
+    or any combination. The last-OWNER demotion guard lives in the
+    service. Priority is the workspace-wide rank (1 = owner, agents
+    typically 2..100); the directory's sort key uses it directly."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=120)
     role: MemberRole | None = None
+    priority: int | None = Field(default=None, ge=1, le=100)
 
 
 class SetMemberTeamRequest(BaseModel):

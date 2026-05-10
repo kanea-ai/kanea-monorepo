@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.entities import Invite, Member, Workspace
+from app.domain.entities import AgentStats, Invite, Member, Workspace
 from app.domain.enums import MemberRole, TeamRole
 
 
@@ -42,6 +42,7 @@ class TenantMemberRepository(Protocol):
         *,
         name: str | None = None,
         role: MemberRole | None = None,
+        priority: int | None = None,
     ) -> Member: ...
     async def set_team(
         self,
@@ -50,6 +51,11 @@ class TenantMemberRepository(Protocol):
         team_id: UUID | None,
         team_role: TeamRole | None,
     ) -> Member: ...
+
+    # Phase 5 batch 2 follow-up: per-member stats panel in the directory
+    # detail dialog. Same SQL that backs /me/stats and the agent detail
+    # page; it works for any member id.
+    async def compute_agent_stats(self, member_id: UUID) -> AgentStats: ...
 
 
 @runtime_checkable
