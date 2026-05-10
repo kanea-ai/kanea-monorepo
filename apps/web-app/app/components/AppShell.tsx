@@ -136,10 +136,13 @@ function AppShellInner({ children }: { children: ReactNode }) {
           ))}
         </nav>
         {/* Bottom-bar Profile button. Replaces the old Sign-out button —
-            sign-out itself moved to the /profile page. The button reads
-            as "Profile" with the user's name underneath, so the user
-            knows whose profile they're about to open. */}
-        <div className="mt-auto hidden border-t border-slate-200 p-2 lg:block">
+            sign-out itself moved to the /profile page. Reads as
+            "Profile" with the user's name underneath so they know
+            whose profile they're about to open. Visible on all
+            viewports — the inherited ``hidden lg:block`` from the
+            previous Sign-out implementation hid this from mobile /
+            drawer users entirely. */}
+        <div className="mt-auto block border-t border-slate-200 p-2">
           <Link
             href="/profile"
             onClick={() => setNavOpen(false)}

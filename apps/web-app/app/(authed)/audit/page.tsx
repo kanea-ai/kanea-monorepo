@@ -191,19 +191,31 @@ function AuditRow({
         {log.action.replaceAll('_', ' ')}
       </span>
       <div className="min-w-0">
+        {/* Pill + summary form a single click target when the resource
+            is live. The pill stays a visual marker, the summary
+            (which embeds the resource's name) gets the navigable
+            underline so admins can click "Backend" or "Engineering"
+            directly. */}
         <div className="flex flex-wrap items-center gap-2 text-slate-900">
           {resourceClickable ? (
             <button
               type="button"
               onClick={onResourceClick}
-              className={`${pillClass} cursor-pointer underline-offset-2 hover:underline hover:brightness-95`}
+              className="group flex flex-wrap items-center gap-2 text-left"
             >
-              {RESOURCE_TYPE_LABEL[log.resource_type]}
+              <span className={`${pillClass} transition-colors group-hover:brightness-95`}>
+                {RESOURCE_TYPE_LABEL[log.resource_type]}
+              </span>
+              <span className="font-medium underline-offset-2 group-hover:text-indigo-700 group-hover:underline">
+                {summariseChanges(log)}
+              </span>
             </button>
           ) : (
-            <span className={pillClass}>{RESOURCE_TYPE_LABEL[log.resource_type]}</span>
+            <>
+              <span className={pillClass}>{RESOURCE_TYPE_LABEL[log.resource_type]}</span>
+              <span className="font-medium">{summariseChanges(log)}</span>
+            </>
           )}
-          <span className="font-medium">{summariseChanges(log)}</span>
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
           by{' '}

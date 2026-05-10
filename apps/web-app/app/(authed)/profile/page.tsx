@@ -9,9 +9,9 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { ApiError } from '../../lib/api';
+import { ApiError, type TeamRole } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { useChangePassword, useMe, useMeStats, useUpdateMe } from '../../lib/queries';
+import { useChangePassword, useMe, useMeStats, useTeams, useUpdateMe } from '../../lib/queries';
 
 export default function ProfilePage() {
   const { data: me, isLoading: meLoading, isError: meError, error: meErr } = useMe();
@@ -46,6 +46,8 @@ export default function ProfilePage() {
 
       <PasswordSection hasPassword={me.has_password} />
 
+      <TeamSection teamId={me.team_id} teamRole={me.team_role} />
+
       <StatsSection
         assigned={stats?.assigned_count}
         completed={stats?.completed_count}
@@ -56,6 +58,32 @@ export default function ProfilePage() {
 
       <SignOutSection />
     </div>
+  );
+}
+
+function TeamSection({ teamId, teamRole }: { teamId: string | null; teamRole: TeamRole | null }) {
+  // Read-only — only admins (via Directory → Member dialog) can
+  // change a member's team. The team list comes from the same
+  // `useTeams` cache the rest of the app uses, so the lookup is
+  // free (already loaded via Departments / Teams / dialogs).
+  const { data: teams } = useTeams();
+  const teamName = teamId ? ((teams ?? []).find((t) => t.id === teamId)?.name ?? '—') : null;
+
+  return (
+    <Section title="Team" subtitle="Workspace admins manage team membership from the Directory.">
+      {teamId == null ? (
+        <p className="text-sm text-slate-500">
+          You&apos;re not assigned to a team yet. An admin can place you on one from the Directory.
+        </p>
+      ) : (
+        <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+          <dt className="text-slate-500">Team</dt>
+          <dd className="text-slate-700">{teamName}</dd>
+          <dt className="text-slate-500">Role on team</dt>
+          <dd className="text-slate-700">{teamRole ?? '—'}</dd>
+        </dl>
+      )}
+    </Section>
   );
 }
 
