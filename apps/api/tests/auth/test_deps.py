@@ -3,6 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from app.api.deps import (
+    get_audit_log_repository,
+    get_audit_log_service,
     get_auth_service,
     get_credentials_repository,
     get_department_repository,
@@ -16,6 +18,7 @@ from app.api.deps import (
     get_user_repository,
     get_workspace_repository,
 )
+from app.application.audit.service import AuditLogService
 from app.application.auth.service import AuthService
 from app.application.departments.service import DepartmentService
 from app.application.teams.service import TeamService
@@ -70,20 +73,41 @@ def test_get_department_repository_wraps_session() -> None:
     assert isinstance(repo, SqlAlchemyDepartmentRepository)
 
 
+def test_get_audit_log_service_wires_dependencies() -> None:
+    session = MagicMock()
+    service = get_audit_log_service(
+        audit_logs=get_audit_log_repository(session),
+        members=get_member_repository(session),
+    )
+    assert isinstance(service, AuditLogService)
+
+
 def test_get_department_service_wires_dependencies() -> None:
     session = MagicMock()
-    service = get_department_service(departments=get_department_repository(session))
+    audit_logs = get_audit_log_service(
+        audit_logs=get_audit_log_repository(session),
+        members=get_member_repository(session),
+    )
+    service = get_department_service(
+        departments=get_department_repository(session),
+        audit_logs=audit_logs,
+    )
     assert isinstance(service, DepartmentService)
 
 
 def test_get_team_service_wires_dependencies() -> None:
-    """The team service now also depends on the department repo for
-    cross-tenant validation of department_id; the factory needs to
-    pass it through."""
+    """The team service now depends on the department repo for
+    cross-tenant validation of department_id and the audit log
+    service for org-event recording; the factory threads both."""
     session = MagicMock()
+    audit_logs = get_audit_log_service(
+        audit_logs=get_audit_log_repository(session),
+        members=get_member_repository(session),
+    )
     service = get_team_service(
         teams=get_team_repository(session),
         departments=get_department_repository(session),
+        audit_logs=audit_logs,
     )
     assert isinstance(service, TeamService)
 

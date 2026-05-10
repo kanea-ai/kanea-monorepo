@@ -24,7 +24,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 const ROLE_PILL: Record<MemberRole, string> = {
   WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
   WORKSPACE_ADMIN: 'bg-blue-100 text-blue-800',
-  WORKSPACE_MEMBER: 'bg-slate-100 text-slate-700',
+  WORKSPACE_USER: 'bg-slate-100 text-slate-700',
 };
 
 export function MemberDetailDialog({
@@ -193,7 +193,7 @@ export function MemberDetailDialog({
                 >
                   <option value="WORKSPACE_OWNER">Owner</option>
                   <option value="WORKSPACE_ADMIN">Admin</option>
-                  <option value="WORKSPACE_MEMBER">Member</option>
+                  <option value="WORKSPACE_USER">User</option>
                 </select>
                 <p className="mt-1 text-[10px] italic text-slate-500">
                   Cannot demote the last workspace owner.

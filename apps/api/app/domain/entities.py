@@ -5,6 +5,8 @@ from datetime import datetime
 from uuid import UUID
 
 from app.domain.enums import (
+    AuditAction,
+    AuditResourceType,
     MemberRole,
     MemberType,
     NotificationType,
@@ -111,7 +113,7 @@ class Member:
     user_id: UUID | None = None
     team_id: UUID | None = None
     email: str | None = None
-    role: MemberRole = MemberRole.WORKSPACE_MEMBER
+    role: MemberRole = MemberRole.WORKSPACE_USER
     # Underlying LLM model identifier for AGENT-typed members. Free-form
     # so the user can label however they want ("claude-opus-4-7", "gpt-5",
     # "Custom: agent-pipeline-v2", etc.). Null on humans.
@@ -326,4 +328,38 @@ class Notification:
     source_member_id: UUID | None
     preview: str
     read_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(slots=True)
+class AuditLog:
+    """One row of the unified workspace audit trail.
+
+    Captures org/RBAC events: a department was created, a team's
+    description changed, a member was suspended, etc. Per-task events
+    keep living in ``task_activities`` — that one's tied to the task
+    detail page, this one drives the workspace-wide /audit view.
+
+    ``actor_member_id`` is nullable because the FK is SET NULL: if the
+    actor is later deleted we keep the audit row (the *fact* that the
+    event happened still matters), we just lose the linked-member
+    surface.
+
+    ``resource_id`` is nullable for events that target the workspace
+    itself (e.g. workspace settings changes, which we don't write yet
+    but the schema supports).
+    """
+
+    id: UUID
+    workspace_id: UUID
+    actor_member_id: UUID | None
+    action: AuditAction
+    resource_type: AuditResourceType
+    resource_id: UUID | None
+    # Free-form JSON. Convention:
+    # - CREATED:           {"<field>": <new_value>, ...}
+    # - UPDATED:           {"<field>": {"from": <old>, "to": <new>}, ...}
+    # - DELETED:           {"<field>": <captured_value>, ...}
+    # - SUSPENDED / SUSPENSION_REVOKED / ROLE_CHANGED: shape per action.
+    changes: dict
     created_at: datetime

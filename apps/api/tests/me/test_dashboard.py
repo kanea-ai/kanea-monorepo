@@ -23,7 +23,7 @@ from app.domain.entities import Member, Workspace
 from app.domain.enums import MemberRole, MemberType, TeamRole
 
 
-def _principal(*, member_id=None, workspace_id=None, role=MemberRole.WORKSPACE_MEMBER) -> Principal:
+def _principal(*, member_id=None, workspace_id=None, role=MemberRole.WORKSPACE_USER) -> Principal:
     return Principal(
         member_id=member_id or uuid4(),
         workspace_id=workspace_id or uuid4(),
@@ -52,7 +52,7 @@ def _member(
         user_id=user_id or uuid4(),
         team_id=team_id,
         team_role=team_role,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         created_at=now,
         updated_at=now,
     )
@@ -109,7 +109,7 @@ async def test_manager_sees_team_plus_projects(
     deps: tuple[MeService, AsyncMock, AsyncMock, AsyncMock, MagicMock, AsyncMock],
 ) -> None:
     svc, _u, members, workspaces, _h, tasks = deps
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     team_id = uuid4()
     members.get_by_id.return_value = _member(
         member_id=p.member_id,

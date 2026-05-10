@@ -25,7 +25,7 @@ def _member(
     workspace_id,
     team_id=None,
     team_role=None,
-    role: MemberRole = MemberRole.WORKSPACE_MEMBER,
+    role: MemberRole = MemberRole.WORKSPACE_USER,
 ) -> Member:
     from datetime import UTC, datetime
 
@@ -110,7 +110,7 @@ async def test_team_manager_on_same_team_can_change(
 ) -> None:
     ws = uuid4()
     team = uuid4()
-    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_MEMBER)
+    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_USER)
     task = make_task(workspace_id=ws, priority=5, team_id=team)
     task_repo.get_by_id.return_value = task
     member_repo.get_by_id.return_value = _member(
@@ -134,7 +134,7 @@ async def test_team_lead_cannot_change_priority(
 ) -> None:
     ws = uuid4()
     team = uuid4()
-    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_MEMBER)
+    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_USER)
     task_repo.get_by_id.return_value = make_task(workspace_id=ws, team_id=team)
     member_repo.get_by_id.return_value = _member(
         member_id=requester.member_id,
@@ -150,7 +150,7 @@ async def test_manager_on_other_team_cannot_change(
     service: TaskService, task_repo: AsyncMock, member_repo: AsyncMock
 ) -> None:
     ws = uuid4()
-    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_MEMBER)
+    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_USER)
     task_repo.get_by_id.return_value = make_task(workspace_id=ws, team_id=uuid4())
     member_repo.get_by_id.return_value = _member(
         member_id=requester.member_id,
@@ -166,7 +166,7 @@ async def test_plain_member_cannot_change_priority(
     service: TaskService, task_repo: AsyncMock, member_repo: AsyncMock
 ) -> None:
     ws = uuid4()
-    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_MEMBER)
+    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_USER)
     task_repo.get_by_id.return_value = make_task(workspace_id=ws, team_id=uuid4())
     member_repo.get_by_id.return_value = _member(member_id=requester.member_id, workspace_id=ws)
     with pytest.raises(CrossTeamForbiddenError):
@@ -178,7 +178,7 @@ async def test_no_op_when_priority_unchanged(service: TaskService, task_repo: As
     check, the DB write, and the activity event so a stray re-save
     from a refresh doesn't create audit noise."""
     ws = uuid4()
-    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_MEMBER)
+    requester = make_principal(workspace_id=ws, role=MemberRole.WORKSPACE_USER)
     task = make_task(workspace_id=ws, priority=4)
     task_repo.get_by_id.return_value = task
 

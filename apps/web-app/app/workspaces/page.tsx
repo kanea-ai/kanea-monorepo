@@ -319,7 +319,7 @@ function roleLabel(role: WorkspaceOption['role']): string {
       return 'Owner';
     case 'WORKSPACE_ADMIN':
       return 'Admin';
-    case 'WORKSPACE_MEMBER':
+    case 'WORKSPACE_USER':
       return 'Member';
   }
 }

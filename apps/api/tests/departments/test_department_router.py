@@ -93,21 +93,21 @@ def _stub_dept(workspace_id: UUID) -> DepartmentResponse:
 
 
 def test_list_works_for_plain_member(client: TestClient, dept_service_mock: AsyncMock) -> None:
-    p = _override_principal(MemberRole.WORKSPACE_MEMBER)
+    p = _override_principal(MemberRole.WORKSPACE_USER)
     app.dependency_overrides[get_current_principal] = lambda: p
     dept_service_mock.list_for_workspace.return_value = [_stub_dept(p.workspace_id)]
-    response = client.get("/api/v1/departments", headers=_bearer("WORKSPACE_MEMBER"))
+    response = client.get("/api/v1/departments", headers=_bearer("WORKSPACE_USER"))
     assert response.status_code == 200
     assert len(response.json()) == 1
 
 
 def test_post_rejects_member_role(client: TestClient, dept_service_mock: AsyncMock) -> None:
-    p = _override_principal(MemberRole.WORKSPACE_MEMBER)
+    p = _override_principal(MemberRole.WORKSPACE_USER)
     app.dependency_overrides[get_current_principal] = lambda: p
     response = client.post(
         "/api/v1/departments",
         json={"name": "Eng"},
-        headers=_bearer("WORKSPACE_MEMBER"),
+        headers=_bearer("WORKSPACE_USER"),
     )
     assert response.status_code == 403
     dept_service_mock.create.assert_not_called()
@@ -129,22 +129,22 @@ def test_post_accepts_admin(client: TestClient, dept_service_mock: AsyncMock) ->
 
 
 def test_patch_rejects_member_role(client: TestClient, dept_service_mock: AsyncMock) -> None:
-    p = _override_principal(MemberRole.WORKSPACE_MEMBER)
+    p = _override_principal(MemberRole.WORKSPACE_USER)
     app.dependency_overrides[get_current_principal] = lambda: p
     response = client.patch(
         f"/api/v1/departments/{uuid4()}",
         json={"name": "X"},
-        headers=_bearer("WORKSPACE_MEMBER"),
+        headers=_bearer("WORKSPACE_USER"),
     )
     assert response.status_code == 403
 
 
 def test_delete_rejects_member_role(client: TestClient, dept_service_mock: AsyncMock) -> None:
-    p = _override_principal(MemberRole.WORKSPACE_MEMBER)
+    p = _override_principal(MemberRole.WORKSPACE_USER)
     app.dependency_overrides[get_current_principal] = lambda: p
     response = client.delete(
         f"/api/v1/departments/{uuid4()}",
-        headers=_bearer("WORKSPACE_MEMBER"),
+        headers=_bearer("WORKSPACE_USER"),
     )
     assert response.status_code == 403
 

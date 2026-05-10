@@ -89,19 +89,65 @@ class TaskRelationType(StrEnum):
 
 
 class MemberRole(StrEnum):
-    """Workspace-level role a member holds. Distinct from TeamRole,
-    which is the intra-team rank.
+    """Workspace-level role a member holds — the **system/access**
+    side of the RBAC matrix. Distinct from ``TeamRole`` (the
+    **work/task** side).
 
-    Phase 1 renamed the values from OWNER/ADMIN/MEMBER to the explicit
-    WORKSPACE_* form so the JWT, audit log, and UI never confuse a
-    workspace owner with a team member. The class is still called
-    MemberRole because it sits on the Member entity; the *values*
-    are the org-level roles.
+    Phase 1 renamed the values from OWNER/ADMIN/MEMBER → WORKSPACE_*
+    so the JWT, audit log, and UI never confuse a workspace owner
+    with a team member. Phase 6 then renamed ``WORKSPACE_MEMBER`` to
+    ``WORKSPACE_USER`` to make it unambiguous: a USER has *system*
+    access to a workspace, but no inherent task-orchestration power
+    — that comes from their TeamRole. The class is still called
+    MemberRole because it sits on the Member entity.
+
+    Reach is gated by *priority* on top of role: e.g. a Priority-2
+    Admin can manage Departments; a Priority-3 Admin only Teams.
+    See ``app/api/deps.py:require_admin_priority_le``.
     """
 
     WORKSPACE_OWNER = "WORKSPACE_OWNER"
     WORKSPACE_ADMIN = "WORKSPACE_ADMIN"
-    WORKSPACE_MEMBER = "WORKSPACE_MEMBER"
+    WORKSPACE_USER = "WORKSPACE_USER"
+
+
+class AuditAction(StrEnum):
+    """Vocabulary of administrative events recorded in ``audit_logs``.
+
+    Stored as varchar so adding new actions doesn't need a migration.
+    Distinct from ``TaskActivityType`` — that one's per-task; this
+    one's for org/RBAC events on departments, teams, members.
+    """
+
+    CREATED = "CREATED"
+    UPDATED = "UPDATED"
+    DELETED = "DELETED"
+    # Member-specific lifecycle events — captured with their own
+    # action name (rather than UPDATED) because they're surfaced
+    # separately in the audit UI.
+    SUSPENDED = "SUSPENDED"
+    SUSPENSION_REVOKED = "SUSPENSION_REVOKED"
+    ROLE_CHANGED = "ROLE_CHANGED"
+    TEAM_ASSIGNED = "TEAM_ASSIGNED"
+    TEAM_UNASSIGNED = "TEAM_UNASSIGNED"
+
+
+class AuditResourceType(StrEnum):
+    """The kind of resource an audit_logs row points at. Used both as
+    a column value and as the visibility-scope key for the audit-log
+    listing endpoint.
+
+    Hierarchy: ``WORKSPACE`` ⊃ ``DEPARTMENT`` ⊃ ``TEAM`` ⊃ ``MEMBER``.
+    The audit-log visibility rule walks this hierarchy: an Owner sees
+    every row; a Priority-2 Admin sees DEPARTMENT/TEAM/MEMBER; a
+    Priority-3 Admin sees TEAM rows only and only for teams they
+    oversee (HEAD/MANAGER on those teams).
+    """
+
+    WORKSPACE = "WORKSPACE"
+    DEPARTMENT = "DEPARTMENT"
+    TEAM = "TEAM"
+    MEMBER = "MEMBER"
 
 
 class RequestStatus(StrEnum):

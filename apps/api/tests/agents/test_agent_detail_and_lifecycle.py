@@ -45,7 +45,7 @@ def _agent(*, agent_id=None, workspace_id=None, name="bot", priority=5, model=No
         name=name,
         priority=priority,
         email=None,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         model=model,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),

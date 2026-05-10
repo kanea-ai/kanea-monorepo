@@ -31,7 +31,7 @@ const ROLE_OPTIONS: { value: MemberRole | ''; label: string }[] = [
   { value: '', label: 'Any role' },
   { value: 'WORKSPACE_OWNER', label: 'Owner' },
   { value: 'WORKSPACE_ADMIN', label: 'Admin' },
-  { value: 'WORKSPACE_MEMBER', label: 'Member' },
+  { value: 'WORKSPACE_USER', label: 'User' },
 ];
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -338,7 +338,7 @@ function AddSplitButton({
 const ROLE_PILL: Record<MemberRole, string> = {
   WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
   WORKSPACE_ADMIN: 'bg-blue-100 text-blue-800',
-  WORKSPACE_MEMBER: 'bg-slate-100 text-slate-700',
+  WORKSPACE_USER: 'bg-slate-100 text-slate-700',
 };
 
 function Row({

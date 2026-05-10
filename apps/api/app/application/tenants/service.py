@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
+from app.application.audit.service import AuditLogService
 from app.application.auth.ports import (
     CredentialsRepository,
     MemberRepository,
@@ -33,7 +34,7 @@ from app.application.tenants.schemas import (
     invite_create_response_from_entity,
 )
 from app.domain.entities import AgentStats, Invite, Member, User
-from app.domain.enums import MemberRole, MemberType
+from app.domain.enums import AuditAction, AuditResourceType, MemberRole, MemberType
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
@@ -72,6 +73,11 @@ class InviteService:
     # Optional so legacy constructors / unit tests stay valid; the
     # accept_invite path raises if it's missing.
     users: UserRepository | None = None
+    # Phase 6 audit trail. Optional in unit tests; production wiring
+    # always provides it. When None the mutations succeed without
+    # writing an audit row — the underlying state change still
+    # happens.
+    audit_logs: AuditLogService | None = None
 
     async def create_invite(
         self, request: InviteCreateRequest, principal: Principal
@@ -293,12 +299,43 @@ class InviteService:
             if not still_owners_after:
                 raise ForbiddenError("cannot demote the last workspace owner")
 
-        return await self.members.update_profile(
+        updated = await self.members.update_profile(
             member_id,
             name=request.name,
             role=request.role,
             priority=request.priority,
         )
+
+        if self.audit_logs is not None:
+            # Role changes get their own audit action so the UI can
+            # render a clear "Bob → ADMIN" line; everything else
+            # collapses into a generic UPDATED with a {field: from/to}
+            # diff. Both shapes target the MEMBER resource.
+            if request.role is not None and request.role is not target.role:
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.ROLE_CHANGED,
+                    resource_type=AuditResourceType.MEMBER,
+                    resource_id=updated.id,
+                    changes={
+                        "from": target.role.value,
+                        "to": updated.role.value,
+                        "member_name": updated.name,
+                    },
+                )
+            other_diff = _field_diff(
+                {"name": target.name, "priority": target.priority},
+                {"name": updated.name, "priority": updated.priority},
+            )
+            if other_diff:
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.UPDATED,
+                    resource_type=AuditResourceType.MEMBER,
+                    resource_id=updated.id,
+                    changes=other_diff,
+                )
+        return updated
 
     async def set_member_team(
         self,
@@ -332,11 +369,45 @@ class InviteService:
             if team is None or team.workspace_id != principal.workspace_id:
                 raise InvalidMemberTypeError("team not found")
 
-        return await self.members.set_team(
+        updated = await self.members.set_team(
             member_id,
             team_id=request.team_id,
             team_role=request.team_role,
         )
+
+        if self.audit_logs is not None:
+            # Two distinct flavours: assigning to a team (or moving)
+            # vs. unassigning. They render differently in the audit
+            # UI so we use separate AuditAction values.
+            if request.team_id is None and target.team_id is not None:
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.TEAM_UNASSIGNED,
+                    resource_type=AuditResourceType.MEMBER,
+                    resource_id=updated.id,
+                    changes={
+                        "from_team_id": str(target.team_id),
+                        "from_team_role": (target.team_role.value if target.team_role else None),
+                        "member_name": updated.name,
+                    },
+                )
+            elif request.team_id is not None and (
+                request.team_id != target.team_id or request.team_role != target.team_role
+            ):
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.TEAM_ASSIGNED,
+                    resource_type=AuditResourceType.MEMBER,
+                    resource_id=updated.id,
+                    changes={
+                        "to_team_id": str(request.team_id),
+                        "to_team_role": (request.team_role.value if request.team_role else None),
+                        "from_team_id": (str(target.team_id) if target.team_id else None),
+                        "from_team_role": (target.team_role.value if target.team_role else None),
+                        "member_name": updated.name,
+                    },
+                )
+        return updated
 
     async def set_member_suspension(
         self,
@@ -378,7 +449,24 @@ class InviteService:
             if not still_active_owners:
                 raise ForbiddenError("cannot suspend the last active workspace owner")
 
-        return await self.members.set_suspended(member_id, is_suspended=request.is_suspended)
+        updated = await self.members.set_suspended(member_id, is_suspended=request.is_suspended)
+
+        if self.audit_logs is not None and target.is_suspended != request.is_suspended:
+            await self.audit_logs.record(
+                principal,
+                action=(
+                    AuditAction.SUSPENDED
+                    if request.is_suspended
+                    else AuditAction.SUSPENSION_REVOKED
+                ),
+                resource_type=AuditResourceType.MEMBER,
+                resource_id=updated.id,
+                changes={
+                    "member_name": updated.name,
+                    "member_email": updated.email,
+                },
+            )
+        return updated
 
     async def _load_active_invite(self, raw_token: str) -> Invite:
         invite = await self.invites.get_by_token_hash(_hash_token(raw_token))
@@ -398,6 +486,16 @@ class InviteService:
         if expires_at <= now:
             raise InviteExpiredError("invite has expired")
         return invite
+
+
+def _field_diff(before: dict, after: dict) -> dict:
+    """{field: {from, to}} shape for UPDATED audit rows. Skips fields
+    that didn't actually change so audit payloads stay terse."""
+    diff: dict[str, dict] = {}
+    for key in set(before) | set(after):
+        if before.get(key) != after.get(key):
+            diff[key] = {"from": before.get(key), "to": after.get(key)}
+    return diff
 
 
 def _accept_url(_id: UUID) -> str:  # pragma: no cover - kept for symmetry

@@ -42,7 +42,7 @@ def _principal(
 
 
 def _member(
-    workspace_id, *, role: MemberRole = MemberRole.WORKSPACE_MEMBER, suspended=False
+    workspace_id, *, role: MemberRole = MemberRole.WORKSPACE_USER, suspended=False
 ) -> Member:
     now = datetime.now(UTC)
     return Member(
@@ -82,7 +82,7 @@ def service(members_repo: AsyncMock) -> InviteService:
 
 
 async def test_member_role_cannot_suspend(service: InviteService, members_repo: AsyncMock) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     members_repo.get_by_id.return_value = _member(p.workspace_id)
     with pytest.raises(ForbiddenError):
         await service.set_member_suspension(

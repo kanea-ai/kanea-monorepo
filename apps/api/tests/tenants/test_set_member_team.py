@@ -54,7 +54,7 @@ def _member(workspace_id) -> Member:
         name="Alice",
         email="a@example.com",
         priority=3,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
     )
 
 
@@ -119,7 +119,7 @@ def service(
 
 
 async def test_member_role_is_forbidden(service: InviteService) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.set_member_team(
             uuid4(), SetMemberTeamRequest(team_id=uuid4(), team_role=TeamRole.LEAD), p
@@ -248,7 +248,7 @@ def test_post_teams_rejects_member_role(client: TestClient, team_service_mock: A
     response = client.post(
         "/api/v1/teams",
         json={"name": "Backend"},
-        headers=_bearer("WORKSPACE_MEMBER"),
+        headers=_bearer("WORKSPACE_USER"),
     )
     assert response.status_code == 403
     team_service_mock.create.assert_not_called()
@@ -283,7 +283,7 @@ def test_set_member_team_route_rejects_member_role(client: TestClient) -> None:
     response = client.patch(
         f"/api/v1/tenants/members/{uuid4()}/team",
         json={"team_id": str(uuid4()), "team_role": "LEAD"},
-        headers=_bearer("WORKSPACE_MEMBER"),
+        headers=_bearer("WORKSPACE_USER"),
     )
     assert response.status_code == 403
 

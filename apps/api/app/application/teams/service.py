@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from app.application.audit.service import AuditLogService
 from app.application.departments.ports import DepartmentRepository
 from app.application.tasks.schemas import Principal
 from app.application.teams.ports import TeamRepository
@@ -15,6 +16,7 @@ from app.application.teams.schemas import (
     UpdateTeamRequest,
 )
 from app.domain.entities import Team
+from app.domain.enums import AuditAction, AuditResourceType
 from app.domain.exceptions import (
     DepartmentNotFoundError,
     TeamNameConflictError,
@@ -29,6 +31,7 @@ class TeamService:
     # create / update paths raise if a department_id is supplied
     # without the lookup wired.
     departments: DepartmentRepository | None = None
+    audit_logs: AuditLogService | None = None
 
     async def list_for_workspace(
         self,
@@ -66,12 +69,24 @@ class TeamService:
             raise TeamNameConflictError(
                 "a team with that name already exists in this workspace"
             ) from exc
+        if self.audit_logs is not None:
+            await self.audit_logs.record(
+                principal,
+                action=AuditAction.CREATED,
+                resource_type=AuditResourceType.TEAM,
+                resource_id=team.id,
+                changes={
+                    "name": team.name,
+                    "description": team.description,
+                    "department_id": str(team.department_id) if team.department_id else None,
+                },
+            )
         return TeamResponse.from_entity(team)
 
     async def update(
         self, team_id: UUID, request: UpdateTeamRequest, principal: Principal
     ) -> TeamResponse:
-        await self._load_workspace_team(team_id, principal)
+        before = await self._load_workspace_team(team_id, principal)
 
         clear_description = (
             "description" in request.model_fields_set and request.description is None
@@ -95,11 +110,46 @@ class TeamService:
             raise TeamNameConflictError(
                 "a team with that name already exists in this workspace"
             ) from exc
+        if self.audit_logs is not None:
+            diff = _field_diff(
+                {
+                    "name": before.name,
+                    "description": before.description,
+                    "department_id": (str(before.department_id) if before.department_id else None),
+                },
+                {
+                    "name": updated.name,
+                    "description": updated.description,
+                    "department_id": (
+                        str(updated.department_id) if updated.department_id else None
+                    ),
+                },
+            )
+            if diff:
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.UPDATED,
+                    resource_type=AuditResourceType.TEAM,
+                    resource_id=updated.id,
+                    changes=diff,
+                )
         return TeamResponse.from_entity(updated)
 
     async def delete(self, team_id: UUID, principal: Principal) -> None:
-        await self._load_workspace_team(team_id, principal)
+        before = await self._load_workspace_team(team_id, principal)
         await self.teams.delete(team_id)
+        if self.audit_logs is not None:
+            await self.audit_logs.record(
+                principal,
+                action=AuditAction.DELETED,
+                resource_type=AuditResourceType.TEAM,
+                resource_id=before.id,
+                changes={
+                    "name": before.name,
+                    "description": before.description,
+                    "department_id": (str(before.department_id) if before.department_id else None),
+                },
+            )
 
     async def _load_workspace_team(self, team_id: UUID, principal: Principal) -> Team:
         team = await self.teams.get_by_id(team_id)
@@ -113,3 +163,13 @@ class TeamService:
         dept = await self.departments.get_by_id(department_id)
         if dept is None or dept.workspace_id != principal.workspace_id:
             raise DepartmentNotFoundError("department not found")
+
+
+def _field_diff(before: dict, after: dict) -> dict:
+    """Build the {field: {from, to}} shape we use for UPDATED audit
+    rows. Only fields that actually changed are included."""
+    diff: dict[str, dict] = {}
+    for key in set(before) | set(after):
+        if before.get(key) != after.get(key):
+            diff[key] = {"from": before.get(key), "to": after.get(key)}
+    return diff

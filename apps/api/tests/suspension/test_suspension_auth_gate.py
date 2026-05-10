@@ -46,7 +46,7 @@ def _bearer(*, member_id: UUID, workspace_id: UUID, scope: str = "human") -> dic
         "workspace_id": str(workspace_id),
         "type": "HUMAN",
         "priority": 1,
-        "role": "WORKSPACE_MEMBER",
+        "role": "WORKSPACE_USER",
         "scope": scope,
     }
     token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
@@ -62,7 +62,7 @@ def _member(member_id: UUID, workspace_id: UUID, *, suspended: bool) -> Member:
         name="Alice",
         email="a@example.com",
         priority=3,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         is_suspended=suspended,
         created_at=now,
         updated_at=now,

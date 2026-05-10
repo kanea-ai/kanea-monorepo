@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.api.deps import PrincipalDep, TeamServiceDep, WorkspaceAdminDep
+from app.api.deps import PrincipalDep, TeamReachDep, TeamServiceDep
 from app.application.teams.schemas import (
     CreateTeamRequest,
     TeamResponse,
@@ -43,7 +43,7 @@ async def list_teams(
 )
 async def create_team(
     payload: CreateTeamRequest,
-    principal: WorkspaceAdminDep,
+    principal: TeamReachDep,
     service: TeamServiceDep,
 ) -> TeamResponse:
     """Workspace owners / admins only — section 1 RBAC requirement."""
@@ -63,7 +63,7 @@ async def create_team(
 async def update_team(
     team_id: UUID,
     payload: UpdateTeamRequest,
-    principal: WorkspaceAdminDep,
+    principal: TeamReachDep,
     service: TeamServiceDep,
 ) -> TeamResponse:
     try:
@@ -83,7 +83,7 @@ async def update_team(
 )
 async def delete_team(
     team_id: UUID,
-    principal: WorkspaceAdminDep,
+    principal: TeamReachDep,
     service: TeamServiceDep,
 ) -> Response:
     try:

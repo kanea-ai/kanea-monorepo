@@ -13,12 +13,12 @@ class InviteCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
-    role: MemberRole = MemberRole.WORKSPACE_MEMBER
+    role: MemberRole = MemberRole.WORKSPACE_USER
 
     # OWNER must be created via signup, never via invite — workspace
     # ownership transfers are a separate flow with stronger guarantees.
     def is_role_inviteable(self) -> bool:
-        return self.role in (MemberRole.WORKSPACE_ADMIN, MemberRole.WORKSPACE_MEMBER)
+        return self.role in (MemberRole.WORKSPACE_ADMIN, MemberRole.WORKSPACE_USER)
 
 
 class InviteCreateResponse(BaseModel):

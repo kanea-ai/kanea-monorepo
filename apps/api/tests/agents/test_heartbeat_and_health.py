@@ -44,7 +44,7 @@ def _principal(*, scope: str = "human", workspace_id=None, member_id=None) -> Pr
         type=MemberType.HUMAN if scope == "human" else MemberType.AGENT,
         priority=1 if scope == "human" else 5,
         scope=scope,
-        role=MemberRole.WORKSPACE_OWNER if scope == "human" else MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_OWNER if scope == "human" else MemberRole.WORKSPACE_USER,
     )
 
 
@@ -56,7 +56,7 @@ def _agent(*, workspace_id=None, last_seen_at=None) -> Member:
         name="bot",
         priority=5,
         email=None,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         model="claude-opus-4-7",
         last_seen_at=last_seen_at,
         created_at=datetime.now(UTC),
@@ -207,7 +207,7 @@ def _bearer(scope: str) -> dict[str, str]:
         "role": (
             MemberRole.WORKSPACE_OWNER.value
             if scope == "human"
-            else MemberRole.WORKSPACE_MEMBER.value
+            else MemberRole.WORKSPACE_USER.value
         ),
         "scope": scope,
     }

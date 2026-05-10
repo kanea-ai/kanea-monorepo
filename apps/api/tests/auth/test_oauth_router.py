@@ -164,7 +164,7 @@ def test_oauth_callback_multi_workspace_redirects_with_selection_token(
         selection_token="sel.jwt",
         workspaces=[
             WorkspaceOption(workspace_id=ws_a, name="Acme", role=MemberRole.WORKSPACE_OWNER),
-            WorkspaceOption(workspace_id=ws_b, name="Beta", role=MemberRole.WORKSPACE_MEMBER),
+            WorkspaceOption(workspace_id=ws_b, name="Beta", role=MemberRole.WORKSPACE_USER),
         ],
     )
 
@@ -185,7 +185,7 @@ def test_oauth_callback_multi_workspace_redirects_with_selection_token(
     # through with stable role names.
     decoded = json.loads(base64.urlsafe_b64decode(qs["workspaces"][0] + "==").decode("utf-8"))
     assert {w["workspace_id"] for w in decoded} == {str(ws_a), str(ws_b)}
-    assert {w["role"] for w in decoded} == {"WORKSPACE_OWNER", "WORKSPACE_MEMBER"}
+    assert {w["role"] for w in decoded} == {"WORKSPACE_OWNER", "WORKSPACE_USER"}
 
 
 def test_oauth_callback_rejects_state_mismatch(

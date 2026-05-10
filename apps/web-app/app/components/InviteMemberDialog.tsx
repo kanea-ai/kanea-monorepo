@@ -14,14 +14,14 @@ import { Modal } from './Modal';
 export function InviteMemberDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateInvite();
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER'>('WORKSPACE_MEMBER');
+  const [role, setRole] = useState<'WORKSPACE_ADMIN' | 'WORKSPACE_USER'>('WORKSPACE_USER');
   const [error, setError] = useState<string | null>(null);
   const [reveal, setReveal] = useState<InviteCreateResponse | null>(null);
 
   useEffect(() => {
     if (open) {
       setEmail('');
-      setRole('WORKSPACE_MEMBER');
+      setRole('WORKSPACE_USER');
       setError(null);
       setReveal(null);
     }
@@ -116,10 +116,10 @@ export function InviteMemberDialog({ open, onClose }: { open: boolean; onClose: 
             <select
               id="invite_role"
               value={role}
-              onChange={(e) => setRole(e.target.value as 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER')}
+              onChange={(e) => setRole(e.target.value as 'WORKSPACE_ADMIN' | 'WORKSPACE_USER')}
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
-              <option value="WORKSPACE_MEMBER">Member</option>
+              <option value="WORKSPACE_USER">User</option>
               <option value="WORKSPACE_ADMIN">Admin</option>
             </select>
           </div>

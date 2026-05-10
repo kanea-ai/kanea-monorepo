@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 
 import {
   agentsApi,
+  auditApi,
   authSwitchApi,
   departmentsApi,
   meApi,
@@ -14,6 +15,7 @@ import {
   tenantsApi,
   type Agent,
   type AgentDetail,
+  type AuditLog,
   type CreateAgentPayload,
   type CreateAgentResponse,
   type CreateCommentPayload,
@@ -753,5 +755,22 @@ export function useUpdateTaskLinks(id: string) {
       // moved between projects.
       qc.invalidateQueries({ queryKey: projectKeys.all });
     },
+  });
+}
+
+// ---------- Audit logs ----------
+
+export const auditKeys = {
+  all: ['audit', 'logs'] as const satisfies QueryKey,
+};
+
+export function useAuditLogs(opts: { limit?: number } = {}) {
+  return useQuery<AuditLog[]>({
+    queryKey: opts.limit ? (['audit', 'logs', { limit: opts.limit }] as const) : auditKeys.all,
+    queryFn: () => auditApi.list(opts),
+    // 30s refetch keeps the audit feel live without polling at a
+    // disaster cadence — admins watching for a spike of suspensions
+    // see new rows on a slow tick.
+    refetchInterval: 30_000,
   });
 }

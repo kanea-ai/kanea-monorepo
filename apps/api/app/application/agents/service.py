@@ -82,7 +82,7 @@ class AgentService:
                 # API key alone.
                 email=None,
                 priority=request.priority,
-                role=MemberRole.WORKSPACE_MEMBER,
+                role=MemberRole.WORKSPACE_USER,
                 model=request.model,
                 created_at=now,
                 updated_at=now,

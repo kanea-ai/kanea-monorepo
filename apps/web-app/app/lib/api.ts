@@ -200,7 +200,7 @@ export interface TokenResponse {
 export interface WorkspaceOption {
   workspace_id: string;
   name: string;
-  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 }
 
 export interface LoginResponse {
@@ -329,7 +329,7 @@ export interface MeProfile {
   member_id: string;
   workspace_id: string;
   workspace_name: string;
-  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
   type: 'HUMAN' | 'AGENT';
   team_id: string | null;
   team_role: 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER' | null;
@@ -400,7 +400,7 @@ export const authSwitchApi = {
 export interface MeWorkspace {
   workspace_id: string;
   name: string;
-  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
   member_id: string;
   is_current: boolean;
 }
@@ -439,7 +439,7 @@ export interface NotificationCount {
 
 // Org-level role. Renamed in Phase 1 to disambiguate from TeamRole
 // (which uses MEMBER too) and to read clearly in JWTs / audit log.
-export type MemberRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+export type MemberRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 export type MemberKind = 'HUMAN' | 'AGENT';
 export type TeamRole = 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER';
 
@@ -473,7 +473,7 @@ export interface SetMemberTeamPayload {
 
 export interface InviteCreatePayload {
   email: string;
-  role: 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  role: 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 }
 
 export interface InviteCreateResponse {
@@ -903,4 +903,49 @@ export const teamsApi = {
       body: JSON.stringify(payload),
     }),
   remove: (id: string) => requestVoid(`${V1}/teams/${id}`, { method: 'DELETE' }),
+};
+
+// ---------- Audit logs ----------
+
+export type AuditAction =
+  | 'CREATED'
+  | 'UPDATED'
+  | 'DELETED'
+  | 'SUSPENDED'
+  | 'SUSPENSION_REVOKED'
+  | 'ROLE_CHANGED'
+  | 'TEAM_ASSIGNED'
+  | 'TEAM_UNASSIGNED';
+
+export type AuditResourceType = 'WORKSPACE' | 'DEPARTMENT' | 'TEAM' | 'MEMBER';
+
+export interface AuditLog {
+  id: string;
+  workspace_id: string;
+  actor_member_id: string | null;
+  actor_name: string | null;
+  action: AuditAction;
+  resource_type: AuditResourceType;
+  resource_id: string | null;
+  // Free-form per AuditAction. Common shapes:
+  // - CREATED: {<field>: <value>, ...}
+  // - UPDATED: {<field>: {from, to}, ...}
+  // - DELETED: {<field>: <captured_value>, ...}
+  // - SUSPENDED / SUSPENSION_REVOKED: {member_name, member_email}
+  // - ROLE_CHANGED: {from, to, member_name}
+  // - TEAM_ASSIGNED / TEAM_UNASSIGNED: {to_team_id?, from_team_id?,
+  //                                     to_team_role?, from_team_role?,
+  //                                     member_name}
+  changes: Record<string, unknown>;
+  created_at: string;
+}
+
+export const auditApi = {
+  list: (opts: { limit?: number; before?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.before) params.set('before', opts.before);
+    const qs = params.toString();
+    return request<AuditLog[]>(`${V1}/audit/logs${qs ? `?${qs}` : ''}`);
+  },
 };

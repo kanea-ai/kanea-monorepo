@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.api.deps import DepartmentServiceDep, PrincipalDep, WorkspaceAdminDep
+from app.api.deps import DepartmentReachDep, DepartmentServiceDep, PrincipalDep
 from app.application.departments.schemas import (
     CreateDepartmentRequest,
     DepartmentResponse,
@@ -44,7 +44,7 @@ async def list_departments(
 )
 async def create_department(
     payload: CreateDepartmentRequest,
-    admin: WorkspaceAdminDep,
+    admin: DepartmentReachDep,
     service: DepartmentServiceDep,
 ) -> DepartmentResponse:
     try:
@@ -79,7 +79,7 @@ async def get_department(
 async def update_department(
     department_id: UUID,
     payload: UpdateDepartmentRequest,
-    admin: WorkspaceAdminDep,
+    admin: DepartmentReachDep,
     service: DepartmentServiceDep,
 ) -> DepartmentResponse:
     try:
@@ -99,7 +99,7 @@ async def update_department(
 )
 async def delete_department(
     department_id: UUID,
-    admin: WorkspaceAdminDep,
+    admin: DepartmentReachDep,
     service: DepartmentServiceDep,
 ) -> Response:
     try:

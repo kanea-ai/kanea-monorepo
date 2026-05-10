@@ -71,7 +71,7 @@ def service(repo: AsyncMock) -> DepartmentService:
 
 
 async def test_member_can_list(service: DepartmentService, repo: AsyncMock) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     repo.list_for_workspace.return_value = [_dept(p.workspace_id)]
     result = await service.list_for_workspace(p)
     assert len(result) == 1
@@ -96,7 +96,7 @@ async def test_get_cross_tenant_404s(service: DepartmentService, repo: AsyncMock
 
 
 async def test_member_role_cannot_create(service: DepartmentService) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.create(CreateDepartmentRequest(name="Eng"), p)
 
@@ -121,7 +121,7 @@ async def test_create_name_conflict_raises(service: DepartmentService, repo: Asy
 
 
 async def test_member_role_cannot_update(service: DepartmentService) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.update(uuid4(), UpdateDepartmentRequest(name="Eng2"), p)
 
@@ -171,7 +171,7 @@ async def test_update_omits_description_field(service: DepartmentService, repo: 
 
 
 async def test_member_role_cannot_delete(service: DepartmentService) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.delete(uuid4(), p)
 

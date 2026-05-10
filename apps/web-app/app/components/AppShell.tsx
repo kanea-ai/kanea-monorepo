@@ -77,6 +77,12 @@ function AppShellInner({ children }: { children: ReactNode }) {
     { href: '/departments', label: 'Departments' },
     { href: '/teams', label: 'Teams' },
     { href: '/directory', label: 'Directory' },
+    // Audit is admin-only at the api level; the link is shown to
+    // everyone but unauthorised users get an empty list (USER role)
+    // or 403 (priority too low). We render the link unconditionally
+    // so admins discover it without us needing to thread the role
+    // bit through this component too.
+    { href: '/audit', label: 'Audit' },
     { href: '/profile', label: 'My profile' },
   ];
 

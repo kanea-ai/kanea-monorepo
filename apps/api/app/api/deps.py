@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.agents.ports import AgentMemberRepository
 from app.application.agents.service import AgentService
+from app.application.audit.ports import AuditLogRepository
+from app.application.audit.service import AuditLogService
 from app.application.auth.oauth import (
     GitHubOAuthClient,
     GoogleOAuthClient,
@@ -58,6 +60,7 @@ from app.application.tenants.service import InviteService
 from app.core.config import Settings, settings
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
+from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
 from app.infrastructure.repositories.invite import SqlAlchemyInviteRepository
@@ -244,10 +247,25 @@ def get_department_repository(session: SessionDep) -> DepartmentRepository:
     return SqlAlchemyDepartmentRepository(session)
 
 
+def get_audit_log_repository(session: SessionDep) -> AuditLogRepository:
+    return SqlAlchemyAuditLogRepository(session)
+
+
+def get_audit_log_service(
+    audit_logs: Annotated[AuditLogRepository, Depends(get_audit_log_repository)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
+) -> AuditLogService:
+    return AuditLogService(audit_logs=audit_logs, members=members)
+
+
+AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
+
+
 def get_department_service(
     departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
+    audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
 ) -> DepartmentService:
-    return DepartmentService(departments=departments)
+    return DepartmentService(departments=departments, audit_logs=audit_logs)
 
 
 DepartmentServiceDep = Annotated[DepartmentService, Depends(get_department_service)]
@@ -256,8 +274,9 @@ DepartmentServiceDep = Annotated[DepartmentService, Depends(get_department_servi
 def get_team_service(
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
     departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
+    audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
 ) -> TeamService:
-    return TeamService(teams=teams, departments=departments)
+    return TeamService(teams=teams, departments=departments, audit_logs=audit_logs)
 
 
 TeamServiceDep = Annotated[TeamService, Depends(get_team_service)]
@@ -283,6 +302,7 @@ def get_invite_service(
     config: Annotated[Settings, Depends(get_settings)],
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
     users: Annotated[UserRepository, Depends(get_user_repository)],
+    audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -297,6 +317,7 @@ def get_invite_service(
         accept_url_base=config.oauth_post_login_redirect.rsplit("/auth/callback", 1)[0],
         teams=teams,
         users=users,
+        audit_logs=audit_logs,
     )
 
 
@@ -402,9 +423,16 @@ def _decode_principal(
         priority = int(str(payload["priority"]))
         scope = str(payload["scope"])
         # `role` was added in migration 0004. Tokens minted before the
-        # claim existed default to MEMBER — least-privileged so they
+        # claim existed default to USER — least-privileged so they
         # can't perform OWNER/ADMIN actions until they re-auth.
-        role = MemberRole(str(payload.get("role", MemberRole.WORKSPACE_MEMBER.value)))
+        # Migration 0021 also renamed the value WORKSPACE_MEMBER →
+        # WORKSPACE_USER. Tokens minted before that migration carry
+        # the old string; we map them transparently so existing
+        # sessions don't 401 mid-flight after the deploy.
+        raw_role = str(payload.get("role", MemberRole.WORKSPACE_USER.value))
+        if raw_role == "WORKSPACE_MEMBER":
+            raw_role = MemberRole.WORKSPACE_USER.value
+        role = MemberRole(raw_role)
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -486,6 +514,59 @@ def require_workspace_admin(principal: PrincipalDep) -> Principal:
 
 
 WorkspaceAdminDep = Annotated[Principal, Depends(require_workspace_admin)]
+
+
+def require_admin_priority_le(max_priority: int):
+    """RBAC factory dep — admin role *and* priority ≤ ``max_priority``.
+
+    The Phase-6 RBAC matrix gates an admin's *reach* on top of their
+    role: a Priority-2 Admin can manage Departments, a Priority-3
+    Admin only Teams, etc. Owners always pass (their priority is 1
+    and they're conceptually above the admin tier).
+
+    Usage in a router:
+
+        from app.api.deps import require_admin_priority_le
+        DepartmentReachDep = Annotated[
+            Principal, Depends(require_admin_priority_le(2))
+        ]
+
+    Returns a sync dep function (not an Annotated type) so the same
+    factory can produce gates at different priority thresholds. Wrap
+    in ``Annotated[Principal, Depends(...)]`` at the call-site, or
+    expose pre-built ``DepartmentReachDep`` / ``TeamReachDep``
+    aliases (see below).
+    """
+
+    def _dep(principal: PrincipalDep) -> Principal:
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="workspace owner or admin role required",
+            )
+        # Owners are always above the priority bar by convention —
+        # they're priority 1 by default, but even a re-prioritised
+        # owner shouldn't lose reach over their own workspace.
+        if principal.role is MemberRole.WORKSPACE_OWNER:
+            return principal
+        if principal.priority > max_priority:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"this action requires an admin with priority ≤ {max_priority} "
+                    f"(your priority is {principal.priority})"
+                ),
+            )
+        return principal
+
+    return _dep
+
+
+# Pre-built reach gates for the two layers the spec calls out
+# explicitly. Department CRUD requires priority ≤ 2; Team CRUD
+# requires priority ≤ 3.
+DepartmentReachDep = Annotated[Principal, Depends(require_admin_priority_le(2))]
+TeamReachDep = Annotated[Principal, Depends(require_admin_priority_le(3))]
 
 
 def require_agent_scope(principal: PrincipalDep) -> Principal:

@@ -113,11 +113,11 @@ async def test_create_invite_owner_can_invite(service: InviteService, invites: A
     principal = _principal(role=MemberRole.WORKSPACE_OWNER)
 
     response = await service.create_invite(
-        InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.WORKSPACE_MEMBER), principal
+        InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.WORKSPACE_USER), principal
     )
 
     assert response.email == "bob@kanea.ai"
-    assert response.role is MemberRole.WORKSPACE_MEMBER
+    assert response.role is MemberRole.WORKSPACE_USER
     assert response.workspace_id == principal.workspace_id
     # Raw token leaks once; the URL embeds it.
     assert response.token
@@ -144,7 +144,7 @@ async def test_create_invite_admin_can_invite(service: InviteService, invites: A
 
 
 async def test_create_invite_member_forbidden(service: InviteService) -> None:
-    principal = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    principal = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.create_invite(InviteCreateRequest(email="bob@kanea.ai"), principal)
 
@@ -169,7 +169,7 @@ def _active_invite(**overrides) -> Invite:
         "workspace_id": uuid4(),
         "invited_by_id": uuid4(),
         "email": "bob@kanea.ai",
-        "role": MemberRole.WORKSPACE_MEMBER,
+        "role": MemberRole.WORKSPACE_USER,
         "token_hash": "ignored-by-mocks",
         "expires_at": datetime.utcnow() + timedelta(days=3),
         "accepted_at": None,
@@ -203,7 +203,7 @@ async def test_preview_returns_workspace_summary(
 
     assert preview.workspace_name == "Acme Corp"
     assert preview.email == invite.email
-    assert preview.role is MemberRole.WORKSPACE_MEMBER
+    assert preview.role is MemberRole.WORKSPACE_USER
 
 
 async def test_preview_unknown_token(service: InviteService, invites: AsyncMock) -> None:
@@ -362,7 +362,7 @@ async def test_list_members_passes_filters_through(
         p,
         MemberFilters(
             name="al",
-            role=MemberRole.WORKSPACE_MEMBER,
+            role=MemberRole.WORKSPACE_USER,
             team_id=team_id,
             project_id=project_id,
             humans_only=True,
@@ -372,7 +372,7 @@ async def test_list_members_passes_filters_through(
         p.workspace_id,
         name="al",
         member_id=None,
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         team_id=team_id,
         project_id=project_id,
         humans_only=True,
@@ -385,7 +385,7 @@ async def test_list_members_non_admin_scoped_to_team(
     service: InviteService, tenant_members: AsyncMock
 ) -> None:
     """A regular MEMBER who's on a team sees teammates + themselves."""
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
     self_member.team_id = uuid4()
     tenant_members.get_by_id.return_value = self_member
@@ -401,7 +401,7 @@ async def test_list_members_non_admin_no_team_self_only(
     service: InviteService, tenant_members: AsyncMock
 ) -> None:
     """A regular MEMBER who isn't on a team sees only themselves."""
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
     self_member.team_id = None
     tenant_members.get_by_id.return_value = self_member
@@ -429,7 +429,7 @@ async def test_get_member_admin_sees_anyone_in_workspace(
 async def test_get_member_non_admin_can_fetch_self(
     service: InviteService, tenant_members: AsyncMock
 ) -> None:
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
     tenant_members.get_by_id.return_value = self_member
     out = await service.get_member(p.member_id, p)
@@ -441,7 +441,7 @@ async def test_get_member_non_admin_can_fetch_teammate(
 ) -> None:
     from app.domain.exceptions import ForbiddenError
 
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     team_id = uuid4()
     teammate = make_human(workspace_id=p.workspace_id)
     teammate.team_id = team_id
@@ -497,7 +497,7 @@ async def test_update_member_profile_member_forbidden(
     from app.application.tenants.schemas import UpdateMemberProfileRequest
     from app.domain.exceptions import ForbiddenError
 
-    p = _principal(role=MemberRole.WORKSPACE_MEMBER)
+    p = _principal(role=MemberRole.WORKSPACE_USER)
     with pytest.raises(ForbiddenError):
         await service.update_member_profile(uuid4(), UpdateMemberProfileRequest(name="x"), p)
 

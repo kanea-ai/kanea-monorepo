@@ -194,7 +194,7 @@ function Caret({ open }: { open: boolean }) {
   );
 }
 
-function roleLabel(role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER'): string {
+function roleLabel(role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER'): string {
   const tail = role.slice('WORKSPACE_'.length);
   return tail.charAt(0) + tail.slice(1).toLowerCase();
 }

@@ -234,7 +234,7 @@ class MemberModel(TimestampMixin, Base):
     email: Mapped[str | None] = mapped_column(String(254), nullable=True, index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     role: Mapped[MemberRole] = mapped_column(
-        member_role_enum, nullable=False, default=MemberRole.WORKSPACE_MEMBER
+        member_role_enum, nullable=False, default=MemberRole.WORKSPACE_USER
     )
     team_role: Mapped[TeamRole | None] = mapped_column(team_role_enum, nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -571,6 +571,61 @@ class NotificationModel(Base):
     )
     preview: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+
+class AuditLogModel(Base):
+    """Unified audit trail for org/RBAC events. Per-task events stay
+    on ``task_activities`` — this table is the workspace-level log.
+
+    ``action`` and ``resource_type`` are stored as varchar (not Postgres
+    enums) so adding new event types doesn't need a migration. The
+    domain layer narrows them to ``AuditAction`` / ``AuditResourceType``
+    when reading; the read repo refuses unknown values defensively.
+    """
+
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index(
+            "ix_audit_logs_workspace_created",
+            "workspace_id",
+            text("created_at DESC"),
+        ),
+        Index(
+            "ix_audit_logs_resource",
+            "workspace_id",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    workspace_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # SET NULL on actor delete — the audit row outlives the actor so
+    # the fact that the event happened survives even after a member is
+    # removed from the workspace.
+    actor_member_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Nullable for events that target the workspace as a whole.
+    resource_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    changes: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

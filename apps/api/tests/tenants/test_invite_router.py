@@ -88,7 +88,7 @@ def test_create_invite_owner_returns_201(
         id=uuid4(),
         workspace_id=workspace_id,
         email="bob@kanea.ai",
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         expires_at=datetime.utcnow() + timedelta(days=7),
         accept_url="https://app.kanea.ai/invite/the-token",
         token="the-token",
@@ -96,7 +96,7 @@ def test_create_invite_owner_returns_201(
 
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_USER"},
         headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
     )
 
@@ -110,8 +110,8 @@ def test_create_invite_owner_returns_201(
 def test_create_invite_member_returns_403(client: TestClient, jwt_service: JwtTokenService) -> None:
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
-        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_USER"},
+        headers=_bearer(MemberRole.WORKSPACE_USER, jwt_service),
     )
     # WorkspaceAdminDep blocks before the service is ever called.
     assert response.status_code == 403
@@ -121,7 +121,7 @@ def test_create_invite_member_returns_403(client: TestClient, jwt_service: JwtTo
 def test_create_invite_unauthenticated_returns_401_or_403(client: TestClient) -> None:
     response = client.post(
         "/api/v1/tenants/invites",
-        json={"email": "bob@kanea.ai", "role": "WORKSPACE_MEMBER"},
+        json={"email": "bob@kanea.ai", "role": "WORKSPACE_USER"},
     )
     # FastAPI's HTTPBearer with auto_error=True returns 403 when the
     # header is entirely missing.
@@ -151,7 +151,7 @@ def test_get_invite_preview_returns_workspace_info(
     invite_service.get_invite_preview.return_value = InvitePreviewResponse(
         workspace_name="Acme",
         email="bob@kanea.ai",
-        role=MemberRole.WORKSPACE_MEMBER,
+        role=MemberRole.WORKSPACE_USER,
         expires_at=datetime.utcnow() + timedelta(days=3),
     )
     # Anonymous — no Authorization header.
@@ -223,7 +223,7 @@ def test_list_members_passes_query_filters(
     team_id = uuid4()
     project_id = uuid4()
     response = client.get(
-        f"/api/v1/tenants/members?name=al&role=WORKSPACE_MEMBER"
+        f"/api/v1/tenants/members?name=al&role=WORKSPACE_USER"
         f"&team_id={team_id}&project_id={project_id}&humans_only=true",
         headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
     )
@@ -232,7 +232,7 @@ def test_list_members_passes_query_filters(
     _principal_arg, filters_arg = invite_service.list_workspace_members.await_args.args
     assert isinstance(filters_arg, MemberFilters)
     assert filters_arg.name == "al"
-    assert filters_arg.role is MemberRole.WORKSPACE_MEMBER
+    assert filters_arg.role is MemberRole.WORKSPACE_USER
     assert filters_arg.team_id == team_id
     assert filters_arg.project_id == project_id
     assert filters_arg.humans_only is True
@@ -250,7 +250,7 @@ def test_get_member_returns_member(
     invite_service.get_member.return_value = target
     response = client.get(
         f"/api/v1/tenants/members/{target.id}",
-        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+        headers=_bearer(MemberRole.WORKSPACE_USER, jwt_service),
     )
     assert response.status_code == 200
     assert response.json()["id"] == str(target.id)
@@ -275,7 +275,7 @@ def test_get_member_403_when_visibility_denied(
     invite_service.get_member.side_effect = ForbiddenError("nope")
     response = client.get(
         f"/api/v1/tenants/members/{uuid4()}",
-        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+        headers=_bearer(MemberRole.WORKSPACE_USER, jwt_service),
     )
     assert response.status_code == 403
 
@@ -305,6 +305,6 @@ def test_update_member_profile_member_returns_403(
     response = client.patch(
         f"/api/v1/tenants/members/{uuid4()}",
         json={"name": "Renamed"},
-        headers=_bearer(MemberRole.WORKSPACE_MEMBER, jwt_service),
+        headers=_bearer(MemberRole.WORKSPACE_USER, jwt_service),
     )
     assert response.status_code == 403

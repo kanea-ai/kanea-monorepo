@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from app.application.audit.service import AuditLogService
 from app.application.departments.ports import DepartmentRepository
 from app.application.departments.schemas import (
     CreateDepartmentRequest,
@@ -14,7 +15,7 @@ from app.application.departments.schemas import (
 )
 from app.application.tasks.schemas import Principal
 from app.domain.entities import Department
-from app.domain.enums import MemberRole
+from app.domain.enums import AuditAction, AuditResourceType, MemberRole
 from app.domain.exceptions import (
     DepartmentNameConflictError,
     DepartmentNotFoundError,
@@ -29,6 +30,10 @@ def _is_admin(principal: Principal) -> bool:
 @dataclass(slots=True)
 class DepartmentService:
     departments: DepartmentRepository
+    # Optional so legacy unit-test constructors stay valid; mutations
+    # skip the audit write when None — the route-level wiring always
+    # provides one in production.
+    audit_logs: AuditLogService | None = None
 
     async def list_for_workspace(
         self, principal: Principal, *, name: str | None = None
@@ -66,6 +71,14 @@ class DepartmentService:
             raise DepartmentNameConflictError(
                 "a department with that name already exists in this workspace"
             ) from exc
+        if self.audit_logs is not None:
+            await self.audit_logs.record(
+                principal,
+                action=AuditAction.CREATED,
+                resource_type=AuditResourceType.DEPARTMENT,
+                resource_id=dept.id,
+                changes={"name": dept.name, "description": dept.description},
+            )
         return DepartmentResponse.from_entity(dept)
 
     async def update(
@@ -77,7 +90,7 @@ class DepartmentService:
         if not _is_admin(principal):
             raise ForbiddenError("workspace owner or admin role required")
 
-        await self._load_workspace_department(department_id, principal)
+        before = await self._load_workspace_department(department_id, principal)
 
         clear_description = (
             "description" in request.model_fields_set and request.description is None
@@ -93,6 +106,19 @@ class DepartmentService:
             raise DepartmentNameConflictError(
                 "a department with that name already exists in this workspace"
             ) from exc
+        if self.audit_logs is not None:
+            diff = _field_diff(
+                {"name": before.name, "description": before.description},
+                {"name": updated.name, "description": updated.description},
+            )
+            if diff:
+                await self.audit_logs.record(
+                    principal,
+                    action=AuditAction.UPDATED,
+                    resource_type=AuditResourceType.DEPARTMENT,
+                    resource_id=updated.id,
+                    changes=diff,
+                )
         return DepartmentResponse.from_entity(updated)
 
     async def delete(self, department_id: UUID, principal: Principal) -> None:
@@ -102,8 +128,16 @@ class DepartmentService:
         if not _is_admin(principal):
             raise ForbiddenError("workspace owner or admin role required")
 
-        await self._load_workspace_department(department_id, principal)
+        before = await self._load_workspace_department(department_id, principal)
         await self.departments.delete(department_id)
+        if self.audit_logs is not None:
+            await self.audit_logs.record(
+                principal,
+                action=AuditAction.DELETED,
+                resource_type=AuditResourceType.DEPARTMENT,
+                resource_id=before.id,
+                changes={"name": before.name, "description": before.description},
+            )
 
     async def _load_workspace_department(
         self, department_id: UUID, principal: Principal
@@ -112,3 +146,14 @@ class DepartmentService:
         if dept is None or dept.workspace_id != principal.workspace_id:
             raise DepartmentNotFoundError("department not found")
         return dept
+
+
+def _field_diff(before: dict, after: dict) -> dict:
+    """Build the {field: {from, to}} shape we use in audit-log
+    ``changes`` payloads for UPDATED actions. Only fields that
+    actually changed are included so the audit row stays compact."""
+    diff: dict[str, dict] = {}
+    for key in set(before) | set(after):
+        if before.get(key) != after.get(key):
+            diff[key] = {"from": before.get(key), "to": after.get(key)}
+    return diff

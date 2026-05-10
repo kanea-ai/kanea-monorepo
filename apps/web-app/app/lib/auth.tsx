@@ -135,7 +135,7 @@ export function useAuth(): AuthContextValue {
 export interface CurrentPrincipal {
   member_id: string;
   workspace_id: string;
-  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
   type: 'HUMAN' | 'AGENT';
   scope: string;
 }
@@ -160,7 +160,7 @@ export function useCurrentPrincipal(): CurrentPrincipal | null {
       return {
         member_id: String(json.sub),
         workspace_id: String(json.workspace_id),
-        role: json.role ?? 'WORKSPACE_MEMBER',
+        role: json.role ?? 'WORKSPACE_USER',
         type: json.type ?? 'HUMAN',
         scope: json.scope ?? 'human',
       };
