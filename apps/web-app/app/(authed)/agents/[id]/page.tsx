@@ -56,7 +56,7 @@ export default function AgentDetailPage() {
     try {
       await deleteAgent.mutateAsync(id);
       setConfirmOpen(false);
-      router.replace('/agents');
+      router.replace('/directory');
     } catch (err) {
       setDeleteError(err instanceof ApiError ? err.detail : 'Failed to delete agent');
       setConfirmOpen(false);
@@ -66,8 +66,8 @@ export default function AgentDetailPage() {
   return (
     <div className="space-y-6 p-4 sm:p-6">
       <header>
-        <Link href="/agents" className="text-xs text-slate-500 hover:text-slate-700">
-          ← Agents
+        <Link href="/directory" className="text-xs text-slate-500 hover:text-slate-700">
+          ← Directory
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-semibold text-slate-900">{agent.name}</h1>
