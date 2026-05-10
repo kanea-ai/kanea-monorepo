@@ -113,14 +113,15 @@ export function KanbanBoard() {
     if (autoExpandedRef.current.has(destId)) return;
     autoExpandedRef.current.add(destId);
     setCollapsed((prev) => (prev[destId] ? { ...prev, [destId]: false } : prev));
-    // Once layout has settled (one rAF after the React state flush),
-    // nudge dnd to recompute every droppable's bounds. The lib's
-    // ResizeObserver only watches each droppable individually, so
-    // a sibling expansion (which shifts other columns sideways but
-    // doesn't change THEIR sizes) wouldn't otherwise be picked up
-    // and the cursor-to-droppable hit test stays anchored to the
-    // pre-expand layout.
-    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    // NB: an earlier revision dispatched a synthetic 'resize' event
+    // here to nudge dnd to re-measure every droppable. That worked
+    // for the hit-test offset but caused the lib to abort the drag
+    // — it treats resize during drag as a layout invalidation and
+    // returns the dragged item to its source. The instant width
+    // change above (transition-colors only) is what we rely on
+    // instead; the lib's per-droppable ResizeObservers pick up the
+    // expanded column's size change and that's enough for the
+    // common cases.
   };
 
   const onDragEnd = (result: DropResult) => {
