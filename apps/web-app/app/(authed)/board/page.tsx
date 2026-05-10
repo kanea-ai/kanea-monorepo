@@ -6,10 +6,11 @@ import { CreateTaskDialog } from '../../components/CreateTaskDialog';
 import { ExceptionQueue } from '../../components/ExceptionQueue';
 import { KanbanBoard } from '../../components/KanbanBoard';
 
-// Persist the user's preference across reloads. SessionStorage is
-// per-tab; localStorage is what the user actually expects ("I closed
-// the rail yesterday, leave it closed").
-const COLLAPSE_KEY = 'kanea_exception_queue_collapsed';
+// Persist the user's preference across reloads. The key changed in
+// this iteration (rail → floating toggle) so old "1"/"0" values from
+// the previous shape don't carry over and surprise users with the
+// queue stuck open.
+const COLLAPSE_KEY = 'kanea_exception_queue_hidden_v2';
 
 export default function BoardPage() {
   const [createOpen, setCreateOpen] = useState(false);

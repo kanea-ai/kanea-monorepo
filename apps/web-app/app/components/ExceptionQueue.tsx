@@ -26,13 +26,14 @@ export function ExceptionQueue({
     qc.invalidateQueries({ queryKey: taskKeys.all });
   };
 
-  // Collapsed state is a thin vertical rail (desktop) / a single
-  // pill (mobile, which lives below the board). Either way the
-  // toggle button surfaces the count + an amber dot when there's
-  // unresolved work, so the user doesn't need to expand to know
-  // they have exceptions waiting.
+  // Hidden state: no rail at all — just a small floating toggle
+  // anchored middle-right by the parent. This component renders only
+  // the button; the parent decides where to place it. Returning a
+  // fragment with the bare button keeps the kanban full-width and
+  // avoids any overflow-induced scrollbar bouncing the rail used to
+  // cause.
   if (collapsed) {
-    return <CollapsedRail count={tasks.length} onExpand={onToggle} />;
+    return <FloatingToggle count={tasks.length} onExpand={onToggle} />;
   }
 
   return (
@@ -61,8 +62,8 @@ export function ExceptionQueue({
           </div>
         </div>
         <p className="mt-1 text-xs text-slate-500">
-          Tasks an agent could not complete. Review the reason and resolve to put the task back in
-          progress.
+          Tasks an agent or teammate flagged as blocked. Review the reason and unblock once the
+          dependency is cleared.
         </p>
       </header>
 
@@ -87,50 +88,38 @@ export function ExceptionQueue({
   );
 }
 
-function CollapsedRail({ count, onExpand }: { count: number; onExpand: () => void }) {
-  // Desktop: a narrow rail (5rem) along the right edge — wide enough
-  // to read "Exceptions" plus a count badge horizontally, narrow
-  // enough to keep the kanban as the protagonist. Mobile: a single
-  // bar above where the panel would be.
-  //
-  // An earlier revision used `animate-ping` to call attention; the
-  // ping's transform scaled past the rail's right edge by a couple
-  // pixels and made the page's horizontal scrollbar flicker on/off.
-  // Killed it — the warm amber fill on the rail when `count > 0` is
-  // already enough signal, and `overflow-hidden` here is the belt to
-  // that brace if any future child decides to bleed past.
+function FloatingToggle({ count, onExpand }: { count: number; onExpand: () => void }) {
+  // Floating expander, pinned middle-right of the board's main
+  // container by the parent (`fixed-right-0 top-1/2`). Compact
+  // enough to be unobtrusive but explicit about the count, so the
+  // user can see pending exceptions without giving up board space
+  // for a permanent rail.
   const hasExceptions = count > 0;
+  const colour = hasExceptions
+    ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-lg shadow-amber-500/30'
+    : 'bg-white text-slate-600 hover:bg-slate-50 shadow-md ring-1 ring-slate-200';
   return (
-    <aside
-      className={`flex shrink-0 items-stretch overflow-hidden border-t border-slate-200 lg:w-20 lg:flex-col lg:border-l lg:border-t-0 ${
-        hasExceptions ? 'bg-amber-50' : 'bg-white'
-      }`}
-      aria-label="Exception queue collapsed"
+    <button
+      type="button"
+      onClick={onExpand}
+      aria-label={
+        hasExceptions ? `Show exception queue (${count} pending)` : 'Show exception queue'
+      }
+      title={
+        hasExceptions ? `${count} pending exception${count === 1 ? '' : 's'}` : 'Exception queue'
+      }
+      className={`fixed right-0 top-1/2 z-30 flex -translate-y-1/2 flex-col items-center gap-1 rounded-l-md py-3 pl-2 pr-1.5 text-[11px] font-semibold uppercase tracking-wide transition-colors ${colour}`}
     >
-      <button
-        type="button"
-        onClick={onExpand}
-        aria-label={
-          hasExceptions ? `Expand exception queue (${count} pending)` : 'Expand exception queue'
-        }
-        title={
-          hasExceptions ? `${count} pending exception${count === 1 ? '' : 's'}` : 'Exception queue'
-        }
-        className={`group flex w-full items-center justify-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-700 transition-colors lg:flex-col lg:gap-2 lg:py-4 ${
-          hasExceptions ? 'hover:bg-amber-100' : 'hover:bg-slate-50'
+      <ChevronLeft className="h-4 w-4 opacity-80" />
+      <span className="[writing-mode:vertical-rl]">Exceptions</span>
+      <span
+        className={`inline-flex min-w-[1.4rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+          hasExceptions ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
         }`}
       >
-        <ChevronLeft className="h-4 w-4 text-slate-400 group-hover:text-slate-600" />
-        <span>Exceptions</span>
-        <span
-          className={`inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
-            hasExceptions ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-100 text-slate-500'
-          }`}
-        >
-          {count > 99 ? '99+' : count}
-        </span>
-      </button>
-    </aside>
+        {count > 99 ? '99+' : count}
+      </span>
+    </button>
   );
 }
 
