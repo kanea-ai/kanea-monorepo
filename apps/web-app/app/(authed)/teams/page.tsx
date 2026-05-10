@@ -8,6 +8,7 @@
 //   members. The drawer's footer links back to /directory.
 
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -72,6 +73,22 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const [openTeam, setOpenTeam] = useState<TeamRecord | null>(null);
+
+  // Deep link: ?open=<team_id> opens that team's drawer once the
+  // list arrives. Used by /audit when an admin clicks a TEAM-typed
+  // audit row. Strip the param after consuming it so reload doesn't
+  // keep re-opening.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const requestedOpen = searchParams.get('open');
+  useEffect(() => {
+    if (!requestedOpen) return;
+    const match = (teams ?? []).find((t) => t.id === requestedOpen);
+    if (match) {
+      setOpenTeam(match);
+      router.replace('/teams');
+    }
+  }, [requestedOpen, teams, router]);
 
   const departmentsById = useMemo(() => {
     const map = new Map<string, Department>();

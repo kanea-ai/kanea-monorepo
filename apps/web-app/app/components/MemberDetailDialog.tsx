@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type Member, type MemberRole, type TeamRole } from '../lib/api';
 import {
+  useAdminSetMemberPassword,
   useMemberStats,
   useSetMemberSuspension,
   useSetMemberTeam,
@@ -327,6 +328,16 @@ export function MemberDetailDialog({
           )}
         </Section>
 
+        {/* Password reset (admin-only, humans only). Server enforces
+            org scope: owners can reset anyone, admins can only reset
+            members in their team or department. The 403 reason
+            surfaces inline below if the api refuses. */}
+        {isAdmin && !isSelf && isHuman ? (
+          <Section title="Password">
+            <PasswordResetForm memberId={member.id} memberName={member.name} />
+          </Section>
+        ) : null}
+
         {/* Suspension is workspace-scoped: a flipped member can still
             log in and use other workspaces, but every request bound to
             THIS workspace 403s at the api. Admin-only; the api enforces
@@ -405,6 +416,90 @@ export function MemberDetailDialog({
         />
       </div>
     </div>
+  );
+}
+
+function PasswordResetForm({ memberId, memberName }: { memberId: string; memberName: string }) {
+  // Two fields + confirm. The api enforces the org-scope rule
+  // (owner anywhere; admin same-team-or-department) — if the
+  // principal is out of scope, the 403 message lands in `error`
+  // and the form stays.
+  const setPassword = useAdminSetMemberPassword();
+  const [pwd, setPwd] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaved(false);
+    if (pwd !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (pwd.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    try {
+      await setPassword.mutateAsync({ memberId, payload: { new_password: pwd } });
+      setSaved(true);
+      setPwd('');
+      setConfirm('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to set password');
+    }
+  };
+
+  return (
+    <form className="space-y-2" onSubmit={onSubmit}>
+      <p className="text-xs text-slate-600">
+        Sets a new password for <span className="font-medium">{memberName}</span>. Useful right
+        after sending an invite — or as a recovery step. The user can change it later from{' '}
+        <span className="font-mono">/profile</span>.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <input
+          type="password"
+          value={pwd}
+          onChange={(e) => setPwd(e.target.value)}
+          placeholder="New password"
+          autoComplete="new-password"
+          minLength={8}
+          maxLength={256}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+        <input
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="Confirm new password"
+          autoComplete="new-password"
+          minLength={8}
+          maxLength={256}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        {error ? (
+          <p role="alert" className="text-xs text-red-600">
+            {error}
+          </p>
+        ) : saved ? (
+          <p className="text-xs text-emerald-700">Password updated.</p>
+        ) : (
+          <span />
+        )}
+        <button
+          type="submit"
+          disabled={setPassword.isPending || pwd === '' || confirm === ''}
+          className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {setPassword.isPending ? 'Saving…' : 'Set password'}
+        </button>
+      </div>
+    </form>
   );
 }
 

@@ -551,20 +551,26 @@ class InviteService:
         new_password: str,
         principal: Principal,
     ) -> None:
-        """Admin-side password reset.
+        """Admin / owner password reset.
 
-        Useful right after sending an invite — the User row exists but
-        the password is an unguessable placeholder, so the admin can
-        seed something temporary the invitee will pick up.
+        Scope rules:
+        - **Owner**: can reset any non-self, non-agent member in the
+          workspace — including admins. The owner is the top of the
+          access tree, so no extra scope check.
+        - **Admin**: can reset password of a member only when they
+          share *organisational scope* with that member — same team,
+          OR same department (resolved via the teams' department_id).
+          Admins cannot reset an OWNER's password (rank protection).
 
-        Refuses when:
-        - the requester isn't OWNER/ADMIN
-        - the target member is the principal themselves (use the
-          regular change-password flow on /me — current-password
-          required, which is the right belt-and-braces for self)
-        - the underlying User belongs to multiple workspaces. We
-          can't safely reset a credential the invitee uses elsewhere;
-          they need to use the password-recovery flow instead.
+        Hard rules that apply to everyone:
+        - Self-reset is rejected (use ``/me/password``; the current-
+          password requirement there is the belt-and-braces).
+        - Agents have no User row; ``agent_secret`` is their
+          credential.
+        - Cross-workspace users (User.memberships > 1) — we don't
+          touch their credential because it's shared with workspaces
+          the principal has no authority over. They need the public
+          password-recovery flow.
         """
         if self.users is None:  # pragma: no cover - DI invariant
             raise RuntimeError("users repo not wired")
@@ -581,6 +587,11 @@ class InviteService:
             # they auth via agent_secret.
             raise InvalidMemberTypeError("agents do not have a password to set")
 
+        # Org-scope check for non-owner admins. Owners skip this —
+        # they have authority over the whole workspace.
+        if principal.role is MemberRole.WORKSPACE_ADMIN:
+            await self._require_org_scope_match(principal, target)
+
         memberships = await self.auth_members.list_for_user(target.user_id)
         if len(memberships) > 1:
             raise ForbiddenError(
@@ -589,6 +600,48 @@ class InviteService:
             )
 
         await self.users.update_password(target.user_id, self.hasher.hash(new_password))
+
+    async def _require_org_scope_match(self, principal: Principal, target: Member) -> None:
+        """Admin scope check: principal and target must share a team
+        OR a department. Owners are excluded from this rule (their
+        own scope is the whole workspace) and target OWNERs are off-
+        limits to admins regardless of co-location."""
+        if target.role is MemberRole.WORKSPACE_OWNER:
+            raise ForbiddenError("only an owner can reset another owner's password")
+
+        principal_member = await self.members.get_by_id(principal.member_id)
+        if principal_member is None:  # pragma: no cover - principal must resolve
+            raise ForbiddenError("requester not found")
+
+        # Same team — fast path. Both members carry team_id directly.
+        if principal_member.team_id is not None and principal_member.team_id == target.team_id:
+            return
+
+        # Same department — needs the team rows to read department_id.
+        # If we don't have a teams repo wired (legacy DI), the only
+        # reachable path is same-team; fall through to the deny.
+        if self.teams is None:
+            raise ForbiddenError(
+                "you can only reset the password of a member in your team or department"
+            )
+        if principal_member.team_id is None or target.team_id is None:
+            raise ForbiddenError(
+                "you can only reset the password of a member in your team or department"
+            )
+
+        principal_team = await self.teams.get_by_id(principal_member.team_id)
+        target_team = await self.teams.get_by_id(target.team_id)
+        if (
+            principal_team is not None
+            and target_team is not None
+            and principal_team.department_id is not None
+            and principal_team.department_id == target_team.department_id
+        ):
+            return
+
+        raise ForbiddenError(
+            "you can only reset the password of a member in your team or department"
+        )
 
     async def _load_active_invite(self, raw_token: str) -> Invite:
         invite = await self.invites.get_by_token_hash(_hash_token(raw_token))

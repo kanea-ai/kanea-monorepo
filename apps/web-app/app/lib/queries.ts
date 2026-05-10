@@ -13,6 +13,7 @@ import {
   tasksApi,
   teamsApi,
   tenantsApi,
+  type AdminSetMemberPasswordPayload,
   type Agent,
   type AgentDetail,
   type AuditLog,
@@ -239,6 +240,17 @@ export function useUpdateMemberProfile() {
   });
 }
 
+// Admin / owner password reset for another workspace member. The
+// scope rule (same team, same department, or workspace-wide for
+// owners) is enforced server-side; the mutation surfaces the api's
+// 403 message verbatim if the principal is out of scope. No cache
+// invalidation needed — the password isn't on any list response.
+export function useAdminSetMemberPassword() {
+  return useMutation<void, Error, { memberId: string; payload: AdminSetMemberPasswordPayload }>({
+    mutationFn: ({ memberId, payload }) => tenantsApi.adminSetMemberPassword(memberId, payload),
+  });
+}
+
 // Workspace-scoped soft-lock toggle. After flipping, the directory and
 // the member detail panel both need to refresh — the suspended pill is
 // painted from the member's `is_suspended` field.
@@ -393,10 +405,16 @@ export function useSetMemberTeam() {
 }
 
 export function useCreateInvite() {
-  // No cache invalidation needed — invites don't show in any list yet.
-  // The created invite is shown inline in the response (with the token).
+  // Phase 6: create_invite now provisions the User + Member rows up
+  // front, so the directory's members list is stale the moment the
+  // invite is sent. Invalidate so the new entry appears without a
+  // manual refresh.
+  const qc = useQueryClient();
   return useMutation<InviteCreateResponse, Error, InviteCreatePayload>({
     mutationFn: (payload) => tenantsApi.createInvite(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
   });
 }
 
@@ -443,6 +461,10 @@ export function useCreateAgent() {
     mutationFn: (payload) => agentsApi.create(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentKeys.all });
+      // Agents are members too — the Directory's combined list shows
+      // them alongside humans. Bust that cache so the new agent
+      // appears without a manual refresh.
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
     },
   });
 }

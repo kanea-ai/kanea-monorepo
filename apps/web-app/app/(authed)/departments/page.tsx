@@ -8,6 +8,7 @@
 // look broken to non-admins).
 
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -35,6 +36,22 @@ export default function DepartmentsPage() {
   const { data: teams } = useTeams();
   const [openDept, setOpenDept] = useState<Department | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Deep link: ?open=<dept_id> opens that department's drawer once
+  // the list arrives. Used by /audit when an admin clicks a
+  // DEPARTMENT-typed audit row. We strip the param after consuming
+  // it so reload doesn't keep re-opening.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const requestedOpen = searchParams.get('open');
+  useEffect(() => {
+    if (!requestedOpen) return;
+    const match = (departments ?? []).find((d) => d.id === requestedOpen);
+    if (match) {
+      setOpenDept(match);
+      router.replace('/departments');
+    }
+  }, [requestedOpen, departments, router]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

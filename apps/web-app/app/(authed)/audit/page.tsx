@@ -10,6 +10,7 @@
 // reach. A USER-role principal gets an empty list and we surface that
 // as a friendly "your role doesn't grant audit access" message.
 
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { ActorProfileDialog } from '../../components/ActorProfileDialog';
@@ -126,7 +127,12 @@ export default function AuditPage() {
           ) : (
             <ol className="divide-y divide-slate-100">
               {filtered.map((row) => (
-                <AuditRow key={row.id} log={row} onActorClick={setActorOpenId} />
+                <AuditRow
+                  key={row.id}
+                  log={row}
+                  onActorClick={setActorOpenId}
+                  onMemberResourceClick={setActorOpenId}
+                />
               ))}
             </ol>
           )}
@@ -143,10 +149,40 @@ export default function AuditPage() {
 function AuditRow({
   log,
   onActorClick,
+  onMemberResourceClick,
 }: {
   log: AuditLog;
   onActorClick: (memberId: string) => void;
+  onMemberResourceClick: (memberId: string) => void;
 }) {
+  const router = useRouter();
+
+  // The resource pill becomes a button whenever there's somewhere
+  // sensible to navigate. DELETED rows opt out — the entity is gone,
+  // so a click would land on a stale page. MEMBER targets the same
+  // priority-scoped profile dialog the actor click uses;
+  // DEPARTMENT/TEAM deep-link into their list pages, which open the
+  // corresponding drawer when ?open=<id> is present.
+  const resourceClickable =
+    log.resource_id != null &&
+    log.action !== 'DELETED' &&
+    (log.resource_type === 'MEMBER' ||
+      log.resource_type === 'DEPARTMENT' ||
+      log.resource_type === 'TEAM');
+
+  const onResourceClick = () => {
+    if (!log.resource_id) return;
+    if (log.resource_type === 'MEMBER') {
+      onMemberResourceClick(log.resource_id);
+    } else if (log.resource_type === 'DEPARTMENT') {
+      router.push(`/departments?open=${log.resource_id}`);
+    } else if (log.resource_type === 'TEAM') {
+      router.push(`/teams?open=${log.resource_id}`);
+    }
+  };
+
+  const pillClass = `rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${RESOURCE_TYPE_TONE[log.resource_type]}`;
+
   return (
     <li className="grid grid-cols-[auto_1fr_auto] items-start gap-3 px-4 py-3 text-sm">
       <span
@@ -156,11 +192,17 @@ function AuditRow({
       </span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2 text-slate-900">
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${RESOURCE_TYPE_TONE[log.resource_type]}`}
-          >
-            {RESOURCE_TYPE_LABEL[log.resource_type]}
-          </span>
+          {resourceClickable ? (
+            <button
+              type="button"
+              onClick={onResourceClick}
+              className={`${pillClass} cursor-pointer underline-offset-2 hover:underline hover:brightness-95`}
+            >
+              {RESOURCE_TYPE_LABEL[log.resource_type]}
+            </button>
+          ) : (
+            <span className={pillClass}>{RESOURCE_TYPE_LABEL[log.resource_type]}</span>
+          )}
           <span className="font-medium">{summariseChanges(log)}</span>
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
