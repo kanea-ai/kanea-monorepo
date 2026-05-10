@@ -360,14 +360,14 @@ function Column({
   onToggle: () => void;
   onCardClick: (taskId: string) => void;
 }) {
-  // Collapsed columns shrink to a thin rail (just header + count).
-  // The Droppable still mounts so dnd can drop into a collapsed
-  // column — but we render it with min-height: 0 to keep the rail
-  // tight.
-  const widthClass = isCollapsed ? 'w-12 md:w-12 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
+  // Collapsed columns are a 5-rem rail (was 3rem). Wider gives the
+  // user a bigger drop target when aiming a dragged card at a
+  // collapsed column. The transition is intentionally a bit slower
+  // so the hover-driven expand/collapse doesn't feel jumpy.
+  const widthClass = isCollapsed ? 'w-20 md:w-20 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
   return (
     <div
-      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-all ${widthClass}`}
+      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-all duration-200 ease-out ${widthClass}`}
     >
       <button
         type="button"
@@ -410,9 +410,13 @@ function Column({
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className={`flex flex-1 flex-col gap-2 rounded-md transition-colors ${
-              isCollapsed ? 'min-h-[80px] p-0' : 'min-h-[200px] p-1'
-            } ${snapshot.isDraggingOver ? 'bg-slate-200/70' : ''}`}
+            className={`flex flex-1 flex-col gap-1.5 rounded-md transition-all duration-200 ease-out ${
+              isCollapsed ? 'min-h-[80px] p-0.5' : 'min-h-[200px] p-1'
+            } ${
+              snapshot.isDraggingOver
+                ? 'bg-indigo-100/80 ring-2 ring-indigo-400 ring-offset-1 ring-offset-slate-100'
+                : ''
+            }`}
           >
             {/* When collapsed, hide the cards but keep the
                   Droppable space so the drop target is still reach-
@@ -442,7 +446,7 @@ function Column({
                             onCardClick(task.id);
                           }
                         }}
-                        className={`cursor-pointer rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow hover:border-indigo-300 hover:shadow ${
+                        className={`cursor-pointer rounded-md border bg-white px-2 py-1.5 text-xs shadow-sm transition-shadow hover:border-indigo-300 hover:shadow ${
                           task.is_blocked
                             ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
                             : 'border-slate-200'
@@ -450,23 +454,25 @@ function Column({
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+                            <p className="font-mono text-[9px] font-medium uppercase tracking-wide text-slate-400">
                               {task.public_id}
                             </p>
-                            <h3 className="truncate font-medium text-slate-900">{task.title}</h3>
+                            <h3 className="truncate text-[13px] font-medium leading-snug text-slate-900">
+                              {task.title}
+                            </h3>
                           </div>
-                          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                          <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-600">
                             P{task.priority}
                           </span>
                         </div>
                         {task.is_blocked ? (
-                          <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
-                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                            Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
+                          <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-800">
+                            <span className="h-1 w-1 rounded-full bg-red-500" />
+                            Blocked
                           </p>
                         ) : null}
                         {task.description ? (
-                          <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                          <p className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">
                             {task.description}
                           </p>
                         ) : null}
