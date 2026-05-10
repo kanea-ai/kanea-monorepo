@@ -1,6 +1,12 @@
 'use client';
 
-import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
+import {
+  DragDropContext,
+  Draggable,
+  Droppable,
+  type DragUpdate,
+  type DropResult,
+} from '@hello-pangea/dnd';
 import { useRouter } from 'next/navigation';
 import { useMemo, useRef, useState } from 'react';
 
@@ -74,9 +80,32 @@ export function KanbanBoard() {
     router.push(`/tasks/${taskId}`);
   };
 
+  // Auto-expand a collapsed column when the user drags a card over
+  // it. We track which columns we *temporarily* expanded so we can
+  // re-collapse them after the drag — except for the column that
+  // received the drop, which stays expanded so the user sees the
+  // card land. Without this, dragging into DONE / CANCELLED was
+  // impossible from the rail-collapsed state.
+  const autoExpandedRef = useRef<Set<TaskStatus>>(new Set());
+
   const onDragStart = () => {
     draggingRef.current = true;
+    autoExpandedRef.current = new Set();
   };
+
+  const onDragUpdate = (update: DragUpdate) => {
+    const destId = update.destination?.droppableId as TaskStatus | undefined;
+    if (!destId) return;
+    // setCollapsed reads the previous value via the updater fn so we
+    // don't miss an expand if multiple updates fire in quick
+    // succession.
+    setCollapsed((prev) => {
+      if (!prev[destId]) return prev;
+      autoExpandedRef.current.add(destId);
+      return { ...prev, [destId]: false };
+    });
+  };
+
   const onDragEnd = (result: DropResult) => {
     // The drop completes synchronously; defer the click-suppression
     // release one tick so the synthetic click that follows the drop
@@ -86,6 +115,25 @@ export function KanbanBoard() {
     }, 0);
 
     const { destination, source, draggableId } = result;
+    const droppedInto = destination?.droppableId as TaskStatus | undefined;
+
+    // Re-collapse any column we auto-expanded *except* the one that
+    // received the drop. Keeping the destination expanded means the
+    // user sees the moved card land in its new column.
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const id of autoExpandedRef.current) {
+        if (id === droppedInto) continue;
+        if (!next[id]) {
+          next[id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    autoExpandedRef.current = new Set();
+
     if (!destination) return;
     if (destination.droppableId === source.droppableId) return;
 
@@ -113,7 +161,7 @@ export function KanbanBoard() {
           Showing your tasks. Workspace admins see the full board.
         </div>
       )}
-      <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <DragDropContext onDragStart={onDragStart} onDragUpdate={onDragUpdate} onDragEnd={onDragEnd}>
         {/* Columns flex-wise rather than equal-grid. Active columns
             stretch; collapsed ones shrink to a 12-rem rail so they
             stay usable. Below md they scroll horizontally. */}
@@ -338,75 +386,84 @@ function Column({
           {tasks.length}
         </span>
       </button>
-      {isCollapsed ? null : (
-        <Droppable droppableId={id}>
-          {(provided, snapshot) => (
-            <div
-              ref={provided.innerRef}
-              {...provided.droppableProps}
-              className={`flex min-h-[200px] flex-1 flex-col gap-2 rounded-md p-1 transition-colors ${
-                snapshot.isDraggingOver ? 'bg-slate-200/70' : ''
-              }`}
-            >
-              {tasks.map((task, index) => (
-                <Draggable key={task.id} draggableId={task.id} index={index}>
-                  {(p, s) => (
-                    // Whole card is clickable. dnd treats mousedown as
-                    // a press that becomes a drag only after movement;
-                    // a pure click leaves dragHandleProps' onMouseUp
-                    // unchanged and our onClick fires. After a real
-                    // drag, the parent's draggingRef is true so the
-                    // click-handler bails — see KanbanBoard.onCardClick.
-                    <article
-                      ref={p.innerRef}
-                      {...p.draggableProps}
-                      {...p.dragHandleProps}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onCardClick(task.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onCardClick(task.id);
-                        }
-                      }}
-                      className={`cursor-pointer rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow hover:border-indigo-300 hover:shadow ${
-                        task.is_blocked
-                          ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
-                          : 'border-slate-200'
-                      } ${s.isDragging ? 'cursor-grabbing shadow-md ring-2 ring-indigo-300' : ''}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
-                            {task.public_id}
-                          </p>
-                          <h3 className="truncate font-medium text-slate-900">{task.title}</h3>
+      {/* The Droppable always mounts — dnd needs it in the tree to
+          fire onDragUpdate when the user hovers a collapsed column,
+          which is what triggers the auto-expand-on-hover behaviour
+          in the parent. When collapsed, the inner area shrinks to
+          a tiny strip but still accepts the drop. */}
+      <Droppable droppableId={id}>
+        {(provided, snapshot) => (
+          <div
+            ref={provided.innerRef}
+            {...provided.droppableProps}
+            className={`flex flex-1 flex-col gap-2 rounded-md transition-colors ${
+              isCollapsed ? 'min-h-[80px] p-0' : 'min-h-[200px] p-1'
+            } ${snapshot.isDraggingOver ? 'bg-slate-200/70' : ''}`}
+          >
+            {/* When collapsed, hide the cards but keep the
+                  Droppable space so the drop target is still reach-
+                  able. The card list re-renders the moment the
+                  parent toggles isCollapsed false. */}
+            {isCollapsed
+              ? null
+              : tasks.map((task, index) => (
+                  <Draggable key={task.id} draggableId={task.id} index={index}>
+                    {(p, s) => (
+                      // Whole card is clickable. dnd treats mousedown as
+                      // a press that becomes a drag only after movement;
+                      // a pure click leaves dragHandleProps' onMouseUp
+                      // unchanged and our onClick fires. After a real
+                      // drag, the parent's draggingRef is true so the
+                      // click-handler bails — see KanbanBoard.onCardClick.
+                      <article
+                        ref={p.innerRef}
+                        {...p.draggableProps}
+                        {...p.dragHandleProps}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => onCardClick(task.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            onCardClick(task.id);
+                          }
+                        }}
+                        className={`cursor-pointer rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow hover:border-indigo-300 hover:shadow ${
+                          task.is_blocked
+                            ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
+                            : 'border-slate-200'
+                        } ${s.isDragging ? 'cursor-grabbing shadow-md ring-2 ring-indigo-300' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+                              {task.public_id}
+                            </p>
+                            <h3 className="truncate font-medium text-slate-900">{task.title}</h3>
+                          </div>
+                          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                            P{task.priority}
+                          </span>
                         </div>
-                        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
-                          P{task.priority}
-                        </span>
-                      </div>
-                      {task.is_blocked ? (
-                        <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
-                          <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                          Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
-                        </p>
-                      ) : null}
-                      {task.description ? (
-                        <p className="mt-1 line-clamp-2 text-xs text-slate-500">
-                          {task.description}
-                        </p>
-                      ) : null}
-                    </article>
-                  )}
-                </Draggable>
-              ))}
-              {provided.placeholder}
-            </div>
-          )}
-        </Droppable>
-      )}
+                        {task.is_blocked ? (
+                          <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                            Blocked{task.blocked_reason ? ` — ${task.blocked_reason}` : ''}
+                          </p>
+                        ) : null}
+                        {task.description ? (
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                            {task.description}
+                          </p>
+                        ) : null}
+                      </article>
+                    )}
+                  </Draggable>
+                ))}
+            {provided.placeholder}
+          </div>
+        )}
+      </Droppable>
     </div>
   );
 }
