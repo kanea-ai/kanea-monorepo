@@ -12,6 +12,7 @@
 
 import { useMemo, useState } from 'react';
 
+import { ActorProfileDialog } from '../../components/ActorProfileDialog';
 import type { AuditAction, AuditLog, AuditResourceType } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import { useAuditLogs } from '../../lib/queries';
@@ -47,6 +48,10 @@ export default function AuditPage() {
 
   const [resourceFilter, setResourceFilter] = useState<'all' | AuditResourceType>('all');
   const [actorFilter, setActorFilter] = useState<string>('');
+  // When set, opens the priority-scoped profile dialog. The api
+  // returns the limited shape automatically when the principal is
+  // lower-rank than the actor.
+  const [actorOpenId, setActorOpenId] = useState<string | null>(null);
 
   const { data: logs, isLoading, isError, error } = useAuditLogs({ limit: 200 });
 
@@ -121,17 +126,27 @@ export default function AuditPage() {
           ) : (
             <ol className="divide-y divide-slate-100">
               {filtered.map((row) => (
-                <AuditRow key={row.id} log={row} />
+                <AuditRow key={row.id} log={row} onActorClick={setActorOpenId} />
               ))}
             </ol>
           )}
         </section>
       )}
+
+      {actorOpenId ? (
+        <ActorProfileDialog memberId={actorOpenId} onClose={() => setActorOpenId(null)} />
+      ) : null}
     </div>
   );
 }
 
-function AuditRow({ log }: { log: AuditLog }) {
+function AuditRow({
+  log,
+  onActorClick,
+}: {
+  log: AuditLog;
+  onActorClick: (memberId: string) => void;
+}) {
   return (
     <li className="grid grid-cols-[auto_1fr_auto] items-start gap-3 px-4 py-3 text-sm">
       <span
@@ -150,9 +165,17 @@ function AuditRow({ log }: { log: AuditLog }) {
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
           by{' '}
-          <span className="font-medium text-slate-700">
-            {log.actor_name ?? <em className="italic text-slate-400">deleted member</em>}
-          </span>
+          {log.actor_member_id && log.actor_name ? (
+            <button
+              type="button"
+              onClick={() => onActorClick(log.actor_member_id as string)}
+              className="font-medium text-slate-700 underline-offset-2 hover:text-indigo-700 hover:underline"
+            >
+              {log.actor_name}
+            </button>
+          ) : (
+            <em className="italic text-slate-400">deleted member</em>
+          )}
           {' · '}
           {new Date(log.created_at).toLocaleString()}
         </p>

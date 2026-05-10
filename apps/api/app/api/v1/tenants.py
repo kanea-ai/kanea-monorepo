@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import (
     InviteServiceDep,
@@ -12,11 +12,13 @@ from app.api.deps import (
 )
 from app.application.auth.schemas import TokenResponse
 from app.application.tenants.schemas import (
+    AdminSetMemberPasswordRequest,
     InviteAcceptRequest,
     InviteCreateRequest,
     InviteCreateResponse,
     InvitePreviewResponse,
     MemberFilters,
+    MemberProfileResponse,
     MemberResponse,
     MemberStatsResponse,
     SetMemberSuspensionRequest,
@@ -146,6 +148,29 @@ async def get_member(
 
 
 @router.get(
+    "/members/{member_id}/profile",
+    response_model=MemberProfileResponse,
+)
+async def get_member_profile(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberProfileResponse:
+    """Priority-scoped profile lookup. Drives the click-the-actor flow
+    on /audit: the response is full for owners and same-rank-or-higher
+    admins, but reduced (id / name / email / type only) when the
+    principal is lower-rank than the target. The visibility rule from
+    GET /members/{id} is the outer gate — callers who can't see the
+    member at all still get 403."""
+    try:
+        return await service.get_member_profile(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.get(
     "/members/{member_id}/stats",
     response_model=MemberStatsResponse,
 )
@@ -239,3 +264,29 @@ async def set_member_team(
     except ForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return MemberResponse.from_entity(member)
+
+
+@router.post(
+    "/members/{member_id}/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def admin_set_member_password(
+    member_id: UUID,
+    payload: AdminSetMemberPasswordRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> Response:
+    """Admin-side password reset. Useful straight after an invite —
+    the User row exists with a random placeholder, so the admin can
+    seed something temporary the invitee will then change. The
+    service refuses for cross-workspace users (their credential
+    isn't this admin's to overwrite) and for the principal's own
+    membership (use /me/password)."""
+    try:
+        await service.admin_set_member_password(member_id, payload.new_password, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

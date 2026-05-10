@@ -184,14 +184,20 @@ export function MemberDetailDialog({
             )}
           </Field>
           <Field label="Workspace role">
-            {isAdmin && isHuman ? (
+            {isAdmin ? (
               <div>
+                {/* Workspace role is the system-power axis and applies
+                    to humans AND agents — agents need access power
+                    too. OWNER is reserved for humans (an agent has no
+                    User row to anchor it on); the dropdown still
+                    offers it for parity with the schema, but the api
+                    refuses the change for agents. */}
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value as MemberRole)}
                   className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
                 >
-                  <option value="WORKSPACE_OWNER">Owner</option>
+                  {isHuman ? <option value="WORKSPACE_OWNER">Owner</option> : null}
                   <option value="WORKSPACE_ADMIN">Admin</option>
                   <option value="WORKSPACE_USER">User</option>
                 </select>

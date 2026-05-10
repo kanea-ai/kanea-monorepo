@@ -523,6 +523,27 @@ export interface MemberStats {
   total_tokens_used: number;
 }
 
+// Priority-scoped profile shape returned by /tenants/members/{id}/profile.
+// When ``is_limited_view`` is true (lower-rank admin viewing a
+// higher-rank member), the restricted fields below are null.
+export interface MemberProfile {
+  id: string;
+  workspace_id: string;
+  name: string;
+  email: string | null;
+  type: MemberKind;
+  is_limited_view: boolean;
+  role: MemberRole | null;
+  priority: number | null;
+  team_id: string | null;
+  team_role: TeamRole | null;
+  is_suspended: boolean | null;
+}
+
+export interface AdminSetMemberPasswordPayload {
+  new_password: string;
+}
+
 export const tenantsApi = {
   listMembers: (filters: MemberListFilters = {}) => {
     const params = new URLSearchParams();
@@ -536,6 +557,7 @@ export const tenantsApi = {
     return request<Member[]>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
   },
   getMember: (id: string) => request<Member>(`${V1}/tenants/members/${id}`),
+  getMemberProfile: (id: string) => request<MemberProfile>(`${V1}/tenants/members/${id}/profile`),
   getMemberStats: (id: string) => request<MemberStats>(`${V1}/tenants/members/${id}/stats`),
   updateMemberProfile: (id: string, payload: UpdateMemberProfilePayload) =>
     request<Member>(`${V1}/tenants/members/${id}`, {
@@ -562,6 +584,11 @@ export const tenantsApi = {
   setMemberSuspension: (memberId: string, payload: SetMemberSuspensionPayload) =>
     request<Member>(`${V1}/tenants/members/${memberId}/suspension`, {
       method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  adminSetMemberPassword: (memberId: string, payload: AdminSetMemberPasswordPayload) =>
+    requestVoid(`${V1}/tenants/members/${memberId}/password`, {
+      method: 'POST',
       body: JSON.stringify(payload),
     }),
 };

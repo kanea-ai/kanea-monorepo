@@ -28,6 +28,7 @@ from app.application.tenants.schemas import (
     InviteCreateResponse,
     InvitePreviewResponse,
     MemberFilters,
+    MemberProfileResponse,
     SetMemberSuspensionRequest,
     SetMemberTeamRequest,
     UpdateMemberProfileRequest,
@@ -91,6 +92,51 @@ class InviteService:
         if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             raise ForbiddenError("workspace owner or admin role required")
 
+        # Provision the User and Member up-front so the directory
+        # surfaces the new entry immediately and admins can edit
+        # their workspace role / password before the invitee accepts.
+        # The invite token is still required to set the *invitee's*
+        # own password — the placeholder we mint here is unguessable.
+        if self.users is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("users repo not wired")
+
+        existing_member = await self.auth_members.get_by_email(str(request.email))
+        if existing_member is not None and existing_member.workspace_id == principal.workspace_id:
+            raise EmailAlreadyExistsError(
+                "a member with this email already exists in the workspace"
+            )
+
+        user = await self.users.get_by_email(str(request.email))
+        if user is None:
+            # Brand-new account on the platform. Mint a User with a
+            # random throw-away password hash. The invitee sets their
+            # real password on accept; an admin can also set one via
+            # POST /tenants/members/{id}/password before then.
+            placeholder = secrets.token_urlsafe(32)
+            user = await self.users.create(
+                User(
+                    id=uuid4(),
+                    email=str(request.email),
+                    full_name=_default_name_from_email(str(request.email)),
+                    password_hash=self.hasher.hash(placeholder),
+                )
+            )
+
+        # Member row, role from the invite payload. Created with
+        # priority 5 to match the previous accept-time default.
+        await self.auth_members.create(
+            Member(
+                id=uuid4(),
+                workspace_id=principal.workspace_id,
+                user_id=user.id,
+                type=MemberType.HUMAN,
+                name=user.full_name,
+                email=str(request.email),
+                priority=5,
+                role=request.role,
+            )
+        )
+
         raw_token = secrets.token_urlsafe(32)
         invite = await self.invites.create(
             Invite(
@@ -123,54 +169,53 @@ class InviteService:
         )
 
     async def accept_invite(self, raw_token: str, request: InviteAcceptRequest) -> TokenResponse:
+        """Phase 6: the User and Member are now provisioned at invite-
+        send. Accept therefore *updates* the existing rows with the
+        invitee's real name + password rather than creating new ones.
+
+        For invitees who already had a User in another workspace, we
+        leave the password untouched — that User belongs to other
+        workspaces too, and an admin in *this* workspace shouldn't
+        clobber it. The check is "User has more than one membership".
+        """
         if self.users is None:  # pragma: no cover - DI invariant
             raise RuntimeError("users repo not wired")
 
         invite = await self._load_active_invite(raw_token)
 
-        # Reject if a member with the invited email already exists in
-        # this workspace — uq_members_workspace_id_email would catch
-        # it; surfacing a clean 409 here.
-        existing = await self.auth_members.get_by_email(invite.email)
-        if existing is not None and existing.workspace_id == invite.workspace_id:
-            raise EmailAlreadyExistsError(
-                "a member with this email already exists in the workspace"
-            )
-
-        # Phase 1 multi-tenancy: an invitee may already have a User
-        # row from a different workspace. If so, link the new
-        # membership to it; otherwise mint a User using the password
-        # the invitee just typed in.
         user = await self.users.get_by_email(invite.email)
-        if user is None:
-            user = await self.users.create(
-                User(
-                    id=uuid4(),
-                    email=invite.email,
-                    full_name=request.full_name,
-                    password_hash=self.hasher.hash(request.password),
-                )
-            )
-        # If the User already exists, we don't reset their password —
-        # they'd be confused why their existing password stopped
-        # working. The accept payload password is silently ignored
-        # in that branch (the user can change it later in settings).
+        if user is None:  # pragma: no cover - create_invite invariant
+            raise InviteNotFoundError("invite is missing its prepared user row")
 
-        # Priority: invited members default to a higher number (lower
-        # rank) than the workspace owner so they sit below in the
-        # delegation hierarchy.
-        member = await self.auth_members.create(
-            Member(
-                id=uuid4(),
-                workspace_id=invite.workspace_id,
-                user_id=user.id,
-                type=MemberType.HUMAN,
-                name=request.full_name,
-                email=invite.email,
-                priority=5,
-                role=invite.role,
-            )
+        member = await self.auth_members.get_by_email(invite.email)
+        # Cross-workspace edge: the matched member could belong to a
+        # different workspace if the email has memberships across the
+        # platform. Re-resolve the membership belonging to this
+        # invite's workspace via list_for_user — every other code
+        # path is also fine with that scoping.
+        memberships = await self.auth_members.list_for_user(user.id)
+        target_membership = next(
+            (m for m in memberships if m.workspace_id == invite.workspace_id),
+            None,
         )
+        if target_membership is None:  # pragma: no cover - create_invite invariant
+            raise InviteNotFoundError("invite is missing its prepared member row")
+        member = target_membership
+
+        # Update the User's display name. Always — the placeholder
+        # name we picked at invite-send is the email's local part,
+        # which is rarely what the human wants on their profile.
+        await self.users.update_full_name(user.id, request.full_name)
+        # Update password only when this is the user's *only*
+        # membership. A returning user already has a working
+        # credential we shouldn't overwrite from this workspace's
+        # accept flow.
+        if len(memberships) == 1:
+            await self.users.update_password(user.id, self.hasher.hash(request.password))
+        # And keep the Member's own display name in sync with the
+        # User's so directory rows render the new name.
+        member = await self.auth_members.update_profile(member.id, name=request.full_name)
+
         await self.invites.mark_accepted(invite.id)
 
         token, ttl = self.tokens.issue_human_token(member)
@@ -252,6 +297,38 @@ class InviteService:
             return target
 
         raise ForbiddenError("not allowed to view this member")
+
+    async def get_member_profile(
+        self, member_id: UUID, principal: Principal
+    ) -> MemberProfileResponse:
+        """Priority-scoped profile. Used by the audit-log UI when a
+        lower-rank admin clicks the actor name on an event recorded
+        by a higher-rank actor — they get just enough to identify the
+        person (id, name, email, type) without exposing role / team /
+        suspension state.
+
+        Rules:
+        - OWNER always gets the full view of anyone in the workspace.
+        - Self always gets the full view (you can see your own role
+          and priority on /profile).
+        - Otherwise: when the principal's priority value is greater
+          than the target's (i.e. the principal is *lower* in rank),
+          return the limited shape. Else return full.
+        - Plain visibility (admin or teammate) is the gate; the
+          existing ``get_member`` rule still throws 403 for callers
+          who shouldn't even know the member exists.
+        """
+        target = await self.get_member(member_id, principal)
+
+        if target.id == principal.member_id:
+            return MemberProfileResponse.full(target)
+        if principal.role is MemberRole.WORKSPACE_OWNER:
+            return MemberProfileResponse.full(target)
+        # Lower priority *number* = higher rank. Reduced view kicks
+        # in when the principal is lower-rank than the target.
+        if principal.priority > target.priority:
+            return MemberProfileResponse.limited(target)
+        return MemberProfileResponse.full(target)
 
     async def get_member_stats(self, member_id: UUID, principal: Principal) -> AgentStats:
         """Per-member stats. Visibility mirrors get_member exactly —
@@ -468,6 +545,51 @@ class InviteService:
             )
         return updated
 
+    async def admin_set_member_password(
+        self,
+        member_id: UUID,
+        new_password: str,
+        principal: Principal,
+    ) -> None:
+        """Admin-side password reset.
+
+        Useful right after sending an invite — the User row exists but
+        the password is an unguessable placeholder, so the admin can
+        seed something temporary the invitee will pick up.
+
+        Refuses when:
+        - the requester isn't OWNER/ADMIN
+        - the target member is the principal themselves (use the
+          regular change-password flow on /me — current-password
+          required, which is the right belt-and-braces for self)
+        - the underlying User belongs to multiple workspaces. We
+          can't safely reset a credential the invitee uses elsewhere;
+          they need to use the password-recovery flow instead.
+        """
+        if self.users is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("users repo not wired")
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
+
+        target = await self.members.get_by_id(member_id)
+        if target is None or target.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+        if target.id == principal.member_id:
+            raise ForbiddenError("use the change-password flow on /me to reset your own password")
+        if target.user_id is None:
+            # AGENTs have no User row — passwords don't apply to them;
+            # they auth via agent_secret.
+            raise InvalidMemberTypeError("agents do not have a password to set")
+
+        memberships = await self.auth_members.list_for_user(target.user_id)
+        if len(memberships) > 1:
+            raise ForbiddenError(
+                "this user has memberships in other workspaces; "
+                "only they can change their password"
+            )
+
+        await self.users.update_password(target.user_id, self.hasher.hash(new_password))
+
     async def _load_active_invite(self, raw_token: str) -> Invite:
         invite = await self.invites.get_by_token_hash(_hash_token(raw_token))
         if invite is None:
@@ -486,6 +608,15 @@ class InviteService:
         if expires_at <= now:
             raise InviteExpiredError("invite has expired")
         return invite
+
+
+def _default_name_from_email(email: str) -> str:
+    """At invite-send time we don't yet know the invitee's real name.
+    Use the local-part as a placeholder so the directory row reads
+    sensibly until they accept and update it. ``alice@example.com`` →
+    ``alice``."""
+    local = email.split("@", 1)[0]
+    return local or email
 
 
 def _field_diff(before: dict, after: dict) -> dict:

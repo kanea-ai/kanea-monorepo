@@ -87,6 +87,65 @@ class MemberResponse(BaseModel):
         )
 
 
+class MemberProfileResponse(BaseModel):
+    """Priority-scoped profile shape returned by
+    ``GET /tenants/members/{id}/profile``. Two flavours:
+
+    * **Full view** — same shape as ``MemberResponse``: every field is
+      populated. Returned when the principal is OWNER, the target,
+      or an admin whose priority is ≤ the target's priority.
+    * **Limited view** — only ``id``, ``name``, ``email``, ``type``
+      are populated. Used when a lower-rank admin clicks an actor
+      with a higher rank (lower priority number) in the audit log,
+      so they get just enough to know who they're looking at without
+      exposing role / team / suspension state etc.
+
+    The ``is_limited_view`` flag is the contract the UI keys off of
+    when deciding what fields to render."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    email: str | None
+    type: MemberType
+    is_limited_view: bool
+    # Restricted fields — nullable in the limited shape.
+    role: MemberRole | None = None
+    priority: int | None = None
+    team_id: UUID | None = None
+    team_role: TeamRole | None = None
+    is_suspended: bool | None = None
+
+    @classmethod
+    def full(cls, member: Member) -> MemberProfileResponse:
+        return cls(
+            id=member.id,
+            workspace_id=member.workspace_id,
+            name=member.name,
+            email=member.email,
+            type=member.type,
+            is_limited_view=False,
+            role=member.role,
+            priority=member.priority,
+            team_id=member.team_id,
+            team_role=member.team_role,
+            is_suspended=member.is_suspended,
+        )
+
+    @classmethod
+    def limited(cls, member: Member) -> MemberProfileResponse:
+        return cls(
+            id=member.id,
+            workspace_id=member.workspace_id,
+            name=member.name,
+            email=member.email,
+            type=member.type,
+            is_limited_view=True,
+        )
+
+
 class MemberStatsResponse(BaseModel):
     """Stats for any member (human or agent). Mirrors the agent
     detail's AgentStats shape — same SQL feeds both — so the
@@ -135,6 +194,18 @@ class UpdateMemberProfileRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     role: MemberRole | None = None
     priority: int | None = Field(default=None, ge=1, le=100)
+
+
+class AdminSetMemberPasswordRequest(BaseModel):
+    """Admin-side password reset payload. Contrast with /me/password
+    which requires the principal's current password — admins don't
+    have it. The service refuses to write when the underlying User
+    has memberships in other workspaces (their credential is shared
+    and isn't this admin's to reset)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class SetMemberSuspensionRequest(BaseModel):

@@ -92,6 +92,16 @@ def service(
     tokens: MagicMock,
     users: AsyncMock,
 ) -> InviteService:
+    # Phase 6: ``create_invite`` provisions the User + Member up
+    # front. Default the lookup mocks to "no collision" so the happy-
+    # path tests don't have to wire it themselves; tests that need a
+    # collision override these per-test.
+    auth_members.get_by_email.return_value = None
+    users.get_by_email.return_value = None
+    users.create.side_effect = lambda u: u
+    auth_members.create.side_effect = lambda m: m
+    invites.create.side_effect = lambda i: i
+
     return InviteService(
         invites=invites,
         members=tenant_members,
@@ -229,22 +239,38 @@ async def test_preview_already_accepted(service: InviteService, invites: AsyncMo
 # ---------- accept_invite ----------
 
 
-async def test_accept_invite_creates_user_and_member(
+async def test_accept_invite_updates_password_and_name_for_solo_user(
     service: InviteService,
     invites: AsyncMock,
     auth_members: AsyncMock,
     users: AsyncMock,
-    tokens: MagicMock,
 ) -> None:
-    """Phase 1: invite acceptance creates a global User + a Member
-    linked to it. No more credentials row for human auth — that lives
-    on users now."""
+    """Phase 6: User + Member are now provisioned at invite-send. On
+    accept, the service updates the existing rows with the invitee's
+    real name + password (and only updates password when this is
+    their *only* membership — see the multi-workspace test below)."""
+    from datetime import UTC, datetime
+
+    from app.domain.entities import User as UserEntity
+
     invite = _active_invite(role=MemberRole.WORKSPACE_ADMIN)
     invites.get_by_token_hash.return_value = invite
-    auth_members.get_by_email.return_value = None
-    users.get_by_email.return_value = None  # brand-new user
-    users.create.side_effect = lambda u: u
-    auth_members.create.side_effect = lambda m: m
+
+    # Pre-existing User with the placeholder password from create_invite.
+    user = UserEntity(
+        id=uuid4(),
+        email=invite.email,
+        full_name="bob",  # email local-part placeholder
+        password_hash="bcrypt$placeholder",  # pragma: allowlist secret
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    users.get_by_email.return_value = user
+
+    # Pre-existing Member, single workspace.
+    pending_member = make_human(workspace_id=invite.workspace_id, email=invite.email)
+    auth_members.list_for_user.return_value = [pending_member]
+    auth_members.update_profile.side_effect = lambda mid, **kwargs: pending_member
     invites.mark_accepted.return_value = invite
 
     response = await service.accept_invite(
@@ -253,40 +279,38 @@ async def test_accept_invite_creates_user_and_member(
     )
     assert response.access_token == "human.jwt"
 
-    # Global User created with the hashed password.
-    users.create.assert_awaited_once()
-    created_user = users.create.await_args.args[0]
-    assert created_user.email == invite.email
-    assert created_user.password_hash == "bcrypt$hunter2hunter2"  # pragma: allowlist secret
+    # Real name overwrites the placeholder on both User and Member.
+    users.update_full_name.assert_awaited_once_with(user.id, "Bob")
+    auth_members.update_profile.assert_awaited_once_with(pending_member.id, name="Bob")
 
-    # Member links to that user, carries the invited role.
-    auth_members.create.assert_awaited_once()
-    created_member = auth_members.create.await_args.args[0]
-    assert created_member.workspace_id == invite.workspace_id
-    assert created_member.user_id == created_user.id
-    assert created_member.role is MemberRole.WORKSPACE_ADMIN
-    assert created_member.type is MemberType.HUMAN
+    # Single membership → password reset succeeds.
+    users.update_password.assert_awaited_once_with(
+        user.id, "bcrypt$hunter2hunter2"  # pragma: allowlist secret
+    )
+
+    # No new rows created — they already exist from create_invite.
+    users.create.assert_not_called()
+    auth_members.create.assert_not_called()
     invites.mark_accepted.assert_awaited_once_with(invite.id)
 
 
-async def test_accept_invite_links_to_existing_user(
+async def test_accept_invite_keeps_password_for_multi_workspace_user(
     service: InviteService,
     invites: AsyncMock,
     auth_members: AsyncMock,
     users: AsyncMock,
 ) -> None:
-    """If the invitee's email already has a User from another
-    workspace, accept just creates a new Member pointing at that user
-    — without resetting the password."""
-    invite = _active_invite()
-    invites.get_by_token_hash.return_value = invite
-    auth_members.get_by_email.return_value = None
-
+    """If the invitee already has memberships in OTHER workspaces,
+    accept does NOT reset their password — that credential isn't
+    this workspace's to overwrite."""
     from datetime import UTC, datetime
 
     from app.domain.entities import User as UserEntity
 
-    existing = UserEntity(
+    invite = _active_invite()
+    invites.get_by_token_hash.return_value = invite
+
+    user = UserEntity(
         id=uuid4(),
         email=invite.email,
         full_name="Bob",
@@ -294,34 +318,39 @@ async def test_accept_invite_links_to_existing_user(
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    users.get_by_email.return_value = existing
-    auth_members.create.side_effect = lambda m: m
+    users.get_by_email.return_value = user
+
+    this_membership = make_human(workspace_id=invite.workspace_id, email=invite.email)
+    other_membership = make_human(workspace_id=uuid4(), email=invite.email)
+    auth_members.list_for_user.return_value = [this_membership, other_membership]
+    auth_members.update_profile.side_effect = lambda mid, **kwargs: this_membership
     invites.mark_accepted.return_value = invite
 
     await service.accept_invite(
         "raw",
         InviteAcceptRequest(full_name="Bob", password="ignored-pwd!!"),  # pragma: allowlist secret
     )
-    # No user was created — the existing one is reused.
-    users.create.assert_not_called()
-    created_member = auth_members.create.await_args.args[0]
-    assert created_member.user_id == existing.id
+
+    users.update_password.assert_not_called()
+    # Display name is still synced — it's local to this membership /
+    # this user's profile, no cross-workspace surprise there.
+    users.update_full_name.assert_awaited_once()
 
 
-async def test_accept_invite_rejects_when_email_already_in_workspace(
-    service: InviteService, invites: AsyncMock, auth_members: AsyncMock
+async def test_create_invite_rejects_when_email_already_in_workspace(
+    service: InviteService, auth_members: AsyncMock
 ) -> None:
-    invite = _active_invite()
-    invites.get_by_token_hash.return_value = invite
-    # Existing member with the same email AND same workspace.
+    """Collision detection moved to create_invite (the User+Member
+    are provisioned there); accept_invite no longer needs the
+    check."""
+    p = _principal(role=MemberRole.WORKSPACE_OWNER)
     auth_members.get_by_email.return_value = make_human(
-        email=invite.email, workspace_id=invite.workspace_id
+        email="bob@kanea.ai", workspace_id=p.workspace_id
     )
 
     with pytest.raises(EmailAlreadyExistsError):
-        await service.accept_invite(
-            "raw",
-            InviteAcceptRequest(full_name="Bob", password="abcdefgh"),  # pragma: allowlist secret
+        await service.create_invite(
+            InviteCreateRequest(email="bob@kanea.ai", role=MemberRole.WORKSPACE_USER), p
         )
 
 

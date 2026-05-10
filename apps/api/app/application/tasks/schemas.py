@@ -170,8 +170,14 @@ class TaskResponse(BaseModel):
 
 
 class CreateRequestPayload(BaseModel):
-    """A standard MEMBER files this from their source task. Their own
-    team's leadership picks it up via the inbox."""
+    """File a cross-team request anchored to a source task.
+
+    The action is *immediate*: the target team task is minted on the
+    spot, and a directed relation links source → target (default
+    BLOCKS). Members who don't have access to the target team's board
+    can still raise work for them this way; the request row stays
+    around as the audit trail and the inbox notification.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +185,11 @@ class CreateRequestPayload(BaseModel):
     suggested_title: str = Field(min_length=1, max_length=200)
     suggested_description: str | None = Field(default=None, max_length=20_000)
     justification: str | None = Field(default=None, max_length=2_000)
+    # The relation that links source ↔ target task once the target is
+    # minted. Defaults to BLOCKS — i.e. "the source is blocked by the
+    # new task" — which matches the legacy behaviour where leadership
+    # had to fulfill explicitly.
+    relation_type: TaskRelationType = TaskRelationType.BLOCKS
 
 
 class FulfillRequestPayload(BaseModel):

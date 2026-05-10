@@ -41,6 +41,7 @@ import {
   type MeStats,
   type DashboardResponse,
   type Member,
+  type MemberProfile,
   type MeWorkspace,
   type NotificationCount,
   type NotificationItem,
@@ -203,6 +204,18 @@ export function useMember(id: string) {
   return useQuery<Member>({
     queryKey: tenantKeys.member(id),
     queryFn: () => tenantsApi.getMember(id),
+    enabled: !!id,
+  });
+}
+
+// Priority-scoped lookup. Drives the audit-log "click the actor"
+// flow — a lower-rank admin sees a reduced shape (id/name/email/type
+// only). Server enforces the rule; the client just renders what
+// arrives.
+export function useMemberProfile(id: string | null) {
+  return useQuery<MemberProfile>({
+    queryKey: ['tenants', 'members', id ?? '', 'profile'],
+    queryFn: () => tenantsApi.getMemberProfile(id as string),
     enabled: !!id,
   });
 }

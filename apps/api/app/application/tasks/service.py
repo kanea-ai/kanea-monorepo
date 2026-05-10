@@ -384,11 +384,18 @@ class TaskService:
     ) -> TaskRequestResponse:
         """File a cross-team request anchored to a source task.
 
+        Auto-fulfilling: the target team task is minted immediately
+        and a directed relation links source ↔ target (default
+        BLOCKS). The request row is stored as FULFILLED so the team
+        leadership inbox still surfaces the new arrival, but no
+        approval step is required. This lets a USER raise cross-team
+        work without ever needing access to the target team's board.
+
         RBAC: workspace admin OR the requester must own the source
-        task (creator/assignee). The leadership of the source task's
-        team will fulfill or reject."""
-        if self.requests is None:  # pragma: no cover - DI invariant
-            raise RuntimeError("requests repo not wired")
+        task (creator/assignee).
+        """
+        if self.requests is None or self.relations is None:  # pragma: no cover
+            raise RuntimeError("requests / relations repo not wired")
 
         task = await self._load_task(task_id, requester)
         await self._require_workspace_team(request.requested_team_id, requester)
@@ -402,6 +409,63 @@ class TaskService:
                 "only the task assignee or creator may file a cross-team request"
             )
 
+        # Mint the target task immediately. Allocate a workspace seq
+        # so the new task gets a public id, and inherit the project
+        # link from the source — cross-team work usually belongs to
+        # the same product initiative.
+        seq, _prefix = await self.seq_allocator.allocate_next_task_seq(requester.workspace_id)
+        now = datetime.utcnow()
+        target = await self.tasks.create(
+            Task(
+                id=uuid4(),
+                workspace_id=requester.workspace_id,
+                created_by_id=requester.member_id,
+                title=request.suggested_title,
+                status=TaskStatus.PENDING,
+                priority=0,
+                seq=seq,
+                description=request.suggested_description,
+                assignee_id=None,
+                project_id=task.project_id,
+                team_id=request.requested_team_id,
+                due_at=None,
+                is_blocked=False,
+                blocked_reason=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await self._record(
+            task_id=target.id,
+            actor=requester,
+            event_type=TaskActivityType.CREATED,
+            payload={"title": target.title, "via_request_for_task_id": str(task.id)},
+        )
+
+        # Link source ↔ target with the requester's chosen relation.
+        # The default BLOCKS preserves the previous semantics (target
+        # blocks source) so existing UI behaviour around the
+        # exception queue / blocked count stays consistent.
+        await self.relations.create(
+            TaskRelation(
+                id=uuid4(),
+                source_task_id=target.id,
+                target_task_id=task.id,
+                relation_type=request.relation_type,
+            )
+        )
+        if request.relation_type is TaskRelationType.BLOCKS:
+            await self._record(
+                task_id=task.id,
+                actor=requester,
+                event_type=TaskActivityType.BLOCKED,
+                payload={"blocked_by_task_id": str(target.id)},
+            )
+
+        # Record the request as FULFILLED on creation. The inbox
+        # endpoint still picks it up so leadership has a notification
+        # surface; rejecting an already-fulfilled request is a no-op
+        # at the lifecycle layer.
         created = await self.requests.create(
             TaskRequest(
                 id=uuid4(),
@@ -411,7 +475,10 @@ class TaskService:
                 suggested_title=request.suggested_title,
                 suggested_description=request.suggested_description,
                 justification=request.justification,
-                status=RequestStatus.PENDING,
+                status=RequestStatus.FULFILLED,
+                fulfilled_task_id=target.id,
+                resolver_member_id=requester.member_id,
+                resolved_at=now,
             )
         )
         return await self._request_to_response(created)

@@ -95,7 +95,7 @@ export function Dashboard() {
               value={blocked.length}
               loading={isLoading}
               tone={blocked.length > 0 ? 'warn' : 'default'}
-              href="/blocked"
+              href="/blocks"
             />
             <StatTile
               label={STATUS_LABEL.DONE}
@@ -112,7 +112,7 @@ export function Dashboard() {
               subtitle="Tasks an agent flagged as blocked."
               action={
                 <Link
-                  href="/blocked"
+                  href="/blocks"
                   className="text-xs font-medium text-indigo-700 hover:underline"
                 >
                   View all →

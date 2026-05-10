@@ -10,6 +10,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 
 import { ApiError } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
 import { useChangePassword, useMe, useMeStats, useUpdateMe } from '../../lib/queries';
 
 export default function ProfilePage() {
@@ -52,7 +53,28 @@ export default function ProfilePage() {
         lastActivity={stats?.last_activity_at ?? null}
         tokens={stats?.total_tokens_used}
       />
+
+      <SignOutSection />
     </div>
+  );
+}
+
+function SignOutSection() {
+  // Sign out used to live in the sidebar's bottom bar; that slot is now
+  // the Profile entry point so the sign-out action moved here. Kept as
+  // its own section so it's hard to mis-click while editing the
+  // profile.
+  const { logout } = useAuth();
+  return (
+    <Section title="Sign out" subtitle="End this session on this device.">
+      <button
+        type="button"
+        onClick={logout}
+        className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
+      >
+        Sign out
+      </button>
+    </Section>
   );
 }
 

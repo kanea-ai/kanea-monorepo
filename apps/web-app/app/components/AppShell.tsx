@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 
 import { useAuth, useRequireAuth } from '../lib/auth';
-import { useBlockedTasks } from '../lib/queries';
+import { useBlockedTasks, useMe } from '../lib/queries';
 import { NotificationsBell } from './NotificationsBell';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
@@ -62,28 +62,31 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 function AppShellInner({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { logout } = useAuth();
   const [navOpen, setNavOpen] = useState(false);
 
   // Pull the blocked count for the sidebar badge. Cached + auto-refreshed by
   // useBlockedTasks; safe to share across pages.
   const { data: blocked } = useBlockedTasks();
+  // Drives the bottom-bar Profile button label.
+  const { data: me } = useMe();
 
+  // Order matters: Dashboard → Board → Projects → Blocks → Directory →
+  // Teams → Departments → Audit. Profile sits in the bottom section
+  // (see below) — it's the only navigation item not in this list.
   const items: NavItem[] = [
     { href: '/', label: 'Dashboard' },
     { href: '/board', label: 'Board' },
     { href: '/projects', label: 'Projects' },
-    { href: '/blocked', label: 'Blocked', badge: blocked?.length },
-    { href: '/departments', label: 'Departments' },
-    { href: '/teams', label: 'Teams' },
+    { href: '/blocks', label: 'Blocks', badge: blocked?.length },
     { href: '/directory', label: 'Directory' },
+    { href: '/teams', label: 'Teams' },
+    { href: '/departments', label: 'Departments' },
     // Audit is admin-only at the api level; the link is shown to
     // everyone but unauthorised users get an empty list (USER role)
     // or 403 (priority too low). We render the link unconditionally
     // so admins discover it without us needing to thread the role
     // bit through this component too.
     { href: '/audit', label: 'Audit' },
-    { href: '/profile', label: 'My profile' },
   ];
 
   return (
@@ -132,14 +135,23 @@ function AppShellInner({ children }: { children: ReactNode }) {
             />
           ))}
         </nav>
-        <div className="mt-auto hidden border-t border-slate-200 p-3 lg:block">
-          <button
-            type="button"
-            onClick={logout}
-            className="w-full rounded-md px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        {/* Bottom-bar Profile button. Replaces the old Sign-out button —
+            sign-out itself moved to the /profile page. The button reads
+            as "Profile" with the user's name underneath, so the user
+            knows whose profile they're about to open. */}
+        <div className="mt-auto hidden border-t border-slate-200 p-2 lg:block">
+          <Link
+            href="/profile"
+            onClick={() => setNavOpen(false)}
+            className={`flex w-full flex-col rounded-md px-3 py-2 text-left text-sm transition-colors ${
+              isActive(pathname, '/profile')
+                ? 'bg-indigo-50 text-indigo-700'
+                : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+            }`}
           >
-            Sign out
-          </button>
+            <span className="font-medium">Profile</span>
+            {me ? <span className="truncate text-xs text-slate-500">{me.full_name}</span> : null}
+          </Link>
         </div>
       </aside>
 

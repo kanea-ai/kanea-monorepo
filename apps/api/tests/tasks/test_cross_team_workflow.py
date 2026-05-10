@@ -216,14 +216,21 @@ async def test_member_can_request_on_own_task(
     task_repo: AsyncMock,
     teams_repo: AsyncMock,
     requests_repo: AsyncMock,
+    relations: AsyncMock,
+    seq_allocator: AsyncMock,
     members: AsyncMock,
 ) -> None:
+    """Auto-fulfill flow: filing the request mints the target task
+    immediately, links source ← target, and the request row stores
+    as FULFILLED with the new task id."""
     p = make_principal(role=MemberRole.WORKSPACE_USER)
     source = make_task(workspace_id=p.workspace_id, created_by_id=p.member_id)
     target_team = _team(p.workspace_id)
     task_repo.get_by_id.return_value = source
+    task_repo.create.side_effect = lambda t: t
     teams_repo.get_by_id.return_value = target_team
     members.get_by_id.return_value = _member(workspace_id=p.workspace_id, member_id=p.member_id)
+    seq_allocator.allocate_next_task_seq.return_value = (42, "DEVOPS")
     requests_repo.create.side_effect = lambda r: r
 
     response = await service.create_request(
@@ -235,8 +242,60 @@ async def test_member_can_request_on_own_task(
         ),
         p,
     )
-    assert response.status is RequestStatus.PENDING
+
+    # Target task minted on the right team.
+    task_repo.create.assert_awaited_once()
+    minted = task_repo.create.call_args[0][0]
+    assert minted.team_id == target_team.id
+    assert minted.title == "please help"
+
+    # Source ← target relation, default BLOCKS.
+    relations.create.assert_awaited_once()
+    rel = relations.create.call_args[0][0]
+    assert rel.source_task_id == minted.id
+    assert rel.target_task_id == source.id
+    assert rel.relation_type is TaskRelationType.BLOCKS
+
+    # Request row recorded as FULFILLED at creation, pointing at the
+    # newly minted task.
+    assert response.status is RequestStatus.FULFILLED
+    assert response.fulfilled_task_id == minted.id
     assert response.requested_team_id == target_team.id
+
+
+async def test_request_with_relates_to_does_not_block_source(
+    service: TaskService,
+    task_repo: AsyncMock,
+    teams_repo: AsyncMock,
+    requests_repo: AsyncMock,
+    relations: AsyncMock,
+    seq_allocator: AsyncMock,
+    members: AsyncMock,
+) -> None:
+    """Choosing RELATES_TO instead of BLOCKS still mints the target
+    task and links the two, but skips the BLOCKED activity entry on
+    the source — the source isn't being held up by the new task."""
+    p = make_principal(role=MemberRole.WORKSPACE_USER)
+    source = make_task(workspace_id=p.workspace_id, created_by_id=p.member_id)
+    target_team = _team(p.workspace_id)
+    task_repo.get_by_id.return_value = source
+    task_repo.create.side_effect = lambda t: t
+    teams_repo.get_by_id.return_value = target_team
+    members.get_by_id.return_value = _member(workspace_id=p.workspace_id, member_id=p.member_id)
+    seq_allocator.allocate_next_task_seq.return_value = (43, "DEVOPS")
+    requests_repo.create.side_effect = lambda r: r
+
+    await service.create_request(
+        source.id,
+        CreateRequestPayload(
+            requested_team_id=target_team.id,
+            suggested_title="just FYI",
+            relation_type=TaskRelationType.RELATES_TO,
+        ),
+        p,
+    )
+    rel = relations.create.call_args[0][0]
+    assert rel.relation_type is TaskRelationType.RELATES_TO
 
 
 async def test_member_cannot_request_on_someone_elses_task(
