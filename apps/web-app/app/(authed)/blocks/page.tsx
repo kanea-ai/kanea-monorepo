@@ -1,14 +1,72 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, type FormEvent } from 'react';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
 
-import type { Task } from '../../lib/api';
-import { useBlockedTasks, useUpdateTaskStatus } from '../../lib/queries';
+import { Pagination } from '../../components/Pagination';
+import type { BlocksSort, Task, TaskStatus } from '../../lib/api';
+import { useBlocksPage, useProjects, useTeams, useUpdateTaskStatus } from '../../lib/queries';
 
-export default function BlockedPage() {
-  const { data, isLoading, isError, error } = useBlockedTasks();
-  const tasks = data ?? [];
+const PAGE_SIZE = 25;
+
+const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
+  { value: 'PENDING', label: 'Pending' },
+  { value: 'IN_PROGRESS', label: 'In progress' },
+  { value: 'IN_REVIEW', label: 'In review' },
+  { value: 'DONE', label: 'Done' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+];
+
+const SORT_OPTIONS: { value: BlocksSort; label: string }[] = [
+  { value: 'priority', label: 'Priority (highest first)' },
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
+];
+
+export default function BlocksPage() {
+  const [page, setPage] = useState(1);
+  const [status, setStatus] = useState<TaskStatus | ''>('');
+  const [teamId, setTeamId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [sort, setSort] = useState<BlocksSort>('priority');
+
+  // Reset to page 1 whenever a filter changes — otherwise we'd land
+  // on an out-of-range page when the result set shrinks.
+  const onFilterChange =
+    <T,>(setter: (v: T) => void) =>
+    (v: T) => {
+      setter(v);
+      setPage(1);
+    };
+
+  // Server-paginated. /blocks orders by priority ASC (highest rank
+  // first) so the most urgent items land on page 1.
+  const { data, isLoading, isError, error } = useBlocksPage({
+    skip: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
+    status: status || undefined,
+    teamId: teamId || undefined,
+    projectId: projectId || undefined,
+    sort,
+  });
+  const tasks = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  const teamsQuery = useTeams();
+  const projectsQuery = useProjects();
+  const teams = teamsQuery.data?.items ?? [];
+  const projects = projectsQuery.data?.items ?? [];
+
+  const hasActiveFilters =
+    status !== '' || teamId !== '' || projectId !== '' || sort !== 'priority';
+
+  const clearFilters = () => {
+    setStatus('');
+    setTeamId('');
+    setProjectId('');
+    setSort('priority');
+    setPage(1);
+  };
 
   return (
     <div className="space-y-4 p-4 sm:p-6">
@@ -28,6 +86,48 @@ export default function BlockedPage() {
         </Link>
       </header>
 
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <FilterSelect
+          label="Status"
+          value={status}
+          onChange={onFilterChange<TaskStatus | ''>((v) => setStatus(v))}
+          options={[{ value: '', label: 'Any status' }, ...STATUS_OPTIONS]}
+        />
+        <FilterSelect
+          label="Team"
+          value={teamId}
+          onChange={onFilterChange<string>((v) => setTeamId(v))}
+          options={[
+            { value: '', label: 'Any team' },
+            ...teams.map((t) => ({ value: t.id, label: t.name })),
+          ]}
+        />
+        <FilterSelect
+          label="Project"
+          value={projectId}
+          onChange={onFilterChange<string>((v) => setProjectId(v))}
+          options={[
+            { value: '', label: 'Any project' },
+            ...projects.map((p) => ({ value: p.id, label: p.name })),
+          ]}
+        />
+        <FilterSelect
+          label="Sort"
+          value={sort}
+          onChange={onFilterChange<BlocksSort>((v) => setSort(v))}
+          options={SORT_OPTIONS}
+        />
+        {hasActiveFilters ? (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="ml-auto rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            Clear filters
+          </button>
+        ) : null}
+      </div>
+
       {isError ? (
         <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Failed to load blocked tasks: {(error as Error).message}
@@ -35,15 +135,49 @@ export default function BlockedPage() {
       ) : isLoading ? (
         <SkeletonList />
       ) : tasks.length === 0 ? (
-        <EmptyState />
+        <EmptyState filtered={hasActiveFilters} />
       ) : (
-        <ul className="space-y-3">
-          {tasks.map((t) => (
-            <BlockedTaskCard key={t.id} task={t} />
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-3">
+            {tasks.map((t) => (
+              <BlockedTaskCard key={t.id} task={t} />
+            ))}
+          </ul>
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+          </div>
+        </>
       )}
     </div>
+  );
+}
+
+function FilterSelect<V extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: V;
+  onChange: (v: V) => void;
+  options: { value: V; label: string }[];
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+      {label}
+      <select
+        value={value}
+        onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value as V)}
+        className="min-w-[10rem] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -166,13 +300,24 @@ function SkeletonList() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ filtered }: { filtered: boolean }) {
   return (
     <div className="rounded-lg border border-dashed border-slate-200 bg-white p-10 text-center">
-      <p className="text-sm font-medium text-slate-700">All clear.</p>
-      <p className="mt-1 text-xs text-slate-500">
-        No tasks are currently blocked. Agents will surface them here when they need help.
-      </p>
+      {filtered ? (
+        <>
+          <p className="text-sm font-medium text-slate-700">No matches.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            No blocked tasks match the current filters. Try clearing one or two.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm font-medium text-slate-700">All clear.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            No tasks are currently blocked. Agents will surface them here when they need help.
+          </p>
+        </>
+      )}
     </div>
   );
 }

@@ -13,6 +13,7 @@ from app.application.departments.schemas import (
     DepartmentResponse,
     UpdateDepartmentRequest,
 )
+from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
 from app.domain.entities import Department
 from app.domain.enums import AuditAction, AuditResourceType, MemberRole
@@ -36,12 +37,21 @@ class DepartmentService:
     audit_logs: AuditLogService | None = None
 
     async def list_for_workspace(
-        self, principal: Principal, *, name: str | None = None
-    ) -> list[DepartmentResponse]:
+        self,
+        principal: Principal,
+        *,
+        name: str | None = None,
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> Page[DepartmentResponse]:
         """Anyone in the workspace can list departments — they're an
         organisational tag, not a permission boundary."""
-        rows = await self.departments.list_for_workspace(principal.workspace_id, name=name)
-        return [DepartmentResponse.from_entity(d) for d in rows]
+        rows, total = await self.departments.list_for_workspace(
+            principal.workspace_id, name=name, skip=skip, limit=limit
+        )
+        return Page[DepartmentResponse](
+            items=[DepartmentResponse.from_entity(d) for d in rows], total=total
+        )
 
     async def get_by_id(self, department_id: UUID, principal: Principal) -> DepartmentResponse:
         dept = await self._load_workspace_department(department_id, principal)

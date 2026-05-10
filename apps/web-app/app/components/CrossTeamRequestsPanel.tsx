@@ -93,7 +93,8 @@ function RequestRow({ request }: { request: TaskRequest }) {
 }
 
 function RequestForm({ taskId }: { taskId: string }) {
-  const { data: teams } = useTeams();
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
   const create = useCreateTaskRequest(taskId);
   const [open, setOpen] = useState(false);
   const [teamId, setTeamId] = useState('');
@@ -153,7 +154,7 @@ function RequestForm({ taskId }: { taskId: string }) {
           <option value="" disabled>
             Target team…
           </option>
-          {(teams ?? []).map((t) => (
+          {teams.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
             </option>

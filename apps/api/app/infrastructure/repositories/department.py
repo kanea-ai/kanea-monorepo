@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import Department
@@ -33,13 +33,22 @@ class SqlAlchemyDepartmentRepository:
         workspace_id: UUID,
         *,
         name: str | None = None,
-    ) -> list[Department]:
-        stmt = select(DepartmentModel).where(DepartmentModel.workspace_id == workspace_id)
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Department], int]:
+        base = select(DepartmentModel).where(DepartmentModel.workspace_id == workspace_id)
         if name is not None and name != "":
-            stmt = stmt.where(DepartmentModel.name.ilike(f"%{name}%"))
-        stmt = stmt.order_by(DepartmentModel.name)
-        result = await self._session.execute(stmt)
-        return [_to_entity(row) for row in result.scalars().all()]
+            base = base.where(DepartmentModel.name.ilike(f"%{name}%"))
+
+        items_stmt = base.order_by(DepartmentModel.name).offset(skip)
+        if limit is not None:
+            items_stmt = items_stmt.limit(limit)
+        items_result = await self._session.execute(items_stmt)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self._session.execute(count_stmt)).scalar_one()
+
+        return [_to_entity(row) for row in items_result.scalars().all()], int(total)
 
     async def create(self, department: Department) -> Department:
         row = DepartmentModel(

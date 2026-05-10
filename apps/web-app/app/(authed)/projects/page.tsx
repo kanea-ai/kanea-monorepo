@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '../../components/Modal';
+import { Pagination } from '../../components/Pagination';
 import { ApiError } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import { useCreateProject, useProjects } from '../../lib/queries';
@@ -17,23 +18,34 @@ export default function ProjectsPage() {
   const principal = useCurrentPrincipal();
   const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
   const [includeArchived, setIncludeArchived] = useState(false);
-  const { data: projects, isLoading, isError, error } = useProjects(includeArchived);
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
 
+  // Server-side pagination. The ``search`` filter still narrows
+  // client-side on the loaded page (the api doesn't take a name
+  // filter for projects yet) — feels instant on typical workspaces.
+  const {
+    data: projectsPage,
+    isLoading,
+    isError,
+    error,
+  } = useProjects({
+    includeArchived,
+    skip: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
+  });
+  const items = projectsPage?.items ?? [];
+  const total = projectsPage?.total ?? 0;
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return projects ?? [];
-    return (projects ?? []).filter(
+    if (!q) return items;
+    return items.filter(
       (p) => p.name.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q),
     );
-  }, [projects, search]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount);
-  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  }, [items, search]);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -101,7 +113,7 @@ export default function ProjectsPage() {
             </p>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {visible.map((p) => (
+              {filtered.map((p) => (
                 <li key={p.id} className="hover:bg-slate-50">
                   <Link
                     href={`/projects/${p.id}`}
@@ -133,14 +145,7 @@ export default function ProjectsPage() {
           )}
         </div>
 
-        {filtered.length > 0 ? (
-          <Paginator
-            page={safePage}
-            pageCount={pageCount}
-            total={filtered.length}
-            onChange={setPage}
-          />
-        ) : null}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </section>
 
       <CreateProjectDialog open={createOpen} onClose={() => setCreateOpen(false)} />
@@ -246,70 +251,5 @@ function CreateProjectDialog({ open, onClose }: { open: boolean; onClose: () => 
         ) : null}
       </form>
     </Modal>
-  );
-}
-
-function Paginator({
-  page,
-  pageCount,
-  total,
-  onChange,
-}: {
-  page: number;
-  pageCount: number;
-  total: number;
-  onChange: (next: number) => void;
-}) {
-  if (pageCount <= 1) {
-    return (
-      <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-        {total} match{total === 1 ? '' : 'es'}
-      </div>
-    );
-  }
-  const start = (page - 1) * PAGE_SIZE + 1;
-  const end = Math.min(page * PAGE_SIZE, total);
-  return (
-    <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-      <span>
-        Showing {start}–{end} of {total}
-      </span>
-      <nav className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onChange(Math.max(1, page - 1))}
-          disabled={page === 1}
-          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          ‹
-        </button>
-        {Array.from({ length: pageCount }).map((_, i) => {
-          const n = i + 1;
-          const isCurrent = n === page;
-          return (
-            <button
-              key={n}
-              type="button"
-              onClick={() => onChange(n)}
-              className={`rounded px-2 py-0.5 ${
-                isCurrent
-                  ? 'bg-indigo-600 text-white'
-                  : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              {n}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => onChange(Math.min(pageCount, page + 1))}
-          disabled={page === pageCount}
-          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          ›
-        </button>
-      </nav>
-    </div>
   );
 }

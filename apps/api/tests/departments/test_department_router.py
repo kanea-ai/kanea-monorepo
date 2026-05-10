@@ -95,10 +95,18 @@ def _stub_dept(workspace_id: UUID) -> DepartmentResponse:
 def test_list_works_for_plain_member(client: TestClient, dept_service_mock: AsyncMock) -> None:
     p = _override_principal(MemberRole.WORKSPACE_USER)
     app.dependency_overrides[get_current_principal] = lambda: p
-    dept_service_mock.list_for_workspace.return_value = [_stub_dept(p.workspace_id)]
+    # Paginated response shape — ``items`` + ``total``.
+    from app.application.departments.schemas import DepartmentResponse
+    from app.application.pagination import Page
+
+    dept_service_mock.list_for_workspace.return_value = Page[DepartmentResponse](
+        items=[_stub_dept(p.workspace_id)], total=1
+    )
     response = client.get("/api/v1/departments", headers=_bearer("WORKSPACE_USER"))
     assert response.status_code == 200
-    assert len(response.json()) == 1
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
 
 
 def test_post_rejects_member_role(client: TestClient, dept_service_mock: AsyncMock) -> None:

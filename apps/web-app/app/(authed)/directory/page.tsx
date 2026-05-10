@@ -20,9 +20,12 @@ import { useMemo, useState } from 'react';
 import { CreateAgentDialog } from '../../components/CreateAgentDialog';
 import { InviteMemberDialog } from '../../components/InviteMemberDialog';
 import { MemberDetailDialog } from '../../components/MemberDetailDialog';
+import { Pagination } from '../../components/Pagination';
 import { ApiError, type Member, type MemberRole } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import { useMembers, useProjects, useTeams } from '../../lib/queries';
+
+const PAGE_SIZE = 25;
 
 type ScopeToggle = 'ALL' | 'HUMAN' | 'AGENT';
 type SortKey = 'PRIORITY_ASC' | 'PRIORITY_DESC' | 'NAME';
@@ -53,6 +56,7 @@ export default function DirectoryPage() {
   const [openMember, setOpenMember] = useState<Member | null>(null);
   const [addOpen, setAddOpen] = useState<'invite' | 'agent' | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [page, setPage] = useState(1);
 
   // The scope tabs (All / Humans / Agents) filter on the type column
   // client-side — that way a single api response feeds both the
@@ -61,7 +65,7 @@ export default function DirectoryPage() {
   // to 0, which read as a bug. Workspace size makes one extra
   // type check per row free.
   const {
-    data: members,
+    data: membersPage,
     isLoading,
     isError,
     error,
@@ -70,13 +74,19 @@ export default function DirectoryPage() {
     role: role || undefined,
     teamId: teamId || undefined,
     projectId: projectId || undefined,
+    skip: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
   });
+  const members = membersPage?.items ?? [];
+  const total = membersPage?.total ?? 0;
 
-  const { data: teams } = useTeams();
-  const { data: projects } = useProjects();
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
+  const { data: projectsPage } = useProjects();
+  const projects = projectsPage?.items ?? [];
 
   const visible = useMemo(() => {
-    let rows = members ?? [];
+    let rows = members;
     if (scope === 'HUMAN') rows = rows.filter((m) => m.type === 'HUMAN');
     else if (scope === 'AGENT') rows = rows.filter((m) => m.type === 'AGENT');
     const sorted = [...rows];
@@ -89,15 +99,15 @@ export default function DirectoryPage() {
     return sorted;
   }, [members, scope, sort]);
 
-  // Counts come from the full filtered set, NOT `visible` — we want
-  // the badges stable across scope flips so the user sees how many
-  // would match if they switched.
+  // Counts come from the loaded page only — server pagination means
+  // we don't have the full type breakdown without a second query.
+  // Acceptable for now; the totals readout below shows the unfiltered
+  // ``total`` from the server.
   const counts = useMemo(() => {
-    const all = members ?? [];
     return {
-      ALL: all.length,
-      HUMAN: all.filter((m) => m.type === 'HUMAN').length,
-      AGENT: all.filter((m) => m.type === 'AGENT').length,
+      ALL: members.length,
+      HUMAN: members.filter((m) => m.type === 'HUMAN').length,
+      AGENT: members.filter((m) => m.type === 'AGENT').length,
     };
   }, [members]);
 
@@ -131,13 +141,19 @@ export default function DirectoryPage() {
           <input
             type="search"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search by name…"
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
           <select
             value={role}
-            onChange={(e) => setRole(e.target.value as MemberRole | '')}
+            onChange={(e) => {
+              setRole(e.target.value as MemberRole | '');
+              setPage(1);
+            }}
             className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
           >
             {ROLE_OPTIONS.map((opt) => (
@@ -152,7 +168,7 @@ export default function DirectoryPage() {
             className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">Any team</option>
-            {(teams ?? []).map((t) => (
+            {teams.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>
@@ -164,7 +180,7 @@ export default function DirectoryPage() {
             className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
           >
             <option value="">Any project</option>
-            {(projects ?? []).map((p) => (
+            {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -216,11 +232,12 @@ export default function DirectoryPage() {
               </tr>
             ) : (
               visible.map((m) => (
-                <Row key={m.id} member={m} teams={teams ?? []} onOpen={() => setOpenMember(m)} />
+                <Row key={m.id} member={m} teams={teams} onOpen={() => setOpenMember(m)} />
               ))
             )}
           </tbody>
         </table>
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
       </section>
 
       {openMember ? (

@@ -42,7 +42,8 @@ export function MemberDetailDialog({
   const update = useUpdateMemberProfile();
   const setTeam = useSetMemberTeam();
   const setSuspension = useSetMemberSuspension();
-  const { data: teams } = useTeams();
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
   const { data: stats, isLoading: statsLoading } = useMemberStats(member.id);
   // The suspension flow is destructive enough (kicks the member out
   // of every workspace request) that we route it through a confirm
@@ -251,7 +252,7 @@ export function MemberDetailDialog({
                 className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
               >
                 <option value="">— No team —</option>
-                {(teams ?? []).map((t) => (
+                {teams.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
@@ -259,9 +260,7 @@ export function MemberDetailDialog({
               </select>
             ) : (
               <span className="text-sm text-slate-800">
-                {member.team_id
-                  ? ((teams ?? []).find((t) => t.id === member.team_id)?.name ?? '—')
-                  : '—'}
+                {member.team_id ? (teams.find((t) => t.id === member.team_id)?.name ?? '—') : '—'}
               </span>
             )}
           </Field>

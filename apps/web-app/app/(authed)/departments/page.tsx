@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Modal } from '../../components/Modal';
+import { Pagination } from '../../components/Pagination';
 import { ApiError, type Department, type TeamRecord } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import {
@@ -23,17 +24,37 @@ import {
   useUpdateDepartment,
 } from '../../lib/queries';
 
+const PAGE_SIZE = 25;
+
 export default function DepartmentsPage() {
   const principal = useCurrentPrincipal();
   const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
 
   const [search, setSearch] = useState('');
-  // The api accepts a server-side ``name`` filter but we run an
-  // additional client-side narrowing so typing is instant. The server
-  // round-trip happens on debounce-less input change which is
-  // perfectly fine — the list is small.
-  const { data: departments, isLoading, isError, error } = useDepartments();
-  const { data: teams } = useTeams();
+  const [page, setPage] = useState(1);
+  // The api accepts a server-side ``name`` filter; we forward it AND
+  // also do a tiny client-side narrowing so typing feels instant. The
+  // ``name`` query keeps the page slice small even when the server
+  // round-trip is in flight.
+  const {
+    data: departmentsPage,
+    isLoading,
+    isError,
+    error,
+  } = useDepartments({
+    name: search.trim() || undefined,
+    skip: (page - 1) * PAGE_SIZE,
+    limit: PAGE_SIZE,
+  });
+  const departments = departmentsPage?.items ?? [];
+  const total = departmentsPage?.total ?? 0;
+
+  // Teams are fetched all at once (default MAX_PAGE_SIZE) so the
+  // departments view can group them under each card without paging
+  // through the teams list separately.
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
+
   const [openDept, setOpenDept] = useState<Department | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -46,7 +67,7 @@ export default function DepartmentsPage() {
   const requestedOpen = searchParams.get('open');
   useEffect(() => {
     if (!requestedOpen) return;
-    const match = (departments ?? []).find((d) => d.id === requestedOpen);
+    const match = departments.find((d) => d.id === requestedOpen);
     if (match) {
       setOpenDept(match);
       router.replace('/departments');
@@ -55,13 +76,13 @@ export default function DepartmentsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return departments ?? [];
-    return (departments ?? []).filter((d) => d.name.toLowerCase().includes(q));
+    if (!q) return departments;
+    return departments.filter((d) => d.name.toLowerCase().includes(q));
   }, [departments, search]);
 
   const teamsByDept = useMemo(() => {
     const map = new Map<string, TeamRecord[]>();
-    for (const t of teams ?? []) {
+    for (const t of teams) {
       if (!t.department_id) continue;
       const list = map.get(t.department_id) ?? [];
       list.push(t);
@@ -70,7 +91,7 @@ export default function DepartmentsPage() {
     return map;
   }, [teams]);
 
-  const unfiledTeams = (teams ?? []).filter((t) => !t.department_id);
+  const unfiledTeams = teams.filter((t) => !t.department_id);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -110,7 +131,10 @@ export default function DepartmentsPage() {
           <input
             type="search"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search departments by name…"
             className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
@@ -131,16 +155,19 @@ export default function DepartmentsPage() {
                 : 'No departments yet. Ask an admin to create one.'}
           </p>
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {filtered.map((d) => (
-              <DepartmentRow
-                key={d.id}
-                department={d}
-                teams={teamsByDept.get(d.id) ?? []}
-                onOpen={() => setOpenDept(d)}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="divide-y divide-slate-100">
+              {filtered.map((d) => (
+                <DepartmentRow
+                  key={d.id}
+                  department={d}
+                  teams={teamsByDept.get(d.id) ?? []}
+                  onOpen={() => setOpenDept(d)}
+                />
+              ))}
+            </ul>
+            <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+          </>
         )}
 
         {unfiledTeams.length > 0 ? (

@@ -15,6 +15,7 @@ from app.application.auth.ports import (
     UserRepository,
 )
 from app.application.auth.schemas import TokenResponse
+from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
 from app.application.teams.ports import TeamRepository
 from app.application.tenants.ports import (
@@ -29,6 +30,7 @@ from app.application.tenants.schemas import (
     InvitePreviewResponse,
     MemberFilters,
     MemberProfileResponse,
+    MemberResponse,
     SetMemberSuspensionRequest,
     SetMemberTeamRequest,
     UpdateMemberProfileRequest,
@@ -225,8 +227,11 @@ class InviteService:
         self,
         principal: Principal,
         filters: MemberFilters | None = None,
-    ) -> list[Member]:
-        """Returns the workspace's members, narrowed by the optional
+        *,
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> Page[MemberResponse]:
+        """Paginated workspace members, narrowed by the optional
         filters and by the caller's visibility scope.
 
         Visibility:
@@ -257,7 +262,7 @@ class InviteService:
             else:
                 visibility_self_id = principal.member_id
 
-        return await self.members.list_for_workspace(
+        rows, total = await self.members.list_for_workspace(
             principal.workspace_id,
             name=f.name,
             member_id=f.member_id,
@@ -267,6 +272,11 @@ class InviteService:
             humans_only=f.humans_only,
             visibility_team_id=visibility_team_id,
             visibility_self_id=visibility_self_id,
+            skip=skip,
+            limit=limit,
+        )
+        return Page[MemberResponse](
+            items=[MemberResponse.from_entity(m) for m in rows], total=total
         )
 
     async def get_member(self, member_id: UUID, principal: Principal) -> Member:
@@ -369,7 +379,9 @@ class InviteService:
             and target.role is MemberRole.WORKSPACE_OWNER
             and request.role is not MemberRole.WORKSPACE_OWNER
         ):
-            others = await self.members.list_for_workspace(
+            # ``list_for_workspace`` returns ``(items, total)`` —
+            # the count is unused here, just unpack to a list.
+            others, _ = await self.members.list_for_workspace(
                 principal.workspace_id, role=MemberRole.WORKSPACE_OWNER
             )
             still_owners_after = [m for m in others if m.id != target.id]
@@ -519,7 +531,7 @@ class InviteService:
         # Last-owner protection on the suspend path. Revoking is
         # always safe.
         if request.is_suspended and target.role is MemberRole.WORKSPACE_OWNER:
-            owners = await self.members.list_for_workspace(
+            owners, _ = await self.members.list_for_workspace(
                 principal.workspace_id, role=MemberRole.WORKSPACE_OWNER
             )
             still_active_owners = [m for m in owners if m.id != target.id and not m.is_suspended]

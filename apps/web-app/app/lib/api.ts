@@ -11,6 +11,28 @@ const V1 = '/api/v1';
 
 export const TOKEN_STORAGE_KEY = 'kanea_token';
 
+// Standard paginated payload returned by every list endpoint that
+// supports ``skip``/``limit``. ``items`` is the page slice; ``total``
+// is the unfiltered count under the request's filters so the UI can
+// render page-number controls. The Board (kanban) is intentionally
+// unpaginated — it stays on the legacy ``T[]`` shape via
+// tasksApi.list / useTasks.
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
+export interface PaginationOpts {
+  skip?: number;
+  limit?: number;
+}
+
+export const DEFAULT_PAGE_SIZE = 25;
+// Mirrors app/application/pagination.MAX_PAGE_SIZE on the api so the
+// frontend can fetch "all" rows for picker dropdowns (CreateTask team
+// select, etc.) without the api rejecting a too-large limit.
+export const MAX_PAGE_SIZE = 200;
+
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE' | 'CANCELLED';
 
 export interface Task {
@@ -545,7 +567,7 @@ export interface AdminSetMemberPasswordPayload {
 }
 
 export const tenantsApi = {
-  listMembers: (filters: MemberListFilters = {}) => {
+  listMembers: (filters: MemberListFilters & PaginationOpts = {}) => {
     const params = new URLSearchParams();
     if (filters.name) params.set('name', filters.name);
     if (filters.memberId) params.set('member_id', filters.memberId);
@@ -553,8 +575,10 @@ export const tenantsApi = {
     if (filters.teamId) params.set('team_id', filters.teamId);
     if (filters.projectId) params.set('project_id', filters.projectId);
     if (filters.humansOnly) params.set('humans_only', 'true');
+    if (filters.skip != null) params.set('skip', String(filters.skip));
+    if (filters.limit != null) params.set('limit', String(filters.limit));
     const qs = params.toString();
-    return request<Member[]>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
+    return request<Page<Member>>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
   },
   getMember: (id: string) => request<Member>(`${V1}/tenants/members/${id}`),
   getMemberProfile: (id: string) => request<MemberProfile>(`${V1}/tenants/members/${id}/profile`),
@@ -779,8 +803,14 @@ export interface UpdateProjectPayload {
 }
 
 export const projectsApi = {
-  list: (includeArchived = false) =>
-    request<Project[]>(`${V1}/projects${includeArchived ? '?include_archived=true' : ''}`),
+  list: (opts: { includeArchived?: boolean } & PaginationOpts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.includeArchived) params.set('include_archived', 'true');
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<Project>>(`${V1}/projects${qs ? `?${qs}` : ''}`);
+  },
   get: (id: string) => request<Project>(`${V1}/projects/${id}`),
   create: (payload: CreateProjectPayload) =>
     request<Project>(`${V1}/projects`, {
@@ -855,9 +885,13 @@ export interface UpdateDepartmentPayload {
 }
 
 export const departmentsApi = {
-  list: (name?: string) => {
-    const qs = name ? `?name=${encodeURIComponent(name)}` : '';
-    return request<Department[]>(`${V1}/departments${qs}`);
+  list: (opts: { name?: string } & PaginationOpts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.name) params.set('name', opts.name);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<Department>>(`${V1}/departments${qs ? `?${qs}` : ''}`);
   },
   get: (id: string) => request<Department>(`${V1}/departments/${id}`),
   create: (payload: CreateDepartmentPayload) =>
@@ -915,9 +949,13 @@ export const requestsApi = {
 };
 
 export const teamsApi = {
-  list: (departmentId?: string) => {
-    const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : '';
-    return request<TeamRecord[]>(`${V1}/teams${qs}`);
+  list: (opts: { departmentId?: string } & PaginationOpts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.departmentId) params.set('department_id', opts.departmentId);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<TeamRecord>>(`${V1}/teams${qs ? `?${qs}` : ''}`);
   },
   create: (payload: CreateTeamPayload) =>
     request<TeamRecord>(`${V1}/teams`, {
@@ -968,11 +1006,39 @@ export interface AuditLog {
 }
 
 export const auditApi = {
-  list: (opts: { limit?: number; before?: string } = {}) => {
+  list: (opts: PaginationOpts = {}) => {
     const params = new URLSearchParams();
-    if (opts.limit) params.set('limit', String(opts.limit));
-    if (opts.before) params.set('before', opts.before);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
     const qs = params.toString();
-    return request<AuditLog[]>(`${V1}/audit/logs${qs ? `?${qs}` : ''}`);
+    return request<Page<AuditLog>>(`${V1}/audit/logs${qs ? `?${qs}` : ''}`);
+  },
+};
+
+// Paginated Blocks page. Distinct from ``tasksApi.list({blockedOnly})``
+// which still returns the unpaginated array used by the AppShell
+// sidebar badge and the Dashboard panel.
+export type BlocksSort = 'priority' | 'newest' | 'oldest';
+
+export interface BlocksListOpts extends PaginationOpts {
+  status?: TaskStatus;
+  teamId?: string;
+  projectId?: string;
+  assigneeId?: string;
+  sort?: BlocksSort;
+}
+
+export const blocksApi = {
+  list: (opts: BlocksListOpts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    if (opts.status) params.set('status', opts.status);
+    if (opts.teamId) params.set('team_id', opts.teamId);
+    if (opts.projectId) params.set('project_id', opts.projectId);
+    if (opts.assigneeId) params.set('assignee_id', opts.assigneeId);
+    if (opts.sort) params.set('sort', opts.sort);
+    const qs = params.toString();
+    return request<Page<Task>>(`${V1}/blocks${qs ? `?${qs}` : ''}`);
   },
 };

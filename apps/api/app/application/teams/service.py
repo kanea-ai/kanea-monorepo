@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.application.audit.service import AuditLogService
 from app.application.departments.ports import DepartmentRepository
+from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
 from app.application.teams.ports import TeamRepository
 from app.application.teams.schemas import (
@@ -38,11 +39,16 @@ class TeamService:
         principal: Principal,
         *,
         department_id: UUID | None = None,
-    ) -> list[TeamResponse]:
-        rows = await self.teams.list_for_workspace(
-            principal.workspace_id, department_id=department_id
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> Page[TeamResponse]:
+        rows, total = await self.teams.list_for_workspace(
+            principal.workspace_id,
+            department_id=department_id,
+            skip=skip,
+            limit=limit,
         )
-        return [TeamResponse.from_entity(t) for t in rows]
+        return Page[TeamResponse](items=[TeamResponse.from_entity(t) for t in rows], total=total)
 
     async def create(self, request: CreateTeamRequest, principal: Principal) -> TeamResponse:
         # Cross-tenant guard for the optional department_id. Without

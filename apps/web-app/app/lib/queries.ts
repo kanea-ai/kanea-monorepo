@@ -3,9 +3,11 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 
 import {
+  MAX_PAGE_SIZE,
   agentsApi,
   auditApi,
   authSwitchApi,
+  blocksApi,
   departmentsApi,
   meApi,
   projectsApi,
@@ -43,6 +45,7 @@ import {
   type DashboardResponse,
   type Member,
   type MemberProfile,
+  type Page,
   type MeWorkspace,
   type NotificationCount,
   type NotificationItem,
@@ -53,6 +56,7 @@ import {
   type SetBlockedPayload,
   type SetMemberSuspensionPayload,
   type SetMemberTeamPayload,
+  type BlocksSort,
   type Task,
   type TaskActivity,
   type TaskComment,
@@ -194,10 +198,16 @@ export const tenantKeys = {
   member: (id: string) => ['tenants', 'members', id] as const satisfies QueryKey,
 };
 
-export function useMembers(filters: MemberListFilters = {}) {
-  return useQuery<Member[]>({
-    queryKey: tenantKeys.membersList(filters),
-    queryFn: () => tenantsApi.listMembers(filters),
+export function useMembers(filters: MemberListFilters & { skip?: number; limit?: number } = {}) {
+  // Default to MAX_PAGE_SIZE for the same reason as useTeams /
+  // useProjects: most call sites need "all members" for pickers /
+  // mention resolution; the Directory paginates explicitly.
+  const limit = filters.limit ?? MAX_PAGE_SIZE;
+  const skip = filters.skip ?? 0;
+  const merged = { ...filters, skip, limit };
+  return useQuery<Page<Member>>({
+    queryKey: tenantKeys.membersList(merged),
+    queryFn: () => tenantsApi.listMembers(merged),
   });
 }
 
@@ -539,10 +549,19 @@ export const projectKeys = {
   tasks: (id: string) => ['projects', id, 'tasks'] as const satisfies QueryKey,
 };
 
-export function useProjects(includeArchived = false) {
-  return useQuery<Project[]>({
-    queryKey: projectKeys.list(includeArchived),
-    queryFn: () => projectsApi.list(includeArchived),
+export function useProjects(
+  opts: { includeArchived?: boolean; skip?: number; limit?: number } = {},
+) {
+  // Default to the max page size so callers that just need "all
+  // projects" (CreateTaskDialog, MemberDetailDialog) keep working
+  // without explicit pagination. Callers paging through the
+  // Projects page pass their own ``skip``/``limit``.
+  const limit = opts.limit ?? MAX_PAGE_SIZE;
+  const skip = opts.skip ?? 0;
+  const includeArchived = opts.includeArchived ?? false;
+  return useQuery<Page<Project>>({
+    queryKey: ['projects', { includeArchived, skip, limit }] as const,
+    queryFn: () => projectsApi.list({ includeArchived, skip, limit }),
   });
 }
 
@@ -615,10 +634,16 @@ export const teamKeys = {
     ['teams', 'department', departmentId] as const satisfies QueryKey,
 };
 
-export function useTeams(departmentId?: string) {
-  return useQuery<TeamRecord[]>({
-    queryKey: departmentId ? teamKeys.byDepartment(departmentId) : teamKeys.all,
-    queryFn: () => teamsApi.list(departmentId),
+export function useTeams(opts: { departmentId?: string; skip?: number; limit?: number } = {}) {
+  // Same default-to-MAX_PAGE_SIZE story as useProjects: most call
+  // sites just want "all teams" for picker dropdowns, the Teams
+  // page itself paginates explicitly.
+  const limit = opts.limit ?? MAX_PAGE_SIZE;
+  const skip = opts.skip ?? 0;
+  const departmentId = opts.departmentId;
+  return useQuery<Page<TeamRecord>>({
+    queryKey: ['teams', { departmentId, skip, limit }] as const,
+    queryFn: () => teamsApi.list({ departmentId, skip, limit }),
   });
 }
 
@@ -631,10 +656,12 @@ export const departmentKeys = {
   detail: (id: string) => ['departments', id] as const satisfies QueryKey,
 };
 
-export function useDepartments(name?: string) {
-  return useQuery<Department[]>({
-    queryKey: departmentKeys.list(name),
-    queryFn: () => departmentsApi.list(name),
+export function useDepartments(opts: { name?: string; skip?: number; limit?: number } = {}) {
+  const limit = opts.limit ?? MAX_PAGE_SIZE;
+  const skip = opts.skip ?? 0;
+  return useQuery<Page<Department>>({
+    queryKey: ['departments', { name: opts.name, skip, limit }] as const,
+    queryFn: () => departmentsApi.list({ name: opts.name, skip, limit }),
   });
 }
 
@@ -799,13 +826,43 @@ export const auditKeys = {
   all: ['audit', 'logs'] as const satisfies QueryKey,
 };
 
-export function useAuditLogs(opts: { limit?: number } = {}) {
-  return useQuery<AuditLog[]>({
-    queryKey: opts.limit ? (['audit', 'logs', { limit: opts.limit }] as const) : auditKeys.all,
-    queryFn: () => auditApi.list(opts),
+export function useAuditLogs(opts: { skip?: number; limit?: number } = {}) {
+  const skip = opts.skip ?? 0;
+  const limit = opts.limit ?? 25;
+  return useQuery<Page<AuditLog>>({
+    queryKey: ['audit', 'logs', { skip, limit }] as const,
+    queryFn: () => auditApi.list({ skip, limit }),
     // 30s refetch keeps the audit feel live without polling at a
     // disaster cadence — admins watching for a spike of suspensions
     // see new rows on a slow tick.
     refetchInterval: 30_000,
+  });
+}
+
+// ---------- Blocks (paginated) ----------
+//
+// Distinct from useBlockedTasks (above) which still hits the
+// unpaginated /tasks?blocked_only=true endpoint for the AppShell
+// sidebar badge + Dashboard panel. The Blocks *page* uses this
+// hook because it needs both pagination and (next batch) sort/
+// filter controls.
+
+export interface UseBlocksPageOpts {
+  skip?: number;
+  limit?: number;
+  status?: TaskStatus;
+  teamId?: string;
+  projectId?: string;
+  assigneeId?: string;
+  sort?: BlocksSort;
+}
+
+export function useBlocksPage(opts: UseBlocksPageOpts = {}) {
+  const skip = opts.skip ?? 0;
+  const limit = opts.limit ?? 25;
+  const { status, teamId, projectId, assigneeId, sort } = opts;
+  return useQuery<Page<Task>>({
+    queryKey: ['blocks', { skip, limit, status, teamId, projectId, assigneeId, sort }] as const,
+    queryFn: () => blocksApi.list({ skip, limit, status, teamId, projectId, assigneeId, sort }),
   });
 }

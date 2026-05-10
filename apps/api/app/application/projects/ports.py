@@ -11,8 +11,13 @@ from app.domain.enums import ProjectStatus
 class ProjectRepository(Protocol):
     async def get_by_id(self, project_id: UUID) -> Project | None: ...
     async def list_for_workspace(
-        self, workspace_id: UUID, *, include_archived: bool = False
-    ) -> list[Project]: ...
+        self,
+        workspace_id: UUID,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Project], int]: ...
     async def create(self, project: Project) -> Project: ...
     async def update(
         self,

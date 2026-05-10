@@ -11,13 +11,25 @@ from app.domain.entities import (
     TaskRelation,
     TaskRequest,
 )
-from app.domain.enums import RequestStatus, TaskRelationType, TaskStatus
+from app.domain.enums import BlocksSort, RequestStatus, TaskRelationType, TaskStatus
 
 
 @runtime_checkable
 class TaskRepository(Protocol):
     async def get_by_id(self, task_id: UUID) -> Task | None: ...
     async def assign(self, task_id: UUID, assignee_id: UUID) -> Task: ...
+    async def list_blocks_for_workspace(
+        self,
+        workspace_id: UUID,
+        *,
+        status: TaskStatus | None = None,
+        team_id: UUID | None = None,
+        project_id: UUID | None = None,
+        assignee_id: UUID | None = None,
+        sort: BlocksSort = BlocksSort.PRIORITY,
+        skip: int = 0,
+        limit: int = 25,
+    ) -> tuple[list[Task], int]: ...
     async def list_by_workspace(
         self,
         workspace_id: UUID,

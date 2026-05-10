@@ -62,9 +62,23 @@ async def test_list_passes_include_archived(
     service: ProjectService, projects_repo: AsyncMock
 ) -> None:
     p = make_principal()
-    projects_repo.list_for_workspace.return_value = []
+    projects_repo.list_for_workspace.return_value = ([], 0)
     await service.list_for_workspace(p, include_archived=True)
-    projects_repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, include_archived=True)
+    projects_repo.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id, include_archived=True, skip=0, limit=None
+    )
+
+
+async def test_list_paginates(service: ProjectService, projects_repo: AsyncMock) -> None:
+    """skip / limit forward to the repo and the response carries the
+    repo's total count untouched."""
+    p = make_principal()
+    projects_repo.list_for_workspace.return_value = ([], 12)
+    page = await service.list_for_workspace(p, skip=4, limit=2)
+    assert page.total == 12
+    projects_repo.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id, include_archived=False, skip=4, limit=2
+    )
 
 
 # ---------- get_by_id (tenant isolation) ----------

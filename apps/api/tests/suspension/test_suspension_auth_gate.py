@@ -87,7 +87,12 @@ def client(members_repo: AsyncMock) -> Iterator[TestClient]:
     app.dependency_overrides.pop(get_current_principal, None)
     app.dependency_overrides[get_member_repository] = lambda: members_repo
     team_service_mock = AsyncMock()
-    team_service_mock.list_for_workspace.return_value = []
+    # /teams now returns Page[TeamResponse] — wrap the empty list so
+    # the route's response_model validation passes.
+    from app.application.pagination import Page
+    from app.application.teams.schemas import TeamResponse
+
+    team_service_mock.list_for_workspace.return_value = Page[TeamResponse](items=[], total=0)
     app.dependency_overrides[get_team_service] = lambda: team_service_mock
     try:
         yield TestClient(app)

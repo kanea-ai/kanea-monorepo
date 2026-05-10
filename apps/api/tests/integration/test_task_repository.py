@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import Task
-from app.domain.enums import MemberRole, MemberType, ProjectStatus, TaskStatus
+from app.domain.enums import BlocksSort, MemberRole, MemberType, ProjectStatus, TaskStatus
 from app.domain.exceptions import TaskNotFoundError
 from app.infrastructure.db.models import (
     DepartmentModel,
@@ -547,3 +547,222 @@ async def test_update_links_assigns_then_clears(
 async def test_update_links_unknown_raises(repo: SqlAlchemyTaskRepository) -> None:
     with pytest.raises(TaskNotFoundError):
         await repo.update_links(uuid4(), project_id=None, team_id=None)
+
+
+# ---------- list_blocks_for_workspace ----------
+
+
+async def test_list_blocks_paginates_and_orders_by_priority(
+    repo: SqlAlchemyTaskRepository, seeded: dict
+) -> None:
+    """Three blocked tasks at different priorities, plus an
+    unblocked decoy. The Blocks list orders by priority ASC (lowest
+    number = highest rank) so the high-priority block lands first."""
+    high = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="high",
+            seq=1,
+            priority=1,
+            is_blocked=True,
+            blocked_reason="prod",
+        )
+    )
+    mid = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="mid",
+            seq=2,
+            priority=5,
+            is_blocked=True,
+            blocked_reason="staging",
+        )
+    )
+    low = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="low",
+            seq=3,
+            priority=9,
+            is_blocked=True,
+            blocked_reason="dev",
+        )
+    )
+    # Decoy: not blocked, must NOT appear in the result.
+    await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="not blocked",
+            seq=4,
+            priority=1,
+        )
+    )
+
+    items, total = await repo.list_blocks_for_workspace(seeded["workspace_id"], limit=2)
+    assert total == 3  # only blocked tasks count
+    assert [t.id for t in items] == [high.id, mid.id]
+
+    page2_items, total2 = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], skip=2, limit=2
+    )
+    assert total2 == 3
+    assert [t.id for t in page2_items] == [low.id]
+
+
+async def test_list_blocks_status_filter(repo: SqlAlchemyTaskRepository, seeded: dict) -> None:
+    """Filter by status — DONE/CANCELLED still appear if they're
+    blocked (the api lets a task be flagged on any status), but the
+    UI's filter narrows them out."""
+    pending_blocked = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            status=TaskStatus.PENDING,
+            seq=1,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+    in_progress_blocked = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            status=TaskStatus.IN_PROGRESS,
+            seq=2,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+
+    items, total = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], status=TaskStatus.PENDING
+    )
+    assert total == 1
+    assert {t.id for t in items} == {pending_blocked.id}
+
+    items_ip, total_ip = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], status=TaskStatus.IN_PROGRESS
+    )
+    assert total_ip == 1
+    assert {t.id for t in items_ip} == {in_progress_blocked.id}
+
+
+async def test_list_blocks_team_and_project_and_assignee_filters(
+    repo: SqlAlchemyTaskRepository, seeded: dict
+) -> None:
+    """Each non-status filter narrows the result set in SQL."""
+    target = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            team_id=seeded["team_a_id"],
+            project_id=seeded["project_id"],
+            assignee_id=seeded["assignee_id"],
+            seq=1,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+    # Decoy: blocked but on different team / no project / no assignee.
+    await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            team_id=seeded["team_b_id"],
+            seq=2,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+
+    by_team, _ = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], team_id=seeded["team_a_id"]
+    )
+    assert {t.id for t in by_team} == {target.id}
+
+    by_project, _ = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], project_id=seeded["project_id"]
+    )
+    assert {t.id for t in by_project} == {target.id}
+
+    by_assignee, _ = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], assignee_id=seeded["assignee_id"]
+    )
+    assert {t.id for t in by_assignee} == {target.id}
+
+
+async def test_list_blocks_sort_modes(
+    repo: SqlAlchemyTaskRepository,
+    seeded: dict,
+    pg_session: AsyncSession,
+) -> None:
+    """NEWEST / OLDEST flip the order to created_at; PRIORITY uses
+    the (priority asc, created_at asc) compound.
+
+    Note: Postgres' ``now()`` is transaction-stable, so all rows
+    inserted in the same tx share a created_at. We poke explicit
+    timestamps via UPDATE to make the order deterministic.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.infrastructure.db.models import TaskModel
+
+    a = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="a",
+            priority=5,
+            seq=1,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+    b = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="b",
+            priority=1,  # highest priority
+            seq=2,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+    c = await repo.create(
+        _task_entity(
+            workspace_id=seeded["workspace_id"],
+            creator_id=seeded["creator_id"],
+            title="c",
+            priority=9,
+            seq=3,
+            is_blocked=True,
+            blocked_reason="x",
+        )
+    )
+
+    base_ts = datetime.now(UTC)
+    for task_id, offset in ((a.id, 0), (b.id, 1), (c.id, 2)):
+        await pg_session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == task_id)
+            .values(created_at=base_ts + timedelta(seconds=offset))
+        )
+    await pg_session.flush()
+
+    by_priority, _ = await repo.list_blocks_for_workspace(
+        seeded["workspace_id"], sort=BlocksSort.PRIORITY
+    )
+    assert [t.id for t in by_priority] == [b.id, a.id, c.id]
+
+    newest, _ = await repo.list_blocks_for_workspace(seeded["workspace_id"], sort=BlocksSort.NEWEST)
+    assert [t.id for t in newest] == [c.id, b.id, a.id]
+
+    oldest, _ = await repo.list_blocks_for_workspace(seeded["workspace_id"], sort=BlocksSort.OLDEST)
+    assert [t.id for t in oldest] == [a.id, b.id, c.id]

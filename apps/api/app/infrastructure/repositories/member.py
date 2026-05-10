@@ -203,20 +203,22 @@ class SqlAlchemyMemberRepository:
         humans_only: bool = False,
         visibility_team_id: UUID | None = None,
         visibility_self_id: UUID | None = None,
-    ) -> list[Member]:
-        stmt = select(MemberModel).where(MemberModel.workspace_id == workspace_id)
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Member], int]:
+        base = select(MemberModel).where(MemberModel.workspace_id == workspace_id)
 
         # Narrowing filters (applied first; see service for visibility).
         if name is not None and name != "":
-            stmt = stmt.where(MemberModel.name.ilike(f"%{name}%"))
+            base = base.where(MemberModel.name.ilike(f"%{name}%"))
         if member_id is not None:
-            stmt = stmt.where(MemberModel.id == member_id)
+            base = base.where(MemberModel.id == member_id)
         if role is not None:
-            stmt = stmt.where(MemberModel.role == role)
+            base = base.where(MemberModel.role == role)
         if team_id is not None:
-            stmt = stmt.where(MemberModel.team_id == team_id)
+            base = base.where(MemberModel.team_id == team_id)
         if humans_only:
-            stmt = stmt.where(MemberModel.type == MemberType.HUMAN)
+            base = base.where(MemberModel.type == MemberType.HUMAN)
         if project_id is not None:
             # "Members assigned to at least one task in the project."
             project_member_ids = (
@@ -225,7 +227,7 @@ class SqlAlchemyMemberRepository:
                 .where(TaskModel.assignee_id.is_not(None))
                 .distinct()
             )
-            stmt = stmt.where(MemberModel.id.in_(project_member_ids))
+            base = base.where(MemberModel.id.in_(project_member_ids))
 
         # Visibility scope: union of "members on this team" and "self".
         # Either may be None — if both are None we leave the listing
@@ -236,11 +238,17 @@ class SqlAlchemyMemberRepository:
                 scope_clauses.append(MemberModel.team_id == visibility_team_id)
             if visibility_self_id is not None:
                 scope_clauses.append(MemberModel.id == visibility_self_id)
-            stmt = stmt.where(or_(*scope_clauses))
+            base = base.where(or_(*scope_clauses))
 
-        stmt = stmt.order_by(MemberModel.priority, MemberModel.created_at)
-        result = await self._session.execute(stmt)
-        return [_to_entity(row) for row in result.scalars().all()]
+        items_stmt = base.order_by(MemberModel.priority, MemberModel.created_at).offset(skip)
+        if limit is not None:
+            items_stmt = items_stmt.limit(limit)
+        items_result = await self._session.execute(items_stmt)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self._session.execute(count_stmt)).scalar_one()
+
+        return [_to_entity(row) for row in items_result.scalars().all()], int(total)
 
     async def update_profile(
         self,

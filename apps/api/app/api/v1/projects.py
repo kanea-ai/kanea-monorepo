@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import PrincipalDep, ProjectServiceDep, TaskServiceDep
+from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.application.projects.schemas import (
     CreateProjectRequest,
     ProjectHistoryResponse,
@@ -19,17 +21,24 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 @router.get(
     "",
-    response_model=list[ProjectResponse],
+    response_model=Page[ProjectResponse],
     status_code=status.HTTP_200_OK,
 )
 async def list_projects(
     principal: PrincipalDep,
     service: ProjectServiceDep,
     include_archived: bool = False,
-) -> list[ProjectResponse]:
-    """List projects in the requester's workspace. ARCHIVED projects
-    are hidden by default; pass ``?include_archived=true`` to see them."""
-    return await service.list_for_workspace(principal, include_archived=include_archived)
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[ProjectResponse]:
+    """Paginated list of projects in the requester's workspace.
+    ARCHIVED projects are hidden by default; pass
+    ``?include_archived=true`` to see them. Pagination is via
+    ``?skip``/``?limit`` and the response carries the unfiltered
+    ``total`` count."""
+    return await service.list_for_workspace(
+        principal, include_archived=include_archived, skip=skip, limit=limit
+    )
 
 
 @router.post(

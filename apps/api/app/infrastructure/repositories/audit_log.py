@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import AuditLog
@@ -52,17 +52,17 @@ class SqlAlchemyAuditLogRepository:
         *,
         resource_types: list[AuditResourceType] | None = None,
         team_resource_ids: list[UUID] | None = None,
+        skip: int = 0,
         limit: int = 100,
-        before: UUID | None = None,
-    ) -> list[AuditLog]:
-        stmt = select(AuditLogModel).where(AuditLogModel.workspace_id == workspace_id)
+    ) -> tuple[list[AuditLog], int]:
+        base = select(AuditLogModel).where(AuditLogModel.workspace_id == workspace_id)
 
         # Empty resource_types list = the caller wants zero rows. We
         # short-circuit so we don't issue a wasted query.
         if resource_types is not None:
             if not resource_types:
-                return []
-            stmt = stmt.where(AuditLogModel.resource_type.in_([rt.value for rt in resource_types]))
+                return [], 0
+            base = base.where(AuditLogModel.resource_type.in_([rt.value for rt in resource_types]))
 
         # team_resource_ids narrows TEAM-typed rows to a specific set.
         # Other resource types (if allowed by ``resource_types``) are
@@ -72,29 +72,20 @@ class SqlAlchemyAuditLogRepository:
                 # Caller wants TEAM rows narrowed to nothing — and
                 # because the only allowed resource_type was TEAM in
                 # the priority-3 path, the answer is zero rows.
-                return []
-            stmt = stmt.where(
+                return [], 0
+            base = base.where(
                 (AuditLogModel.resource_type != AuditResourceType.TEAM.value)
                 | (AuditLogModel.resource_id.in_(team_resource_ids))
             )
 
-        if before is not None:
-            # Cursor pagination on (created_at, id). The ix_audit_logs_
-            # workspace_created index makes this cheap.
-            cursor_row_stmt = select(AuditLogModel.created_at, AuditLogModel.id).where(
-                AuditLogModel.id == before
-            )
-            cursor_row = (await self._session.execute(cursor_row_stmt)).first()
-            if cursor_row is not None:
-                cursor_created_at, cursor_id = cursor_row
-                stmt = stmt.where(
-                    (AuditLogModel.created_at < cursor_created_at)
-                    | (
-                        (AuditLogModel.created_at == cursor_created_at)
-                        & (AuditLogModel.id < cursor_id)
-                    )
-                )
+        items_stmt = (
+            base.order_by(AuditLogModel.created_at.desc(), AuditLogModel.id.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        items_result = await self._session.execute(items_stmt)
 
-        stmt = stmt.order_by(AuditLogModel.created_at.desc(), AuditLogModel.id.desc()).limit(limit)
-        result = await self._session.execute(stmt)
-        return [_to_entity(row) for row in result.scalars().all()]
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self._session.execute(count_stmt)).scalar_one()
+
+        return [_to_entity(row) for row in items_result.scalars().all()], int(total)

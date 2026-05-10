@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import Team
@@ -34,13 +34,25 @@ class SqlAlchemyTeamRepository:
         workspace_id: UUID,
         *,
         department_id: UUID | None = None,
-    ) -> list[Team]:
-        stmt = select(TeamModel).where(TeamModel.workspace_id == workspace_id)
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Team], int]:
+        # Build the base statement once and reuse it for both the
+        # COUNT and the LIMIT/OFFSET query so the WHERE clauses are
+        # guaranteed to match.
+        base = select(TeamModel).where(TeamModel.workspace_id == workspace_id)
         if department_id is not None:
-            stmt = stmt.where(TeamModel.department_id == department_id)
-        stmt = stmt.order_by(TeamModel.name)
-        result = await self._session.execute(stmt)
-        return [_to_entity(row) for row in result.scalars().all()]
+            base = base.where(TeamModel.department_id == department_id)
+
+        items_stmt = base.order_by(TeamModel.name).offset(skip)
+        if limit is not None:
+            items_stmt = items_stmt.limit(limit)
+        items_result = await self._session.execute(items_stmt)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self._session.execute(count_stmt)).scalar_one()
+
+        return [_to_entity(row) for row in items_result.scalars().all()], int(total)
 
     async def create(self, team: Team) -> Team:
         row = TeamModel(

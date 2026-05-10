@@ -90,7 +90,14 @@ function AppShellInner({ children }: { children: ReactNode }) {
   ];
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 lg:flex-row">
+    // Desktop: lock the whole shell to the viewport (``lg:h-screen
+    // lg:overflow-hidden``) so the sidebar's bottom Profile button
+    // stays anchored even when a page (Audit, Directory, Teams, ...)
+    // grows tall. The sidebar and main get their own scroll
+    // contexts via ``overflow-y-auto`` further down. Mobile keeps
+    // ``min-h-screen`` so the drawer pattern works the way it did
+    // before: page-level scroll, drawer pushes content.
+    <div className="flex min-h-screen flex-col bg-slate-50 lg:h-screen lg:flex-row lg:overflow-hidden">
       {/* Mobile top bar */}
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
         <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
@@ -112,9 +119,13 @@ function AppShellInner({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      {/* Sidebar — fixed on desktop, collapsible drawer on mobile */}
+      {/* Sidebar — fixed on desktop, collapsible drawer on mobile.
+          On lg the aside is a flex-col that fills the locked
+          ``h-screen`` parent: the workspace switcher + nav share a
+          scrollable middle band, the bottom Profile slot stays
+          anchored thanks to ``mt-auto``. */}
       <aside
-        className={`${navOpen ? 'block' : 'hidden'} border-b border-slate-200 bg-white lg:flex lg:w-56 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r`}
+        className={`${navOpen ? 'block' : 'hidden'} border-b border-slate-200 bg-white lg:flex lg:h-screen lg:w-56 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r`}
       >
         <div className="hidden items-center justify-between px-5 py-4 lg:flex">
           <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
@@ -122,27 +133,34 @@ function AppShellInner({ children }: { children: ReactNode }) {
           </Link>
           <NotificationsBell />
         </div>
-        <div className="px-3 pb-3 lg:px-3">
-          <WorkspaceSwitcher />
+        {/* Middle band: workspace switcher + nav. ``min-h-0`` is the
+            flexbox idiom that lets ``overflow-y-auto`` actually take
+            effect on a flex-1 child — without it the child's
+            intrinsic size keeps the parent from shrinking. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="px-3 pb-3 lg:px-3">
+            <WorkspaceSwitcher />
+          </div>
+          <nav className="flex flex-col gap-0.5 px-2 py-2 lg:px-3">
+            {items.map((item) => (
+              <NavLink
+                key={item.href}
+                item={item}
+                isActive={isActive(pathname, item.href)}
+                onNavigate={() => setNavOpen(false)}
+              />
+            ))}
+          </nav>
         </div>
-        <nav className="flex flex-col gap-0.5 px-2 py-2 lg:px-3">
-          {items.map((item) => (
-            <NavLink
-              key={item.href}
-              item={item}
-              isActive={isActive(pathname, item.href)}
-              onNavigate={() => setNavOpen(false)}
-            />
-          ))}
-        </nav>
         {/* Bottom-bar Profile button. Replaces the old Sign-out button —
             sign-out itself moved to the /profile page. Reads as
             "Profile" with the user's name underneath so they know
             whose profile they're about to open. Visible on all
             viewports — the inherited ``hidden lg:block`` from the
             previous Sign-out implementation hid this from mobile /
-            drawer users entirely. */}
-        <div className="mt-auto block border-t border-slate-200 p-2">
+            drawer users entirely. ``shrink-0`` keeps it from being
+            squeezed when the middle band overflows. */}
+        <div className="block shrink-0 border-t border-slate-200 p-2">
           <Link
             href="/profile"
             onClick={() => setNavOpen(false)}
@@ -158,7 +176,10 @@ function AppShellInner({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1">{children}</main>
+      {/* Each page handles its own vertical scroll. ``min-w-0`` keeps
+          long inline content (e.g. log lines on /audit) from
+          stretching the flex item. */}
+      <main className="min-w-0 flex-1 lg:overflow-y-auto">{children}</main>
     </div>
   );
 }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import Project
@@ -31,14 +31,26 @@ class SqlAlchemyProjectRepository:
         return _to_entity(row) if row is not None else None
 
     async def list_for_workspace(
-        self, workspace_id: UUID, *, include_archived: bool = False
-    ) -> list[Project]:
-        stmt = select(ProjectModel).where(ProjectModel.workspace_id == workspace_id)
+        self,
+        workspace_id: UUID,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Project], int]:
+        base = select(ProjectModel).where(ProjectModel.workspace_id == workspace_id)
         if not include_archived:
-            stmt = stmt.where(ProjectModel.status == ProjectStatus.ACTIVE)
-        stmt = stmt.order_by(ProjectModel.name)
-        result = await self._session.execute(stmt)
-        return [_to_entity(row) for row in result.scalars().all()]
+            base = base.where(ProjectModel.status == ProjectStatus.ACTIVE)
+
+        items_stmt = base.order_by(ProjectModel.name).offset(skip)
+        if limit is not None:
+            items_stmt = items_stmt.limit(limit)
+        items_result = await self._session.execute(items_stmt)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self._session.execute(count_stmt)).scalar_one()
+
+        return [_to_entity(row) for row in items_result.scalars().all()], int(total)
 
     async def create(self, project: Project) -> Project:
         row = ProjectModel(

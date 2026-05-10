@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.agents import router as agents_router
 from app.api.v1.audit import router as audit_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.blocks import router as blocks_router
 from app.api.v1.departments import router as departments_router
 from app.api.v1.me import router as me_router
 from app.api.v1.projects import router as projects_router
@@ -47,6 +48,7 @@ app.include_router(projects_router, prefix=API_V1_PREFIX)
 app.include_router(teams_router, prefix=API_V1_PREFIX)
 app.include_router(departments_router, prefix=API_V1_PREFIX)
 app.include_router(audit_router, prefix=API_V1_PREFIX)
+app.include_router(blocks_router, prefix=API_V1_PREFIX)
 app.include_router(requests_router, prefix=API_V1_PREFIX)
 app.include_router(me_router, prefix=API_V1_PREFIX)
 

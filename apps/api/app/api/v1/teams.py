@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import PrincipalDep, TeamReachDep, TeamServiceDep
+from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.application.teams.schemas import (
     CreateTeamRequest,
     TeamResponse,
@@ -22,18 +23,26 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 
 @router.get(
     "",
-    response_model=list[TeamResponse],
+    response_model=Page[TeamResponse],
     status_code=status.HTTP_200_OK,
 )
 async def list_teams(
     principal: PrincipalDep,
     service: TeamServiceDep,
     department_id: Annotated[UUID | None, Query()] = None,
-) -> list[TeamResponse]:
-    """List teams in the requester's workspace. Pass ``?department_id``
-    to scope to a single department — used by the Departments view to
-    show member teams under each card."""
-    return await service.list_for_workspace(principal, department_id=department_id)
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[TeamResponse]:
+    """Paginated list of teams in the requester's workspace.
+
+    ``?department_id`` scopes to a single department.
+    ``?skip`` / ``?limit`` page through the result set; the response
+    body always includes the unfiltered ``total`` count so the UI
+    can render page-number controls.
+    """
+    return await service.list_for_workspace(
+        principal, department_id=department_id, skip=skip, limit=limit
+    )
 
 
 @router.post(
