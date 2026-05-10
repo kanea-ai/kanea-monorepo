@@ -80,41 +80,39 @@ export function KanbanBoard() {
     router.push(`/tasks/${taskId}`);
   };
 
-  // Auto-expand a collapsed column ONLY while the user is hovering
-  // it. The previous attempt accumulated all hovered columns in a
-  // Set and only collapsed them at drag-end — so dragging Done →
-  // Pending left Done expanded until release. Now we snapshot the
-  // pre-drag collapsed state and on every drag-update render
-  // `snapshot ⊕ (currently-hovered-column expanded)`. The hovered
-  // column is the only one that diverges from the snapshot, so
-  // moving the cursor away naturally restores it.
+  // Auto-expand columns when the drag hovers over them, and keep
+  // them expanded until the drag ends — even if the user moves the
+  // cursor to a different column. The earlier "hover-only" version
+  // collapsed columns the moment the cursor left, which made the
+  // board feel jittery during a drag. Sticky expansion gives the
+  // user a stable layout to aim at.
+  //
+  // We snapshot the pre-drag collapsed state, accumulate every
+  // collapsed column the drag visits in autoExpandedRef, and on
+  // drag-end restore the snapshot — except for the column the user
+  // actually dropped into, which stays expanded so they see the
+  // card land.
   const initialCollapsedRef = useRef<Record<TaskStatus, boolean> | null>(null);
+  const autoExpandedRef = useRef<Set<TaskStatus>>(new Set());
 
   const onDragStart = () => {
     draggingRef.current = true;
     initialCollapsedRef.current = { ...collapsed };
+    autoExpandedRef.current = new Set();
   };
 
   const onDragUpdate = (update: DragUpdate) => {
     const initial = initialCollapsedRef.current;
     if (!initial) return;
     const destId = update.destination?.droppableId as TaskStatus | undefined;
-    setCollapsed((prev) => {
-      const next: Record<TaskStatus, boolean> = { ...initial };
-      // Only one column is allowed to deviate from the snapshot
-      // during a drag — the one being hovered, and only if it was
-      // originally collapsed.
-      if (destId && initial[destId]) next[destId] = false;
-      // Skip the re-render when nothing actually changed.
-      let same = true;
-      for (const key of Object.keys(next) as TaskStatus[]) {
-        if (next[key] !== prev[key]) {
-          same = false;
-          break;
-        }
-      }
-      return same ? prev : next;
-    });
+    if (!destId) return;
+    // Only auto-expand columns that were originally collapsed. If
+    // it was already expanded by the user, leave it alone — and
+    // don't track it for collapse on drag-end.
+    if (!initial[destId]) return;
+    if (autoExpandedRef.current.has(destId)) return;
+    autoExpandedRef.current.add(destId);
+    setCollapsed((prev) => (prev[destId] ? { ...prev, [destId]: false } : prev));
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -125,26 +123,27 @@ export function KanbanBoard() {
       draggingRef.current = false;
     }, 0);
 
-    const initial = initialCollapsedRef.current;
+    const expanded = autoExpandedRef.current;
     initialCollapsedRef.current = null;
+    autoExpandedRef.current = new Set();
     const { destination, source, draggableId } = result;
     const droppedInto = destination?.droppableId as TaskStatus | undefined;
 
-    // Restore the initial collapsed state — but if they dropped
-    // into a column that was originally collapsed, keep it open
-    // so the user sees the moved card land.
-    if (initial) {
+    // Re-collapse every column we auto-expanded — except the one
+    // that received the drop. Keeping the destination open means
+    // the user sees the moved card land in its new column.
+    if (expanded.size > 0) {
       setCollapsed((prev) => {
-        const next: Record<TaskStatus, boolean> = { ...initial };
-        if (droppedInto && initial[droppedInto]) next[droppedInto] = false;
-        let same = true;
-        for (const key of Object.keys(next) as TaskStatus[]) {
-          if (next[key] !== prev[key]) {
-            same = false;
-            break;
+        const next = { ...prev };
+        let changed = false;
+        for (const id of expanded) {
+          if (id === droppedInto) continue;
+          if (!next[id]) {
+            next[id] = true;
+            changed = true;
           }
         }
-        return same ? prev : next;
+        return changed ? next : prev;
       });
     }
 
