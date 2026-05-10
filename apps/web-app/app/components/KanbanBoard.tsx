@@ -8,7 +8,7 @@ import {
   type DropResult,
 } from '@hello-pangea/dnd';
 import { useRouter } from 'next/navigation';
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { Task, TaskStatus } from '../lib/api';
 import { useCurrentPrincipal } from '../lib/auth';
@@ -80,48 +80,99 @@ export function KanbanBoard() {
     router.push(`/tasks/${taskId}`);
   };
 
-  // Auto-expand columns when the drag hovers over them, and keep
-  // them expanded until the drag ends — even if the user moves the
-  // cursor to a different column. The earlier "hover-only" version
-  // collapsed columns the moment the cursor left, which made the
-  // board feel jittery during a drag. Sticky expansion gives the
-  // user a stable layout to aim at.
+  // Auto-expand + custom hit-test layer.
   //
-  // We snapshot the pre-drag collapsed state, accumulate every
-  // collapsed column the drag visits in autoExpandedRef, and on
-  // drag-end restore the snapshot — except for the column the user
-  // actually dropped into, which stays expanded so they see the
-  // card land.
+  // Why custom hit-test: @hello-pangea/dnd snapshots droppable
+  // bounding rects at drag-start and only re-measures via per-
+  // droppable ResizeObservers. When a column auto-expands during
+  // a drag the EXPANDED column's bounds update, but siblings
+  // pushed sideways by the expansion DON'T (their own size didn't
+  // change, only their position), so the lib's hit-test is anchored
+  // to the pre-expand layout. Dispatching a window resize event to
+  // force a full re-measure aborts the drag — the lib treats
+  // resize-during-drag as a layout invalidation.
+  //
+  // So we ignore the lib's destination entirely and run our own
+  // hit-test on each pointer move using live getBoundingClientRect()
+  // values. The dragged card's *centre* is the hit point ("more than
+  // half over the column" → centre is inside it). activeColumn drives
+  // both the visual highlight and the eventual drop routing —
+  // result.destination from the lib is never read.
   const initialCollapsedRef = useRef<Record<TaskStatus, boolean> | null>(null);
   const autoExpandedRef = useRef<Set<TaskStatus>>(new Set());
+  const columnElsRef = useRef<Map<TaskStatus, HTMLElement>>(new Map());
+  const draggedCardRef = useRef<HTMLElement | null>(null);
+  const activeColumnRef = useRef<TaskStatus | null>(null);
+  const [activeColumn, setActiveColumn] = useState<TaskStatus | null>(null);
 
-  const onDragStart = () => {
+  const setColumnEl = useCallback(
+    (id: TaskStatus) => (el: HTMLElement | null) => {
+      if (el) columnElsRef.current.set(id, el);
+      else columnElsRef.current.delete(id);
+    },
+    [],
+  );
+
+  const recomputeActiveColumn = useCallback(() => {
+    const card = draggedCardRef.current;
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let next: TaskStatus | null = null;
+    for (const [id, el] of columnElsRef.current) {
+      const cr = el.getBoundingClientRect();
+      if (cx >= cr.left && cx < cr.right && cy >= cr.top && cy < cr.bottom) {
+        next = id;
+        break;
+      }
+    }
+    if (next === activeColumnRef.current) return;
+    activeColumnRef.current = next;
+    setActiveColumn(next);
+
+    // Auto-expand the newly-active column if it was originally
+    // collapsed. Sticky: once expanded, stays open for the drag —
+    // matches the rest of the column's behaviour.
+    const initial = initialCollapsedRef.current;
+    if (next && initial && initial[next] && !autoExpandedRef.current.has(next)) {
+      autoExpandedRef.current.add(next);
+      setCollapsed((prev) => (prev[next] ? { ...prev, [next]: false } : prev));
+    }
+  }, []);
+
+  const moveListenerRef = useRef<(() => void) | null>(null);
+
+  const onDragStart = (start: { draggableId: string }) => {
     draggingRef.current = true;
     initialCollapsedRef.current = { ...collapsed };
     autoExpandedRef.current = new Set();
+    activeColumnRef.current = null;
+    setActiveColumn(null);
+    // The lib applies position:fixed + transform to the dragged
+    // article. Find it once after the lib has wired up the clone.
+    requestAnimationFrame(() => {
+      draggedCardRef.current = document.querySelector<HTMLElement>(
+        `[data-rfd-draggable-id="${start.draggableId}"]`,
+      );
+      recomputeActiveColumn();
+    });
+    // The lib's onDragUpdate doesn't always fire when the cursor
+    // moves but no destination changes (its destination is stale).
+    // Listen on the document so we get every mouse / touch move.
+    const onMove = () => recomputeActiveColumn();
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('touchmove', onMove, { capture: true, passive: true });
+    moveListenerRef.current = () => {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('touchmove', onMove, true);
+    };
   };
 
-  const onDragUpdate = (update: DragUpdate) => {
-    const initial = initialCollapsedRef.current;
-    if (!initial) return;
-    const destId = update.destination?.droppableId as TaskStatus | undefined;
-    if (!destId) return;
-    // Only auto-expand columns that were originally collapsed. If
-    // it was already expanded by the user, leave it alone — and
-    // don't track it for collapse on drag-end.
-    if (!initial[destId]) return;
-    if (autoExpandedRef.current.has(destId)) return;
-    autoExpandedRef.current.add(destId);
-    setCollapsed((prev) => (prev[destId] ? { ...prev, [destId]: false } : prev));
-    // NB: an earlier revision dispatched a synthetic 'resize' event
-    // here to nudge dnd to re-measure every droppable. That worked
-    // for the hit-test offset but caused the lib to abort the drag
-    // — it treats resize during drag as a layout invalidation and
-    // returns the dragged item to its source. The instant width
-    // change above (transition-colors only) is what we rely on
-    // instead; the lib's per-droppable ResizeObservers pick up the
-    // expanded column's size change and that's enough for the
-    // common cases.
+  const onDragUpdate = (_update: DragUpdate) => {
+    // The lib's onDragUpdate fires on cursor move and column shift.
+    // We piggy-back to refresh our own hit-test against current rects.
+    recomputeActiveColumn();
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -132,11 +183,19 @@ export function KanbanBoard() {
       draggingRef.current = false;
     }, 0);
 
+    // Tear down the document-level move listeners.
+    moveListenerRef.current?.();
+    moveListenerRef.current = null;
+
     const expanded = autoExpandedRef.current;
+    const ourDest = activeColumnRef.current;
     initialCollapsedRef.current = null;
     autoExpandedRef.current = new Set();
-    const { destination, source, draggableId } = result;
-    const droppedInto = destination?.droppableId as TaskStatus | undefined;
+    activeColumnRef.current = null;
+    setActiveColumn(null);
+    draggedCardRef.current = null;
+    const { source, draggableId } = result;
+    const droppedInto = ourDest;
 
     // Re-collapse every column we auto-expanded — except the one
     // that received the drop. Keeping the destination open means
@@ -156,11 +215,10 @@ export function KanbanBoard() {
       });
     }
 
-    if (!destination) return;
-    if (destination.droppableId === source.droppableId) return;
+    if (!ourDest) return;
+    if (ourDest === source.droppableId) return;
 
-    const nextStatus = destination.droppableId as TaskStatus;
-    updateStatus.mutate({ id: draggableId, payload: { status: nextStatus } });
+    updateStatus.mutate({ id: draggableId, payload: { status: ourDest } });
   };
 
   if (isLoading) {
@@ -197,6 +255,8 @@ export function KanbanBoard() {
               isCollapsed={collapsed[col.id]}
               onToggle={() => toggleColumn(col.id)}
               onCardClick={onCardClick}
+              isActiveDropTarget={activeColumn === col.id}
+              setOuterRef={setColumnEl(col.id)}
             />
           ))}
         </div>
@@ -360,6 +420,8 @@ function Column({
   isCollapsed,
   onToggle,
   onCardClick,
+  isActiveDropTarget,
+  setOuterRef,
 }: {
   id: TaskStatus;
   label: string;
@@ -367,31 +429,26 @@ function Column({
   isCollapsed: boolean;
   onToggle: () => void;
   onCardClick: (taskId: string) => void;
+  isActiveDropTarget: boolean;
+  setOuterRef: (el: HTMLElement | null) => void;
 }) {
   // Collapsed columns are a 5-rem rail (80px). Wider than the
   // original 48px so a dragged card has more area to land on.
   //
-  // Layout note (the painful one): @hello-pangea/dnd snapshots every
-  // droppable's bounding rect at drag-start and only re-measures
-  // each one via its own ResizeObserver — the lib doesn't notice
-  // when a SIBLING column expanding pushes others sideways. The
-  // hovered column gets the right hit-test (its own size changed →
-  // observer fired → bounds updated), but neighbours don't, so the
-  // cursor-to-droppable mapping drifts a bit. Dispatching a window
-  // resize used to fix this but the lib treats it as a layout
-  // invalidation and aborts the drag, sending the card back to its
-  // source. Until we either swap the dnd lib or build a custom
-  // drop-target overlay, we lean on the strong column-wide hover
-  // highlight below — the user follows the indigo-glowing column
-  // (which IS the lib's source of truth) rather than the visual
-  // position they're aiming at.
+  // The active-drop-target highlight is driven by the parent's
+  // custom hit-test (KanbanBoard.activeColumn), NOT by the dnd
+  // lib's snapshot.isDraggingOver — see the long-form note in
+  // KanbanBoard for the rationale. The lib's snapshot is read for
+  // the placeholder slot only; everything user-visible follows our
+  // own hit-test.
   const widthClass = isCollapsed ? 'w-20 md:w-20 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
   return (
     <Droppable droppableId={id}>
-      {(provided, snapshot) => (
+      {(provided) => (
         <div
+          ref={setOuterRef}
           className={`flex min-h-0 snap-start flex-col rounded-lg p-2 transition-all duration-300 ease-out ${widthClass} ${
-            snapshot.isDraggingOver
+            isActiveDropTarget
               ? 'bg-indigo-100 ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-50'
               : 'bg-slate-100'
           }`}
@@ -414,16 +471,14 @@ function Column({
             </span>
             <h2
               className={`whitespace-nowrap text-sm font-semibold uppercase tracking-wide ${
-                snapshot.isDraggingOver ? 'text-indigo-700' : 'text-slate-600'
+                isActiveDropTarget ? 'text-indigo-700' : 'text-slate-600'
               } ${isCollapsed ? 'rotate-180 [writing-mode:vertical-rl]' : ''}`}
             >
               {label}
             </h2>
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                snapshot.isDraggingOver
-                  ? 'bg-indigo-200 text-indigo-800'
-                  : 'bg-slate-200 text-slate-700'
+                isActiveDropTarget ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-200 text-slate-700'
               } ${isCollapsed ? '' : 'ml-auto'}`}
             >
               {tasks.length}
@@ -498,7 +553,11 @@ function Column({
                     )}
                   </Draggable>
                 ))}
-            {provided.placeholder}
+            {/* The lib's placeholder is hidden because its destination
+                may disagree with our hit-test (siblings shift on
+                expand). Keep it mounted so the lib's invariants hold,
+                but render zero visual footprint. */}
+            <div className="hidden">{provided.placeholder}</div>
           </div>
         </div>
       )}
