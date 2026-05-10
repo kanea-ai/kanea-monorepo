@@ -47,10 +47,12 @@ export default function DirectoryPage() {
   const [addOpen, setAddOpen] = useState<'invite' | 'agent' | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
 
-  // Backend humans_only param drives the AGENT filter at the source —
-  // when scope is HUMAN we narrow there. AGENT scope keeps humans_only
-  // off and filters client-side (the api doesn't have an "agents only"
-  // query yet, and the row count makes filtering on the client free).
+  // The scope tabs (All / Humans / Agents) filter on the type column
+  // client-side — that way a single api response feeds both the
+  // tab counts AND the visible rows. Sending humans_only=true to the
+  // api would shrink the result set and the AGENT count would drop
+  // to 0, which read as a bug. Workspace size makes one extra
+  // type check per row free.
   const {
     data: members,
     isLoading,
@@ -61,7 +63,6 @@ export default function DirectoryPage() {
     role: role || undefined,
     teamId: teamId || undefined,
     projectId: projectId || undefined,
-    humansOnly: scope === 'HUMAN',
   });
 
   const { data: teams } = useTeams();
@@ -69,10 +70,14 @@ export default function DirectoryPage() {
 
   const visible = useMemo(() => {
     const rows = members ?? [];
+    if (scope === 'HUMAN') return rows.filter((m) => m.type === 'HUMAN');
     if (scope === 'AGENT') return rows.filter((m) => m.type === 'AGENT');
     return rows;
   }, [members, scope]);
 
+  // Counts come from the full filtered set, NOT `visible` — we want
+  // the badges stable across scope flips so the user sees how many
+  // would match if they switched.
   const counts = useMemo(() => {
     const all = members ?? [];
     return {
