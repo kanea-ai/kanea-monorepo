@@ -28,7 +28,6 @@ from app.domain.enums import TaskStatus
 from app.domain.exceptions import (
     CrossTeamForbiddenError,
     DelegationForbiddenError,
-    InvalidStatusTransitionError,
     ProjectNotFoundError,
     RatingForbiddenError,
     TaskAlreadyRatedError,
@@ -160,8 +159,6 @@ async def update_task_status(
         return await service.update_status(task_id, payload, principal)
     except TaskNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except InvalidStatusTransitionError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.patch(

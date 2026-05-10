@@ -61,7 +61,6 @@ from app.domain.enums import (
 from app.domain.exceptions import (
     CrossTeamForbiddenError,
     DelegationForbiddenError,
-    InvalidStatusTransitionError,
     ProjectNotFoundError,
     RatingForbiddenError,
     TaskAlreadyRatedError,
@@ -77,26 +76,13 @@ from app.domain.exceptions import (
 )
 
 # Allowed status transitions. Any transition not listed here is rejected.
-# BLOCKED is no longer a status — being blocked is an orthogonal flag,
-# toggled via PATCH /tasks/{id}/block. The lifecycle stays linear.
-_ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
-    TaskStatus.IN_PROGRESS: frozenset(
-        {
-            TaskStatus.IN_REVIEW,
-            TaskStatus.DONE,
-            TaskStatus.CANCELLED,
-            TaskStatus.PENDING,
-        }
-    ),
-    # IN_REVIEW kicks back to IN_PROGRESS on rejection, or forward to
-    # DONE on approval. CANCELLED is the bail-out.
-    TaskStatus.IN_REVIEW: frozenset(
-        {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}
-    ),
-    TaskStatus.DONE: frozenset(),
-    TaskStatus.CANCELLED: frozenset(),
-}
+# Status transitions are intentionally unrestricted: the kanban
+# spec lets users drag any card to any column, including reopening
+# DONE / CANCELLED tasks (CANCELLED → PENDING is a common "we
+# changed our mind" flow). The audit log still captures every
+# transition so the trail is intact even when the lifecycle is
+# non-linear. The orthogonal `is_blocked` flag remains separate —
+# toggled via PATCH /tasks/{id}/block, never via status.
 
 
 @dataclass(slots=True)
@@ -693,10 +679,12 @@ class TaskService:
         requester: Principal,
     ) -> TaskResponse:
         task = await self._load_task(task_id, requester)
-        if request.status not in _ALLOWED_TRANSITIONS[task.status]:
-            raise InvalidStatusTransitionError(
-                f"cannot transition task from {task.status.value} to {request.status.value}"
-            )
+        # Same-status writes are no-ops — drag-and-drop sometimes fires
+        # a status update on a card the user only nudged. Skipping
+        # keeps the audit log tidy.
+        if request.status is task.status:
+            prefix = await self._workspace_prefix(requester.workspace_id)
+            return TaskResponse.from_entity(task, prefix=prefix)
 
         updated = await self.tasks.update_status(
             task_id=task.id,

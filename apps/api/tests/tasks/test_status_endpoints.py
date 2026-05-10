@@ -28,7 +28,7 @@ from app.application.tasks.schemas import (
 )
 from app.application.tasks.service import TaskService
 from app.domain.enums import MemberType, TaskStatus
-from app.domain.exceptions import InvalidStatusTransitionError, TaskNotFoundError
+from app.domain.exceptions import TaskNotFoundError
 from app.main import app
 from tests.tasks.factories import make_principal, make_task
 
@@ -230,16 +230,19 @@ def test_status_change_to_done(client: TestClient, task_service: AsyncMock) -> N
     assert response.json()["status"] == "DONE"
 
 
-def test_invalid_transition_returns_409(client: TestClient, task_service: AsyncMock) -> None:
-    task_service.update_status.side_effect = InvalidStatusTransitionError(
-        "cannot transition task from DONE to IN_PROGRESS"
-    )
+def test_reopen_done_task_is_allowed(client: TestClient, task_service: AsyncMock) -> None:
+    """The kanban allows any-to-any drag — reopening DONE/CANCELLED
+    tasks is a normal flow ("we changed our mind"). The router used
+    to map InvalidStatusTransitionError → 409; that check is gone."""
+    workspace_id = uuid4()
+    task = make_task(workspace_id=workspace_id, status=TaskStatus.PENDING)
+    task_service.update_status.return_value = TaskResponse.from_entity(task, prefix="ACME")
     response = client.patch(
-        f"/api/v1/tasks/{uuid4()}/status",
-        json={"status": "IN_PROGRESS"},
+        f"/api/v1/tasks/{task.id}/status",
+        json={"status": "PENDING"},
         headers={"Authorization": "Bearer dummy"},
     )
-    assert response.status_code == 409
+    assert response.status_code == 200
 
 
 def test_status_update_unknown_task_returns_404(
@@ -440,17 +443,19 @@ async def test_in_review_transitions_are_allowed(
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
+        # Same transitions the old test asserted should fail. They all
+        # succeed now — the kanban allows any-to-any drag.
         (TaskStatus.DONE, TaskStatus.IN_PROGRESS),
         (TaskStatus.CANCELLED, TaskStatus.IN_PROGRESS),
         (TaskStatus.PENDING, TaskStatus.DONE),
         (TaskStatus.DONE, TaskStatus.CANCELLED),
         (TaskStatus.CANCELLED, TaskStatus.DONE),
-        # PENDING can't skip straight to IN_REVIEW — must go through
-        # IN_PROGRESS first so the activity log captures the work.
         (TaskStatus.PENDING, TaskStatus.IN_REVIEW),
+        # And one we've always allowed, included for completeness.
+        (TaskStatus.IN_REVIEW, TaskStatus.IN_PROGRESS),
     ],
 )
-async def test_invalid_transitions_are_rejected(
+async def test_any_status_transition_is_allowed(
     service: TaskService,
     task_repo: AsyncMock,
     from_status: TaskStatus,
@@ -460,10 +465,32 @@ async def test_invalid_transitions_are_rejected(
     requester = make_principal(workspace_id=workspace_id, priority=1)
     task = make_task(workspace_id=workspace_id, status=from_status)
     task_repo.get_by_id.return_value = task
+    task_repo.update_status.return_value = make_task(
+        task_id=task.id, workspace_id=workspace_id, status=to_status
+    )
 
-    with pytest.raises(InvalidStatusTransitionError):
-        await service.update_status(task.id, UpdateTaskStatusRequest(status=to_status), requester)
+    result = await service.update_status(
+        task.id, UpdateTaskStatusRequest(status=to_status), requester
+    )
 
+    assert result.status is to_status
+    task_repo.update_status.assert_awaited_once()
+
+
+async def test_same_status_write_is_a_noop(service: TaskService, task_repo: AsyncMock) -> None:
+    """Drag-and-drop sometimes fires status updates for cards the user
+    only nudged inside the same column. We short-circuit those —
+    no DB write, no activity event."""
+    workspace_id = uuid4()
+    requester = make_principal(workspace_id=workspace_id, priority=1)
+    task = make_task(workspace_id=workspace_id, status=TaskStatus.IN_PROGRESS)
+    task_repo.get_by_id.return_value = task
+
+    result = await service.update_status(
+        task.id, UpdateTaskStatusRequest(status=TaskStatus.IN_PROGRESS), requester
+    )
+
+    assert result.status is TaskStatus.IN_PROGRESS
     task_repo.update_status.assert_not_awaited()
 
 

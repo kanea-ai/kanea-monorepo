@@ -123,8 +123,10 @@ export function MemberDetailDialog({
           <TypePill type={member.type} />
         </div>
 
-        {/* Profile card — name / role / priority. Editable by admins. */}
-        <Section title="Profile">
+        {/* Profile card — name / role / priority. Editable by workspace
+            owners + admins. Backend enforces the last-OWNER demotion
+            guard; we surface its 403 inline below. */}
+        <Section title="Profile & permissions">
           <Field label="Display name">
             {isAdmin ? (
               <input
@@ -140,15 +142,20 @@ export function MemberDetailDialog({
           </Field>
           <Field label="Workspace role">
             {isAdmin && isHuman ? (
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as MemberRole)}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-              >
-                <option value="WORKSPACE_OWNER">Owner</option>
-                <option value="WORKSPACE_ADMIN">Admin</option>
-                <option value="WORKSPACE_MEMBER">Member</option>
-              </select>
+              <div>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as MemberRole)}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+                >
+                  <option value="WORKSPACE_OWNER">Owner</option>
+                  <option value="WORKSPACE_ADMIN">Admin</option>
+                  <option value="WORKSPACE_MEMBER">Member</option>
+                </select>
+                <p className="mt-1 text-[10px] italic text-slate-500">
+                  Cannot demote the last workspace owner.
+                </p>
+              </div>
             ) : (
               <RolePill role={member.role} />
             )}

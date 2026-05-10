@@ -1,8 +1,8 @@
 'use client';
 
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
-import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useMemo, useRef, useState } from 'react';
 
 import type { Task, TaskStatus } from '../lib/api';
 import { useCurrentPrincipal } from '../lib/auth';
@@ -62,7 +62,29 @@ export function KanbanBoard() {
   });
   const toggleColumn = (id: TaskStatus) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }));
 
+  const router = useRouter();
+  // Drag-vs-click guard: cards' onClick fires before dnd's onDragEnd
+  // when the user actually finished dragging in some browsers, even
+  // though the click is logically "the drop". The ref is set in
+  // onDragStart and cleared shortly after onDragEnd; the card's
+  // click handler bails if it sees a recent drag.
+  const draggingRef = useRef(false);
+  const onCardClick = (taskId: string) => {
+    if (draggingRef.current) return;
+    router.push(`/tasks/${taskId}`);
+  };
+
+  const onDragStart = () => {
+    draggingRef.current = true;
+  };
   const onDragEnd = (result: DropResult) => {
+    // The drop completes synchronously; defer the click-suppression
+    // release one tick so the synthetic click that follows the drop
+    // sees draggingRef=true and bails.
+    setTimeout(() => {
+      draggingRef.current = false;
+    }, 0);
+
     const { destination, source, draggableId } = result;
     if (!destination) return;
     if (destination.droppableId === source.droppableId) return;
@@ -91,7 +113,7 @@ export function KanbanBoard() {
           Showing your tasks. Workspace admins see the full board.
         </div>
       )}
-      <DragDropContext onDragEnd={onDragEnd}>
+      <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
         {/* Columns flex-wise rather than equal-grid. Active columns
             stretch; collapsed ones shrink to a 12-rem rail so they
             stay usable. Below md they scroll horizontally. */}
@@ -104,6 +126,7 @@ export function KanbanBoard() {
               tasks={grouped[col.id]}
               isCollapsed={collapsed[col.id]}
               onToggle={() => toggleColumn(col.id)}
+              onCardClick={onCardClick}
             />
           ))}
         </div>
@@ -266,12 +289,14 @@ function Column({
   tasks,
   isCollapsed,
   onToggle,
+  onCardClick,
 }: {
   id: TaskStatus;
   label: string;
   tasks: Task[];
   isCollapsed: boolean;
   onToggle: () => void;
+  onCardClick: (taskId: string) => void;
 }) {
   // Collapsed columns shrink to a thin rail (just header + count).
   // The Droppable still mounts so dnd can drop into a collapsed
@@ -326,32 +351,38 @@ function Column({
               {tasks.map((task, index) => (
                 <Draggable key={task.id} draggableId={task.id} index={index}>
                   {(p, s) => (
+                    // Whole card is clickable. dnd treats mousedown as
+                    // a press that becomes a drag only after movement;
+                    // a pure click leaves dragHandleProps' onMouseUp
+                    // unchanged and our onClick fires. After a real
+                    // drag, the parent's draggingRef is true so the
+                    // click-handler bails — see KanbanBoard.onCardClick.
                     <article
                       ref={p.innerRef}
                       {...p.draggableProps}
                       {...p.dragHandleProps}
-                      className={`rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow ${
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onCardClick(task.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onCardClick(task.id);
+                        }
+                      }}
+                      className={`cursor-pointer rounded-md border bg-white p-3 text-sm shadow-sm transition-shadow hover:border-indigo-300 hover:shadow ${
                         task.is_blocked
                           ? 'border-red-300 bg-red-50/50 ring-1 ring-red-200'
                           : 'border-slate-200'
-                      } ${s.isDragging ? 'shadow-md ring-2 ring-indigo-300' : ''}`}
+                      } ${s.isDragging ? 'cursor-grabbing shadow-md ring-2 ring-indigo-300' : ''}`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <Link
-                          href={`/tasks/${task.id}`}
-                          // Stop drag handler from claiming the click — the
-                          // dnd library calls preventDefault on parent click
-                          // events, so we explicitly stopPropagation here.
-                          onClick={(e) => e.stopPropagation()}
-                          className="min-w-0 flex-1"
-                        >
+                        <div className="min-w-0 flex-1">
                           <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
                             {task.public_id}
                           </p>
-                          <h3 className="truncate font-medium text-slate-900 hover:text-indigo-700">
-                            {task.title}
-                          </h3>
-                        </Link>
+                          <h3 className="truncate font-medium text-slate-900">{task.title}</h3>
+                        </div>
                         <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
                           P{task.priority}
                         </span>
