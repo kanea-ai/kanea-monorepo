@@ -1,12 +1,20 @@
 'use client';
 
+// Phase 5 batch 1: the inline workspace picker has moved to
+// /workspaces. /login now stays focused on the credentials step:
+// single-workspace users get bounced straight to the post-login
+// destination, multi-workspace users get redirected to /workspaces
+// (with the selection_token + tile list stashed in sessionStorage so
+// the picker page can read it).
+
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 
 import { Divider, OAuthButtons } from '../components/OAuthButtons';
-import { ApiError, type WorkspaceOption } from '../lib/api';
+import { ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { SELECTION_KEY } from '../workspaces/page';
 
 export default function LoginPage() {
   return (
@@ -21,12 +29,8 @@ export default function LoginPage() {
   );
 }
 
-// Two-stage flow: credentials -> (single-workspace) token, or
-// credentials -> selection -> token. Both stages live in this one
-// component so the user's email/password don't have to round-trip
-// through state we'd otherwise prop-drill.
 function LoginFlow() {
-  const { token, isReady, login, selectWorkspace } = useAuth();
+  const { token, isReady, login } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get('next') ?? '/';
@@ -35,13 +39,6 @@ function LoginFlow() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // After a multi-workspace login response, this holds the picker state.
-  // Null while we're still on the credentials screen.
-  const [selection, setSelection] = useState<{
-    selectionToken: string;
-    workspaces: WorkspaceOption[];
-  } | null>(null);
 
   // If already logged in, bounce away so back-button doesn't strand the user
   // here after a refresh.
@@ -58,45 +55,23 @@ function LoginFlow() {
       if (res.kind === 'token') {
         router.replace(next);
       } else {
-        setSelection({ selectionToken: res.selectionToken, workspaces: res.workspaces });
+        // Multi-workspace branch: stash selection state and route to
+        // the dedicated picker page. SessionStorage scopes it to this
+        // tab; the api's 5-minute selection_token TTL is the safety net.
+        window.sessionStorage.setItem(
+          SELECTION_KEY,
+          JSON.stringify({
+            selection_token: res.selectionToken,
+            workspaces: res.workspaces,
+          }),
+        );
+        router.replace('/workspaces');
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Login failed');
-    } finally {
       setSubmitting(false);
     }
   };
-
-  const onPick = async (workspaceId: string) => {
-    if (!selection) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await selectWorkspace({
-        selection_token: selection.selectionToken,
-        workspace_id: workspaceId,
-      });
-      router.replace(next);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Workspace selection failed');
-      setSubmitting(false);
-    }
-  };
-
-  if (selection) {
-    return (
-      <WorkspacePicker
-        workspaces={selection.workspaces}
-        onPick={onPick}
-        onCancel={() => {
-          setSelection(null);
-          setPassword('');
-        }}
-        submitting={submitting}
-        error={error}
-      />
-    );
-  }
 
   return (
     <>
@@ -153,75 +128,6 @@ function LoginFlow() {
       </p>
     </>
   );
-}
-
-function WorkspacePicker({
-  workspaces,
-  onPick,
-  onCancel,
-  submitting,
-  error,
-}: {
-  workspaces: WorkspaceOption[];
-  onPick: (workspaceId: string) => void | Promise<void>;
-  onCancel: () => void;
-  submitting: boolean;
-  error: string | null;
-}) {
-  return (
-    <>
-      <header className="mb-6">
-        <h1 className="text-xl font-semibold text-slate-900">Choose a workspace</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          You belong to more than one — pick the one you want to use.
-        </p>
-      </header>
-
-      {error ? (
-        <p role="alert" className="mb-4 text-sm text-red-600">
-          {error}
-        </p>
-      ) : null}
-
-      <ul className="space-y-2">
-        {workspaces.map((ws) => (
-          <li key={ws.workspace_id}>
-            <button
-              type="button"
-              onClick={() => onPick(ws.workspace_id)}
-              disabled={submitting}
-              className="flex w-full items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-3 text-left text-sm shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <span className="font-medium text-slate-900">{ws.name}</span>
-              <span className="text-xs uppercase tracking-wide text-slate-500">
-                {roleLabel(ws.role)}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      <button
-        type="button"
-        onClick={onCancel}
-        disabled={submitting}
-        className="mt-6 w-full text-center text-sm text-slate-500 hover:text-slate-700 disabled:opacity-60"
-      >
-        ← Back to sign in
-      </button>
-    </>
-  );
-}
-
-function roleLabel(role: WorkspaceOption['role']): string {
-  switch (role) {
-    case 'WORKSPACE_OWNER':
-      return 'Owner';
-    case 'WORKSPACE_ADMIN':
-      return 'Admin';
-    case 'WORKSPACE_MEMBER':
-      return 'Member';
-  }
 }
 
 function FormSkeleton() {

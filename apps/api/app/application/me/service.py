@@ -1,28 +1,43 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy.exc import IntegrityError
 
 from app.application.auth.ports import (
     PasswordHasher,
+    TokenService,
     UserRepository,
     WorkspaceRepository,
+)
+from app.application.auth.service import (
+    OWNER_PRIORITY,
+    _generate_slug,
+    _generate_task_prefix,
 )
 from app.application.me.ports import MeMemberRepository
 from app.application.me.schemas import (
     ChangePasswordRequest,
+    CreateMyWorkspaceRequest,
+    CreateMyWorkspaceResponse,
     MeProfileResponse,
     MeStatsResponse,
+    MeWorkspaceOption,
     NotificationCountResponse,
     NotificationResponse,
     UpdateMeRequest,
 )
 from app.application.notifications.ports import NotificationRepository
 from app.application.tasks.schemas import Principal
+from app.domain.entities import Member, Workspace
+from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
     AuthenticationError,
     InvalidMemberTypeError,
     NotificationNotFoundError,
+    WorkspaceNameConflictError,
 )
 
 
@@ -32,7 +47,10 @@ class MeService:
     members: MeMemberRepository
     workspaces: WorkspaceRepository
     hasher: PasswordHasher
+    # Optional so callers that don't exercise the inbox / switcher (a
+    # narrower class of unit tests) can omit them.
     notifications: NotificationRepository | None = None
+    tokens: TokenService | None = None
 
     async def get_profile(self, principal: Principal) -> MeProfileResponse:
         member = await self.members.get_by_id(principal.member_id)
@@ -177,3 +195,96 @@ class MeService:
         if member is None or member.user_id is None:
             raise InvalidMemberTypeError("member not found")
         return await self.notifications.mark_all_read(member.user_id)
+
+    # ---------- workspaces (sidebar switcher / /workspaces page) ----------
+
+    async def list_my_workspaces(self, principal: Principal) -> list[MeWorkspaceOption]:
+        """Returns the workspaces the calling user has a membership in.
+        Drives both the sidebar dropdown and the /workspaces tile
+        picker. Marks the principal's current workspace so the UI can
+        render it differently (badge, hide from switcher, etc.)."""
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+
+        memberships = await self.members.list_for_user(member.user_id)
+        # AGENT rows can't have a user_id (CHECK constraint), but the
+        # filter is the belt to that brace.
+        memberships = [m for m in memberships if m.type is MemberType.HUMAN]
+
+        out: list[MeWorkspaceOption] = []
+        for m in memberships:
+            ws = await self.workspaces.get_by_id(m.workspace_id)
+            if ws is None:  # pragma: no cover - FK invariant
+                continue
+            out.append(
+                MeWorkspaceOption(
+                    workspace_id=ws.id,
+                    name=ws.name,
+                    role=m.role,
+                    member_id=m.id,
+                    is_current=ws.id == principal.workspace_id,
+                )
+            )
+        # Stable order: current first, then alphabetical.
+        out.sort(key=lambda o: (not o.is_current, o.name.lower()))
+        return out
+
+    async def create_my_workspace(
+        self, principal: Principal, request: CreateMyWorkspaceRequest
+    ) -> CreateMyWorkspaceResponse:
+        """Authenticated user mints a new workspace and becomes its
+        OWNER. Reuses the same workspace+member seam as registration
+        but anchors to the current User row — no User row is created.
+
+        Returns the workspace summary plus an access token bound to
+        the new membership so the frontend can swap context immediately
+        without bouncing through /auth/select-workspace."""
+        if self.tokens is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("token service not wired")
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.user_id is None:
+            raise InvalidMemberTypeError("member not found")
+        # Re-load the User to get email/full_name for the new Member row.
+        user = await self.users.get_by_id(member.user_id)
+        if user is None:  # pragma: no cover - FK invariant
+            raise InvalidMemberTypeError("user record missing")
+
+        try:
+            workspace = await self.workspaces.create(
+                Workspace(
+                    id=uuid4(),
+                    name=request.name,
+                    slug=_generate_slug(request.name),
+                    task_prefix=_generate_task_prefix(request.name),
+                    next_task_seq=1,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+        except IntegrityError as exc:
+            raise WorkspaceNameConflictError(
+                f"a workspace named {request.name!r} already exists"
+            ) from exc
+
+        new_member = await self.members.create(
+            Member(
+                id=uuid4(),
+                workspace_id=workspace.id,
+                user_id=user.id,
+                type=MemberType.HUMAN,
+                name=user.full_name,
+                email=user.email,
+                priority=OWNER_PRIORITY,
+                role=MemberRole.WORKSPACE_OWNER,
+            )
+        )
+
+        access_token, expires_in = self.tokens.issue_human_token(new_member)
+        return CreateMyWorkspaceResponse(
+            workspace_id=workspace.id,
+            name=workspace.name,
+            member_id=new_member.id,
+            access_token=access_token,
+            expires_in=expires_in,
+        )

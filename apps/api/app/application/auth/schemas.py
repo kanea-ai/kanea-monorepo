@@ -73,6 +73,16 @@ class SelectWorkspaceRequest(BaseModel):
     workspace_id: UUID
 
 
+class SwitchWorkspaceRequest(BaseModel):
+    """Authenticated equivalent of select-workspace: an already-signed-
+    in user reissues their token bound to a different workspace they
+    belong to. Drives the sidebar switcher."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: UUID
+
+
 class OAuthCallbackRequest(BaseModel):
     """Internal value object — the auth route hands these to the service
     after parsing the GET callback's query params."""

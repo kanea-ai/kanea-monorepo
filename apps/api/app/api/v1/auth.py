@@ -9,13 +9,14 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import AuthServiceDep, get_oauth_client, get_settings
+from app.api.deps import AuthServiceDep, PrincipalDep, get_oauth_client, get_settings
 from app.application.auth.schemas import (
     AgentTokenRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
     SelectWorkspaceRequest,
+    SwitchWorkspaceRequest,
     TokenResponse,
 )
 from app.core.config import Settings
@@ -71,6 +72,32 @@ async def select_workspace(
     is verified — the selection token alone is not enough."""
     try:
         return await service.select_workspace(payload)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+@router.post(
+    "/switch-workspace",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def switch_workspace(
+    payload: SwitchWorkspaceRequest,
+    principal: PrincipalDep,
+    service: AuthServiceDep,
+) -> TokenResponse:
+    """Already-signed-in user reissues their access token bound to a
+    different workspace they belong to. Distinct from
+    /auth/select-workspace, which is the post-login picker that
+    requires a selection_token. Drives the sidebar switcher.
+    Returns 401 when the user has no membership in the requested
+    workspace — same shape we use for cross-tenant attempts."""
+    try:
+        return await service.switch_workspace(principal, payload)
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

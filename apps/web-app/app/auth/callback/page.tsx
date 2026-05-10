@@ -1,18 +1,20 @@
 'use client';
 
-// Landing page for the OAuth round-trip. The api's /oauth/{provider}/callback
-// handler 302s here with one of:
-//   ?token=…                                  (single-workspace user)
-//   ?selection_token=…&workspaces=…           (multi-workspace user)
-//   ?error=…                                  (provider denied / consent failed)
-// Multi-workspace lands here, not /login, so the post-login redirect target
-// stays consistent across both flows.
+// OAuth round-trip landing. Phase 5 batch 1: the multi-workspace
+// picker has moved to /workspaces; this page now just hydrates the
+// AuthContext from the api's redirect query and bounces.
+//
+// Possible inputs (set by the api's /oauth/{provider}/callback):
+//   ?token=…                                     → single workspace
+//   ?selection_token=…&workspaces=<base64-json>  → multi workspace
+//   ?error=…                                     → provider denied / consent failed
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
-import { ApiError, type WorkspaceOption } from '../../lib/api';
+import { type WorkspaceOption } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { SELECTION_KEY } from '../../workspaces/page';
 
 export default function AuthCallbackPage() {
   return (
@@ -27,13 +29,8 @@ export default function AuthCallbackPage() {
 function CallbackHandler() {
   const params = useSearchParams();
   const router = useRouter();
-  const { setTokenFromOAuth, selectWorkspace } = useAuth();
+  const { setTokenFromOAuth } = useAuth();
   const [error, setError] = useState<string | null>(null);
-  const [picker, setPicker] = useState<{
-    selectionToken: string;
-    workspaces: WorkspaceOption[];
-  } | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const providerError = params.get('error');
@@ -56,7 +53,13 @@ function CallbackHandler() {
         const padded = workspacesB64.replace(/-/g, '+').replace(/_/g, '/');
         const json = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
         const workspaces = JSON.parse(json) as WorkspaceOption[];
-        setPicker({ selectionToken, workspaces });
+        // Hand off to /workspaces — the same picker that's reused by
+        // the password-login multi-workspace branch.
+        window.sessionStorage.setItem(
+          SELECTION_KEY,
+          JSON.stringify({ selection_token: selectionToken, workspaces }),
+        );
+        router.replace('/workspaces');
         return;
       } catch {
         setError('invalid_workspaces_payload');
@@ -84,59 +87,7 @@ function CallbackHandler() {
     );
   }
 
-  if (picker) {
-    const onPick = async (workspaceId: string) => {
-      setSubmitting(true);
-      try {
-        await selectWorkspace({
-          selection_token: picker.selectionToken,
-          workspace_id: workspaceId,
-        });
-        router.replace('/');
-      } catch (err) {
-        setError(err instanceof ApiError ? err.detail : 'workspace_selection_failed');
-        setSubmitting(false);
-      }
-    };
-    return (
-      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-lg font-semibold text-slate-900">Choose a workspace</h1>
-        <p className="mb-4 mt-1 text-sm text-slate-500">
-          You belong to more than one — pick the one you want to use.
-        </p>
-        <ul className="space-y-2">
-          {picker.workspaces.map((ws) => (
-            <li key={ws.workspace_id}>
-              <button
-                type="button"
-                onClick={() => onPick(ws.workspace_id)}
-                disabled={submitting}
-                className="flex w-full items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-3 text-left text-sm shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <span className="font-medium text-slate-900">{ws.name}</span>
-                <span className="text-xs uppercase tracking-wide text-slate-500">
-                  {roleLabel(ws.role)}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-
   return <Spinner />;
-}
-
-function roleLabel(role: WorkspaceOption['role']): string {
-  switch (role) {
-    case 'WORKSPACE_OWNER':
-      return 'Owner';
-    case 'WORKSPACE_ADMIN':
-      return 'Admin';
-    case 'WORKSPACE_MEMBER':
-      return 'Member';
-  }
 }
 
 function Spinner() {

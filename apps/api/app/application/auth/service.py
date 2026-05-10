@@ -24,9 +24,11 @@ from app.application.auth.schemas import (
     LoginResponse,
     RegisterRequest,
     SelectWorkspaceRequest,
+    SwitchWorkspaceRequest,
     TokenResponse,
     WorkspaceOption,
 )
+from app.application.tasks.schemas import Principal
 from app.domain.entities import Member, User, Workspace
 from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
@@ -174,6 +176,31 @@ class AuthService:
         )
         if match is None or match.type is not MemberType.HUMAN:
             raise AuthenticationError("no membership for this workspace under that selection token")
+        token, ttl = self.tokens.issue_human_token(match)
+        return TokenResponse(access_token=token, expires_in=ttl)
+
+    async def switch_workspace(
+        self, requester: Principal, request: SwitchWorkspaceRequest
+    ) -> TokenResponse:
+        """Reissue the access token bound to a different workspace the
+        same user belongs to. The principal already authenticates the
+        user — we just verify the target membership exists and mint a
+        fresh token. Distinct from select_workspace because we don't
+        need a selection_token here; the bearer JWT already proves who
+        is asking."""
+        # Resolve the calling user via their current member.
+        current = await self.members.get_by_id(requester.member_id)
+        if current is None or current.user_id is None:
+            raise AuthenticationError("member not found")
+
+        memberships = await self.members.list_for_user(current.user_id)
+        match = next(
+            (m for m in memberships if m.workspace_id == request.workspace_id),
+            None,
+        )
+        if match is None or match.type is not MemberType.HUMAN:
+            raise AuthenticationError("you don't have access to this workspace")
+
         token, ttl = self.tokens.issue_human_token(match)
         return TokenResponse(access_token=token, expires_in=ttl)
 

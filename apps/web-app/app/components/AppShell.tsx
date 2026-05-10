@@ -7,6 +7,7 @@ import { useState, type ReactNode } from 'react';
 import { useAuth, useRequireAuth } from '../lib/auth';
 import { useBlockedTasks } from '../lib/queries';
 import { NotificationsBell } from './NotificationsBell';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 // Tiny placeholder while auth state hydrates. Without this the page
 // is literally blank until localStorage has been read AND any redirect
@@ -111,6 +112,9 @@ function AppShellInner({ children }: { children: ReactNode }) {
             Kanea
           </Link>
           <NotificationsBell />
+        </div>
+        <div className="px-3 pb-3 lg:px-3">
+          <WorkspaceSwitcher />
         </div>
         <nav className="flex flex-col gap-0.5 px-2 py-2 lg:px-3">
           {items.map((item) => (

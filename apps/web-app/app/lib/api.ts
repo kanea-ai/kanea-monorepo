@@ -365,7 +365,42 @@ export const meApi = {
   markRead: (id: string) =>
     requestVoid(`${V1}/me/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),
   markAllRead: () => requestVoid(`${V1}/me/notifications/read-all`, { method: 'POST' }),
+  // Phase 5 batch 1 — workspace switcher
+  workspaces: () => request<MeWorkspace[]>(`${V1}/me/workspaces`),
+  createWorkspace: (payload: CreateMyWorkspacePayload) =>
+    request<CreateMyWorkspaceResponse>(`${V1}/me/workspaces`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
+
+export const authSwitchApi = {
+  switchWorkspace: (payload: { workspace_id: string }) =>
+    request<TokenResponse>(`${V1}/auth/switch-workspace`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
+export interface MeWorkspace {
+  workspace_id: string;
+  name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER';
+  member_id: string;
+  is_current: boolean;
+}
+
+export interface CreateMyWorkspacePayload {
+  name: string;
+}
+
+export interface CreateMyWorkspaceResponse {
+  workspace_id: string;
+  name: string;
+  member_id: string;
+  access_token: string;
+  expires_in: number;
+}
 
 export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT';
 

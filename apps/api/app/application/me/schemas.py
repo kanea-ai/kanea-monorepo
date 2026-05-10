@@ -83,3 +83,42 @@ class NotificationResponse(BaseModel):
 
 class NotificationCountResponse(BaseModel):
     unread: int
+
+
+class MeWorkspaceOption(BaseModel):
+    """One workspace the current user belongs to. Drives the sidebar
+    switcher and the /workspaces tile picker. `is_current` is true for
+    the workspace the active JWT is bound to so the UI can render the
+    badge / hide the menu item that would self-switch."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    workspace_id: UUID
+    name: str
+    role: MemberRole
+    member_id: UUID
+    is_current: bool
+
+
+class CreateMyWorkspaceRequest(BaseModel):
+    """Authenticated user mints a brand-new workspace under their
+    existing User row. Distinct from /auth/register, which creates the
+    User. The new workspace's owner is the calling user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+
+
+class CreateMyWorkspaceResponse(BaseModel):
+    """Workspace summary + a fresh access token bound to the new
+    membership. The frontend swaps its localStorage token to this so
+    the user lands inside the new workspace immediately."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    workspace_id: UUID
+    name: str
+    member_id: UUID
+    access_token: str
+    expires_in: int

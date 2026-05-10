@@ -8,8 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from app.api.deps import PrincipalDep, get_me_service
 from app.application.me.schemas import (
     ChangePasswordRequest,
+    CreateMyWorkspaceRequest,
+    CreateMyWorkspaceResponse,
     MeProfileResponse,
     MeStatsResponse,
+    MeWorkspaceOption,
     NotificationCountResponse,
     NotificationResponse,
     UpdateMeRequest,
@@ -19,6 +22,7 @@ from app.domain.exceptions import (
     AuthenticationError,
     InvalidMemberTypeError,
     NotificationNotFoundError,
+    WorkspaceNameConflictError,
 )
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -104,3 +108,36 @@ async def mark_notification_read(
 async def mark_all_notifications_read(principal: PrincipalDep, service: MeServiceDep) -> Response:
     await service.mark_all_notifications_read(principal)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/workspaces", response_model=list[MeWorkspaceOption])
+async def list_my_workspaces(
+    principal: PrincipalDep, service: MeServiceDep
+) -> list[MeWorkspaceOption]:
+    """The workspaces the calling user belongs to. Drives the sidebar
+    switcher and the post-login /workspaces tile picker."""
+    try:
+        return await service.list_my_workspaces(principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/workspaces",
+    response_model=CreateMyWorkspaceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_my_workspace(
+    payload: CreateMyWorkspaceRequest,
+    principal: PrincipalDep,
+    service: MeServiceDep,
+) -> CreateMyWorkspaceResponse:
+    """Authenticated user mints a new workspace and lands as its
+    OWNER. The response carries a fresh access token bound to the
+    new membership so the frontend can swap context immediately."""
+    try:
+        return await service.create_my_workspace(principal, payload)
+    except WorkspaceNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

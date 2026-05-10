@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/
 
 import {
   agentsApi,
+  authSwitchApi,
   meApi,
   projectsApi,
   requestsApi,
@@ -18,6 +19,8 @@ import {
   type CreateProjectPayload,
   type CreateRelationPayload,
   type ChangePasswordPayload,
+  type CreateMyWorkspacePayload,
+  type CreateMyWorkspaceResponse,
   type CreateRequestPayload,
   type CreateTaskPayload,
   type CreateTeamPayload,
@@ -31,9 +34,11 @@ import {
   type MeProfile,
   type MeStats,
   type Member,
+  type MeWorkspace,
   type NotificationCount,
   type NotificationItem,
   type Project,
+  type TokenResponse,
   type ProjectHistory,
   type RateTaskPayload,
   type SetBlockedPayload,
@@ -277,6 +282,35 @@ export function useMarkAllNotificationsRead() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: notificationKeys.all });
     },
+  });
+}
+
+// ---------- Workspace switcher ----------
+
+export const myWorkspaceKeys = {
+  all: ['me', 'workspaces'] as const satisfies QueryKey,
+};
+
+export function useMyWorkspaces() {
+  return useQuery<MeWorkspace[]>({
+    queryKey: myWorkspaceKeys.all,
+    queryFn: () => meApi.workspaces(),
+  });
+}
+
+export function useSwitchWorkspace() {
+  // Caller takes the returned access_token and stores it on its own
+  // (calling setTokenFromOAuth or similar). We don't invalidate other
+  // queries here because the cache is workspace-scoped — the page-
+  // level reload after the swap is the cleaner reset.
+  return useMutation<TokenResponse, Error, { workspace_id: string }>({
+    mutationFn: (payload) => authSwitchApi.switchWorkspace(payload),
+  });
+}
+
+export function useCreateMyWorkspace() {
+  return useMutation<CreateMyWorkspaceResponse, Error, CreateMyWorkspacePayload>({
+    mutationFn: (payload) => meApi.createWorkspace(payload),
   });
 }
 
