@@ -55,6 +55,35 @@ jobs:
     defaults:
       run:
         working-directory: apps/api
+
+    # Postgres sidecar for the integration-flavoured tests that hit the
+    # real SQL layer (the repo, the migrations). The unit tests still
+    # default to in-memory SQLite via tests/conftest; the integration
+    # fixture in tests/integration/conftest.py points its own engine at
+    # this service. The fixed credentials match the
+    # ``KANEA_TEST_DATABASE_URL`` env var below.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kanea
+          POSTGRES_PASSWORD: kanea # pragma: allowlist secret
+          POSTGRES_DB: kanea_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kanea"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Repo / integration tests opt in to the real Postgres engine
+      # via this URL. tests/conftest leaves the *unit* default URL
+      # alone (sqlite:// in-memory), so test files have to read
+      # KANEA_TEST_DATABASE_URL explicitly to engage Postgres.
+      KANEA_TEST_DATABASE_URL: postgresql+asyncpg://kanea:kanea@localhost:5432/kanea_test # pragma: allowlist secret
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
