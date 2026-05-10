@@ -368,71 +368,72 @@ function Column({
   onToggle: () => void;
   onCardClick: (taskId: string) => void;
 }) {
-  // Collapsed columns are a 5-rem rail (was 3rem). Wider gives the
-  // user a bigger drop target when aiming a dragged card at a
-  // collapsed column.
+  // Collapsed columns are a 5-rem rail (80px). Wider than the
+  // original 48px so a dragged card has more area to land on.
   //
-  // Width changes are NOT transitioned — @hello-pangea/dnd
-  // measures droppable positions at drag-start and re-measures via
-  // ResizeObserver. A smooth width transition fires the observer
-  // dozens of times during the animation but the drag's
-  // hit-testing reads the cached positions in between, which is
-  // how the cursor ends up offset from the highlighted column.
-  // Snapping the width keeps the lib's measurements aligned with
-  // what the user sees. The bg / ring highlight still fades
-  // smoothly because those are color transitions only.
+  // Layout note (the painful one): @hello-pangea/dnd snapshots every
+  // droppable's bounding rect at drag-start and only re-measures
+  // each one via its own ResizeObserver — the lib doesn't notice
+  // when a SIBLING column expanding pushes others sideways. The
+  // hovered column gets the right hit-test (its own size changed →
+  // observer fired → bounds updated), but neighbours don't, so the
+  // cursor-to-droppable mapping drifts a bit. Dispatching a window
+  // resize used to fix this but the lib treats it as a layout
+  // invalidation and aborts the drag, sending the card back to its
+  // source. Until we either swap the dnd lib or build a custom
+  // drop-target overlay, we lean on the strong column-wide hover
+  // highlight below — the user follows the indigo-glowing column
+  // (which IS the lib's source of truth) rather than the visual
+  // position they're aiming at.
   const widthClass = isCollapsed ? 'w-20 md:w-20 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
   return (
-    <div
-      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-colors duration-200 ease-out ${widthClass}`}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        title={isCollapsed ? 'Expand column' : 'Collapse column'}
-        className={`mb-2 flex items-center gap-2 rounded px-1 py-1 text-left hover:bg-slate-200/60 ${
-          isCollapsed ? 'flex-col gap-1' : 'justify-between'
-        }`}
-      >
-        <span
-          aria-hidden
-          className={`text-[10px] text-slate-500 transition-transform ${
-            isCollapsed ? '' : 'rotate-90'
+    <Droppable droppableId={id}>
+      {(provided, snapshot) => (
+        <div
+          className={`flex min-h-0 snap-start flex-col rounded-lg p-2 transition-all duration-300 ease-out ${widthClass} ${
+            snapshot.isDraggingOver
+              ? 'bg-indigo-100 ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-50'
+              : 'bg-slate-100'
           }`}
         >
-          ▶
-        </span>
-        <h2
-          className={`whitespace-nowrap text-sm font-semibold uppercase tracking-wide text-slate-600 ${
-            isCollapsed ? 'rotate-180 [writing-mode:vertical-rl]' : ''
-          }`}
-        >
-          {label}
-        </h2>
-        <span
-          className={`rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 ${
-            isCollapsed ? '' : 'ml-auto'
-          }`}
-        >
-          {tasks.length}
-        </span>
-      </button>
-      {/* The Droppable always mounts — dnd needs it in the tree to
-          fire onDragUpdate when the user hovers a collapsed column,
-          which is what triggers the auto-expand-on-hover behaviour
-          in the parent. When collapsed, the inner area shrinks to
-          a tiny strip but still accepts the drop. */}
-      <Droppable droppableId={id}>
-        {(provided, snapshot) => (
+          <button
+            type="button"
+            onClick={onToggle}
+            title={isCollapsed ? 'Expand column' : 'Collapse column'}
+            className={`mb-2 flex items-center gap-2 rounded px-1 py-1 text-left hover:bg-slate-200/60 ${
+              isCollapsed ? 'flex-col gap-1' : 'justify-between'
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`text-[10px] text-slate-500 transition-transform duration-300 ${
+                isCollapsed ? '' : 'rotate-90'
+              }`}
+            >
+              ▶
+            </span>
+            <h2
+              className={`whitespace-nowrap text-sm font-semibold uppercase tracking-wide ${
+                snapshot.isDraggingOver ? 'text-indigo-700' : 'text-slate-600'
+              } ${isCollapsed ? 'rotate-180 [writing-mode:vertical-rl]' : ''}`}
+            >
+              {label}
+            </h2>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                snapshot.isDraggingOver
+                  ? 'bg-indigo-200 text-indigo-800'
+                  : 'bg-slate-200 text-slate-700'
+              } ${isCollapsed ? '' : 'ml-auto'}`}
+            >
+              {tasks.length}
+            </span>
+          </button>
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className={`flex flex-1 flex-col gap-1.5 rounded-md transition-all duration-200 ease-out ${
+            className={`flex flex-1 flex-col gap-1.5 rounded-md transition-all duration-300 ease-out ${
               isCollapsed ? 'min-h-[80px] p-0.5' : 'min-h-[200px] p-1'
-            } ${
-              snapshot.isDraggingOver
-                ? 'bg-indigo-100/80 ring-2 ring-indigo-400 ring-offset-1 ring-offset-slate-100'
-                : ''
             }`}
           >
             {/* When collapsed, hide the cards but keep the
@@ -499,8 +500,8 @@ function Column({
                 ))}
             {provided.placeholder}
           </div>
-        )}
-      </Droppable>
-    </div>
+        </div>
+      )}
+    </Droppable>
   );
 }
