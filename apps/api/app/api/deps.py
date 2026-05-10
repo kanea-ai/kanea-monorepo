@@ -341,6 +341,7 @@ def get_me_service(
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     notifications: Annotated[NotificationRepository, Depends(get_notification_repository)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
+    tasks: Annotated[TaskRepository, Depends(get_task_repository)],
 ) -> MeService:
     return MeService(
         users=users,
@@ -349,6 +350,7 @@ def get_me_service(
         hasher=hasher,
         notifications=notifications,
         tokens=tokens,
+        tasks=tasks,
     )
 
 

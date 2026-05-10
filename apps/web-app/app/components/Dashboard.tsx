@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 
 import type { Task, TaskStatus } from '../lib/api';
-import { useTasks } from '../lib/queries';
+import { useDashboard } from '../lib/queries';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   PENDING: 'Pending',
@@ -15,8 +15,9 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 };
 
 export function Dashboard() {
-  const { data, isLoading, isError, error } = useTasks();
-  const tasks = useMemo(() => data ?? [], [data]);
+  const { data, isLoading, isError, error } = useDashboard();
+  const tasks = useMemo(() => data?.tasks ?? [], [data]);
+  const scope = data?.scope;
 
   const counts = useMemo(() => bucketByStatus(tasks), [tasks]);
   const blocked = useMemo(() => tasks.filter((t) => t.is_blocked), [tasks]);
@@ -29,10 +30,27 @@ export function Dashboard() {
     <div className="space-y-6 p-4 sm:p-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
+            {scope ? (
+              <span
+                title={
+                  scope.is_admin
+                    ? 'Workspace-wide view (you are an admin/owner).'
+                    : 'Scope is derived from your role and team. Admins see the entire workspace.'
+                }
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                  scope.is_admin ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {scope.label}
+                {scope.project_count > 0 ? ` · ${scope.project_count} projects` : ''}
+              </span>
+            ) : null}
+          </div>
           <p className="text-sm text-slate-500">
-            Snapshot of workspace activity. Refreshes on focus and every 15 seconds for blocked
-            items.
+            Snapshot scoped to your role. Admins/owners see the whole workspace; managers, leads,
+            and members see progressively narrower slices.
           </p>
         </div>
         <Link

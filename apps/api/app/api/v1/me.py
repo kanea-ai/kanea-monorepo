@@ -10,6 +10,7 @@ from app.application.me.schemas import (
     ChangePasswordRequest,
     CreateMyWorkspaceRequest,
     CreateMyWorkspaceResponse,
+    DashboardResponse,
     MeProfileResponse,
     MeStatsResponse,
     MeWorkspaceOption,
@@ -139,5 +140,17 @@ async def create_my_workspace(
         return await service.create_my_workspace(principal, payload)
     except WorkspaceNameConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/dashboard", response_model=DashboardResponse)
+async def get_dashboard(principal: PrincipalDep, service: MeServiceDep) -> DashboardResponse:
+    """Phase 5 batch 3: role-scoped dashboard data. The frontend
+    bucketing (status counts, blocked list, recent activity) is all
+    derived from the returned task list — server scopes the data
+    once and the client renders it however it likes."""
+    try:
+        return await service.get_dashboard(principal)
     except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

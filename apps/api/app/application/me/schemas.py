@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.tasks.schemas import TaskResponse
 from app.domain.enums import (
     MemberRole,
     MemberType,
@@ -108,6 +109,33 @@ class CreateMyWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
+
+
+class DashboardScope(BaseModel):
+    """How the principal's role narrowed the dashboard's data. The
+    frontend uses `label` for the small "showing X" pill above the
+    counters; the booleans + ids let it render different empty states
+    or "you'd see more as an admin" prompts later if we want."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    is_admin: bool
+    member_id: UUID | None
+    team_id: UUID | None
+    project_count: int
+
+
+class DashboardResponse(BaseModel):
+    """Phase 5 batch 3. Server-side RBAC scoping for the dashboard.
+    The numbers / activity / blocked-list the dashboard renders are
+    all derivable from this one task list, so we keep the response
+    simple and let the client do the bucketing it already does."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    scope: DashboardScope
+    tasks: list[TaskResponse]
 
 
 class CreateMyWorkspaceResponse(BaseModel):

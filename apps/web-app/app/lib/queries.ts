@@ -34,6 +34,7 @@ import {
   type MemberStats,
   type MeProfile,
   type MeStats,
+  type DashboardResponse,
   type Member,
   type MeWorkspace,
   type NotificationCount,
@@ -226,6 +227,16 @@ export const meKeys = {
 
 export function useMe() {
   return useQuery<MeProfile>({ queryKey: meKeys.profile, queryFn: () => meApi.get() });
+}
+
+// Role-scoped dashboard data. The api decides what subset of tasks
+// the current principal should see, plus a small `scope` blob the UI
+// uses to label the view ("Workspace" / "Your team" / etc.).
+export function useDashboard() {
+  return useQuery<DashboardResponse>({
+    queryKey: ['me', 'dashboard'],
+    queryFn: () => meApi.dashboard(),
+  });
 }
 
 export function useMeStats() {

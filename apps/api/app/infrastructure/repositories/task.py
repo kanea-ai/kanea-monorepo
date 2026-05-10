@@ -119,6 +119,56 @@ class SqlAlchemyTaskRepository:
         await self._session.refresh(row)
         return _to_entity(row)
 
+    async def list_for_dashboard(
+        self,
+        workspace_id: UUID,
+        *,
+        member_id: UUID | None = None,
+        team_id: UUID | None = None,
+        project_ids: list[UUID] | None = None,
+    ) -> list[Task]:
+        """Dashboard scope: union of tasks where assignee=member OR
+        team=team OR project in project_ids. All-None means no
+        narrowing (admin path → workspace-wide). Empty project_ids
+        is treated the same as None (no project filter applied)
+        rather than "match nothing", since the caller passing an
+        empty list usually means "I have no projects" not "filter
+        out everything"."""
+        from sqlalchemy import or_
+
+        stmt = select(TaskModel).where(TaskModel.workspace_id == workspace_id)
+
+        clauses = []
+        if member_id is not None:
+            clauses.append(TaskModel.assignee_id == member_id)
+        if team_id is not None:
+            clauses.append(TaskModel.team_id == team_id)
+        if project_ids:
+            clauses.append(TaskModel.project_id.in_(project_ids))
+
+        if clauses:
+            stmt = stmt.where(or_(*clauses))
+        # No clauses → workspace-wide. That's the admin/owner path; the
+        # service decides not to set any filter for those roles.
+
+        stmt = stmt.order_by(TaskModel.priority, TaskModel.created_at)
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
+    async def list_project_ids_for_team(self, workspace_id: UUID, team_id: UUID) -> list[UUID]:
+        """All distinct project_ids referenced by tasks owned by the
+        given team within the workspace. Drives the Manager/HEAD scope:
+        "projects you oversee" = projects your team has work in."""
+        stmt = (
+            select(TaskModel.project_id)
+            .where(TaskModel.workspace_id == workspace_id)
+            .where(TaskModel.team_id == team_id)
+            .where(TaskModel.project_id.is_not(None))
+            .distinct()
+        )
+        result = await self._session.execute(stmt)
+        return [row for row in result.scalars().all() if row is not None]
+
     async def update_priority(self, task_id: UUID, priority: int) -> Task:
         row = await self._session.get(TaskModel, task_id)
         if row is None:

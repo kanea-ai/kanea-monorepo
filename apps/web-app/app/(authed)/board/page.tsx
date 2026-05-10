@@ -1,13 +1,38 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { CreateTaskDialog } from '../../components/CreateTaskDialog';
 import { ExceptionQueue } from '../../components/ExceptionQueue';
 import { KanbanBoard } from '../../components/KanbanBoard';
 
+// Persist the user's preference across reloads. SessionStorage is
+// per-tab; localStorage is what the user actually expects ("I closed
+// the rail yesterday, leave it closed").
+const COLLAPSE_KEY = 'kanea_exception_queue_collapsed';
+
 export default function BoardPage() {
   const [createOpen, setCreateOpen] = useState(false);
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  // The board renders before localStorage hydrates, so initial paint
+  // is "expanded". The effect rehydrates on mount; SSR doesn't have
+  // localStorage so this is the cleanest split.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(COLLAPSE_KEY);
+    if (stored === '1') setQueueCollapsed(true);
+  }, []);
+  const toggleQueue = () => {
+    setQueueCollapsed((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+      } catch {
+        // localStorage is best-effort — Safari private mode etc.
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="flex h-[calc(100vh-3.25rem)] flex-col lg:h-screen lg:flex-row">
@@ -31,7 +56,7 @@ export default function BoardPage() {
           <KanbanBoard />
         </div>
       </section>
-      <ExceptionQueue />
+      <ExceptionQueue collapsed={queueCollapsed} onToggle={toggleQueue} />
       <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );

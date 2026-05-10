@@ -22,6 +22,8 @@ from app.application.me.schemas import (
     ChangePasswordRequest,
     CreateMyWorkspaceRequest,
     CreateMyWorkspaceResponse,
+    DashboardResponse,
+    DashboardScope,
     MeProfileResponse,
     MeStatsResponse,
     MeWorkspaceOption,
@@ -30,9 +32,10 @@ from app.application.me.schemas import (
     UpdateMeRequest,
 )
 from app.application.notifications.ports import NotificationRepository
-from app.application.tasks.schemas import Principal
+from app.application.tasks.ports import TaskRepository
+from app.application.tasks.schemas import Principal, TaskResponse
 from app.domain.entities import Member, Workspace
-from app.domain.enums import MemberRole, MemberType
+from app.domain.enums import MemberRole, MemberType, TeamRole
 from app.domain.exceptions import (
     AuthenticationError,
     InvalidMemberTypeError,
@@ -51,6 +54,10 @@ class MeService:
     # narrower class of unit tests) can omit them.
     notifications: NotificationRepository | None = None
     tokens: TokenService | None = None
+    # Phase 5 batch 3: drives the role-scoped /me/dashboard endpoint.
+    # Optional so older unit tests that don't exercise the dashboard
+    # don't have to wire it.
+    tasks: TaskRepository | None = None
 
     async def get_profile(self, principal: Principal) -> MeProfileResponse:
         member = await self.members.get_by_id(principal.member_id)
@@ -287,4 +294,101 @@ class MeService:
             member_id=new_member.id,
             access_token=access_token,
             expires_in=expires_in,
+        )
+
+    # ---------- dashboard ----------
+
+    async def get_dashboard(self, principal: Principal) -> DashboardResponse:
+        """Phase 5 batch 3 — role-scoped dashboard data.
+
+        Scope hierarchy:
+        - WORKSPACE_OWNER / WORKSPACE_ADMIN: all workspace tasks. The
+          spec calls for "all metrics across the entire workspace";
+          we don't apply any narrowing.
+        - HEAD / MANAGER on a team: team-owned tasks PLUS every task
+          in any project the team has work in. Lets a manager see
+          cross-team work that affects their projects.
+        - LEAD on a team: team-owned tasks only. The team is the unit.
+        - MEMBER on a team: tasks assigned to them OR owned by their
+          team. Spec: "tasks assigned directly to them or their
+          immediate team's queue".
+        - Anyone not on a team (and not admin): tasks assigned to
+          them. The personal-only fallback.
+        """
+        if self.tasks is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("tasks repo not wired")
+
+        member = await self.members.get_by_id(principal.member_id)
+        if member is None or member.workspace_id != principal.workspace_id:
+            raise InvalidMemberTypeError("member not found")
+        workspace = await self.workspaces.get_by_id(principal.workspace_id)
+        if workspace is None:  # pragma: no cover - FK invariant
+            raise InvalidMemberTypeError("workspace missing")
+
+        is_admin = principal.role in (
+            MemberRole.WORKSPACE_OWNER,
+            MemberRole.WORKSPACE_ADMIN,
+        )
+
+        scope_label = "Personal"
+        scope_member_id: UUID | None = None
+        scope_team_id: UUID | None = None
+        scope_project_ids: list[UUID] = []
+
+        if is_admin:
+            # All-workspace path. Pass no narrowing filters → repo
+            # returns everything.
+            scope_label = "Workspace"
+            tasks = await self.tasks.list_for_dashboard(principal.workspace_id)
+        else:
+            team_role = member.team_role
+            on_team = member.team_id is not None
+            if on_team and team_role in (TeamRole.HEAD, TeamRole.MANAGER):
+                scope_label = "Projects you oversee"
+                scope_team_id = member.team_id
+                scope_project_ids = await self.tasks.list_project_ids_for_team(
+                    principal.workspace_id, member.team_id  # type: ignore[arg-type]
+                )
+                tasks = await self.tasks.list_for_dashboard(
+                    principal.workspace_id,
+                    team_id=member.team_id,
+                    project_ids=scope_project_ids,
+                )
+            elif on_team and team_role == TeamRole.LEAD:
+                scope_label = "Your team"
+                scope_team_id = member.team_id
+                tasks = await self.tasks.list_for_dashboard(
+                    principal.workspace_id,
+                    team_id=member.team_id,
+                )
+            elif on_team:
+                # Plain MEMBER on a team: own tasks + team queue.
+                scope_label = "You + your team"
+                scope_member_id = principal.member_id
+                scope_team_id = member.team_id
+                tasks = await self.tasks.list_for_dashboard(
+                    principal.workspace_id,
+                    member_id=principal.member_id,
+                    team_id=member.team_id,
+                )
+            else:
+                # No team: personal only.
+                scope_label = "Your tasks"
+                scope_member_id = principal.member_id
+                tasks = await self.tasks.list_for_dashboard(
+                    principal.workspace_id,
+                    member_id=principal.member_id,
+                )
+
+        scope = DashboardScope(
+            label=scope_label,
+            is_admin=is_admin,
+            member_id=scope_member_id,
+            team_id=scope_team_id,
+            project_count=len(scope_project_ids),
+        )
+        prefix = workspace.task_prefix
+        return DashboardResponse(
+            scope=scope,
+            tasks=[TaskResponse.from_entity(t, prefix=prefix) for t in tasks],
         )

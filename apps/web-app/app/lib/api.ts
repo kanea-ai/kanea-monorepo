@@ -372,7 +372,22 @@ export const meApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // Phase 5 batch 3 — role-scoped dashboard
+  dashboard: () => request<DashboardResponse>(`${V1}/me/dashboard`),
 };
+
+export interface DashboardScope {
+  label: string;
+  is_admin: boolean;
+  member_id: string | null;
+  team_id: string | null;
+  project_count: number;
+}
+
+export interface DashboardResponse {
+  scope: DashboardScope;
+  tasks: Task[];
+}
 
 export const authSwitchApi = {
   switchWorkspace: (payload: { workspace_id: string }) =>

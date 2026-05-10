@@ -7,7 +7,13 @@ import type { Task } from '../lib/api';
 import { tasksApi } from '../lib/api';
 import { taskKeys, useBlockedTasks } from '../lib/queries';
 
-export function ExceptionQueue() {
+export function ExceptionQueue({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   const { data, isLoading, isError, error } = useBlockedTasks();
   const qc = useQueryClient();
   const tasks = data ?? [];
@@ -20,20 +26,39 @@ export function ExceptionQueue() {
     qc.invalidateQueries({ queryKey: taskKeys.all });
   };
 
+  // Collapsed state is a thin vertical rail (desktop) / a single
+  // pill (mobile, which lives below the board). Either way the
+  // toggle button surfaces the count + an amber dot when there's
+  // unresolved work, so the user doesn't need to expand to know
+  // they have exceptions waiting.
+  if (collapsed) {
+    return <CollapsedRail count={tasks.length} onExpand={onToggle} />;
+  }
+
   return (
     <aside className="flex h-72 shrink-0 flex-col border-t border-slate-200 bg-white lg:h-full lg:w-96 lg:border-l lg:border-t-0">
       <header className="border-b border-slate-200 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">
             Exception Queue
           </h2>
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-              tasks.length > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {tasks.length}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                tasks.length > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {tasks.length}
+            </span>
+            <button
+              type="button"
+              aria-label="Collapse exception queue"
+              onClick={onToggle}
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <p className="mt-1 text-xs text-slate-500">
           Tasks an agent could not complete. Review the reason and resolve to put the task back in
@@ -59,6 +84,82 @@ export function ExceptionQueue() {
         )}
       </div>
     </aside>
+  );
+}
+
+function CollapsedRail({ count, onExpand }: { count: number; onExpand: () => void }) {
+  // Desktop: thin vertical rail along the right edge. Mobile: a small
+  // bar across the top of where the panel would be. Both share the
+  // same toggle button + count badge with an amber pulse when count
+  // > 0 so unresolved work surfaces without sacrificing board space.
+  const hasExceptions = count > 0;
+  return (
+    <aside
+      className="flex shrink-0 items-stretch border-t border-slate-200 bg-white lg:w-10 lg:flex-col lg:border-l lg:border-t-0"
+      aria-label="Exception queue collapsed"
+    >
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label={
+          hasExceptions ? `Expand exception queue (${count} pending)` : 'Expand exception queue'
+        }
+        className="group relative flex w-full items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 lg:flex-col lg:gap-3 lg:py-4"
+      >
+        <ChevronLeft className="h-4 w-4 text-slate-400 group-hover:text-slate-600" />
+        <span className="lg:rotate-180 lg:[writing-mode:vertical-rl]">Exceptions</span>
+        {hasExceptions ? (
+          <span
+            className="absolute right-1.5 top-1.5 inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white shadow-sm lg:right-1.5 lg:top-1.5"
+            aria-hidden="true"
+          >
+            {count > 99 ? '99+' : count}
+          </span>
+        ) : null}
+        {hasExceptions ? (
+          // Subtle pulsing dot underneath the badge — visible even at
+          // a glance from across the room.
+          <span
+            aria-hidden="true"
+            className="absolute right-1.5 top-1.5 h-4 w-4 animate-ping rounded-full bg-amber-400 opacity-60"
+          />
+        ) : null}
+      </button>
+    </aside>
+  );
+}
+
+function ChevronRight({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
+
+function ChevronLeft({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
   );
 }
 

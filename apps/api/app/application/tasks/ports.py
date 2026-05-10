@@ -38,6 +38,15 @@ class TaskRepository(Protocol):
         tokens_used: int | None = None,
     ) -> Task: ...
     async def update_priority(self, task_id: UUID, priority: int) -> Task: ...
+    async def list_for_dashboard(
+        self,
+        workspace_id: UUID,
+        *,
+        member_id: UUID | None = None,
+        team_id: UUID | None = None,
+        project_ids: list[UUID] | None = None,
+    ) -> list[Task]: ...
+    async def list_project_ids_for_team(self, workspace_id: UUID, team_id: UUID) -> list[UUID]: ...
     async def set_blocked(
         self,
         task_id: UUID,
