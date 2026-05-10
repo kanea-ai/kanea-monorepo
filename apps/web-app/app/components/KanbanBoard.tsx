@@ -80,29 +80,40 @@ export function KanbanBoard() {
     router.push(`/tasks/${taskId}`);
   };
 
-  // Auto-expand a collapsed column when the user drags a card over
-  // it. We track which columns we *temporarily* expanded so we can
-  // re-collapse them after the drag — except for the column that
-  // received the drop, which stays expanded so the user sees the
-  // card land. Without this, dragging into DONE / CANCELLED was
-  // impossible from the rail-collapsed state.
-  const autoExpandedRef = useRef<Set<TaskStatus>>(new Set());
+  // Auto-expand a collapsed column ONLY while the user is hovering
+  // it. The previous attempt accumulated all hovered columns in a
+  // Set and only collapsed them at drag-end — so dragging Done →
+  // Pending left Done expanded until release. Now we snapshot the
+  // pre-drag collapsed state and on every drag-update render
+  // `snapshot ⊕ (currently-hovered-column expanded)`. The hovered
+  // column is the only one that diverges from the snapshot, so
+  // moving the cursor away naturally restores it.
+  const initialCollapsedRef = useRef<Record<TaskStatus, boolean> | null>(null);
 
   const onDragStart = () => {
     draggingRef.current = true;
-    autoExpandedRef.current = new Set();
+    initialCollapsedRef.current = { ...collapsed };
   };
 
   const onDragUpdate = (update: DragUpdate) => {
+    const initial = initialCollapsedRef.current;
+    if (!initial) return;
     const destId = update.destination?.droppableId as TaskStatus | undefined;
-    if (!destId) return;
-    // setCollapsed reads the previous value via the updater fn so we
-    // don't miss an expand if multiple updates fire in quick
-    // succession.
     setCollapsed((prev) => {
-      if (!prev[destId]) return prev;
-      autoExpandedRef.current.add(destId);
-      return { ...prev, [destId]: false };
+      const next: Record<TaskStatus, boolean> = { ...initial };
+      // Only one column is allowed to deviate from the snapshot
+      // during a drag — the one being hovered, and only if it was
+      // originally collapsed.
+      if (destId && initial[destId]) next[destId] = false;
+      // Skip the re-render when nothing actually changed.
+      let same = true;
+      for (const key of Object.keys(next) as TaskStatus[]) {
+        if (next[key] !== prev[key]) {
+          same = false;
+          break;
+        }
+      }
+      return same ? prev : next;
     });
   };
 
@@ -114,25 +125,28 @@ export function KanbanBoard() {
       draggingRef.current = false;
     }, 0);
 
+    const initial = initialCollapsedRef.current;
+    initialCollapsedRef.current = null;
     const { destination, source, draggableId } = result;
     const droppedInto = destination?.droppableId as TaskStatus | undefined;
 
-    // Re-collapse any column we auto-expanded *except* the one that
-    // received the drop. Keeping the destination expanded means the
-    // user sees the moved card land in its new column.
-    setCollapsed((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const id of autoExpandedRef.current) {
-        if (id === droppedInto) continue;
-        if (!next[id]) {
-          next[id] = true;
-          changed = true;
+    // Restore the initial collapsed state — but if they dropped
+    // into a column that was originally collapsed, keep it open
+    // so the user sees the moved card land.
+    if (initial) {
+      setCollapsed((prev) => {
+        const next: Record<TaskStatus, boolean> = { ...initial };
+        if (droppedInto && initial[droppedInto]) next[droppedInto] = false;
+        let same = true;
+        for (const key of Object.keys(next) as TaskStatus[]) {
+          if (next[key] !== prev[key]) {
+            same = false;
+            break;
+          }
         }
-      }
-      return changed ? next : prev;
-    });
-    autoExpandedRef.current = new Set();
+        return same ? prev : next;
+      });
+    }
 
     if (!destination) return;
     if (destination.droppableId === source.droppableId) return;
