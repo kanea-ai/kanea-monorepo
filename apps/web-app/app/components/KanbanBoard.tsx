@@ -113,6 +113,14 @@ export function KanbanBoard() {
     if (autoExpandedRef.current.has(destId)) return;
     autoExpandedRef.current.add(destId);
     setCollapsed((prev) => (prev[destId] ? { ...prev, [destId]: false } : prev));
+    // Once layout has settled (one rAF after the React state flush),
+    // nudge dnd to recompute every droppable's bounds. The lib's
+    // ResizeObserver only watches each droppable individually, so
+    // a sibling expansion (which shifts other columns sideways but
+    // doesn't change THEIR sizes) wouldn't otherwise be picked up
+    // and the cursor-to-droppable hit test stays anchored to the
+    // pre-expand layout.
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
   };
 
   const onDragEnd = (result: DropResult) => {
@@ -361,12 +369,21 @@ function Column({
 }) {
   // Collapsed columns are a 5-rem rail (was 3rem). Wider gives the
   // user a bigger drop target when aiming a dragged card at a
-  // collapsed column. The transition is intentionally a bit slower
-  // so the hover-driven expand/collapse doesn't feel jumpy.
+  // collapsed column.
+  //
+  // Width changes are NOT transitioned — @hello-pangea/dnd
+  // measures droppable positions at drag-start and re-measures via
+  // ResizeObserver. A smooth width transition fires the observer
+  // dozens of times during the animation but the drag's
+  // hit-testing reads the cached positions in between, which is
+  // how the cursor ends up offset from the highlighted column.
+  // Snapping the width keeps the lib's measurements aligned with
+  // what the user sees. The bg / ring highlight still fades
+  // smoothly because those are color transitions only.
   const widthClass = isCollapsed ? 'w-20 md:w-20 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
   return (
     <div
-      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-all duration-200 ease-out ${widthClass}`}
+      className={`flex min-h-0 snap-start flex-col rounded-lg bg-slate-100 p-2 transition-colors duration-200 ease-out ${widthClass}`}
     >
       <button
         type="button"
