@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 
 from app.application.auth.ports import MemberRepository
+from app.application.pagination import Page
 from app.application.projects.ports import ProjectRepository
 from app.application.projects.schemas import (
     CreateProjectRequest,
@@ -47,12 +48,22 @@ class ProjectService:
     workspaces: WorkspaceReadRepository | None = None
 
     async def list_for_workspace(
-        self, principal: Principal, *, include_archived: bool = False
-    ) -> list[ProjectResponse]:
-        rows = await self.projects.list_for_workspace(
-            principal.workspace_id, include_archived=include_archived
+        self,
+        principal: Principal,
+        *,
+        include_archived: bool = False,
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> Page[ProjectResponse]:
+        rows, total = await self.projects.list_for_workspace(
+            principal.workspace_id,
+            include_archived=include_archived,
+            skip=skip,
+            limit=limit,
         )
-        return [ProjectResponse.from_entity(r) for r in rows]
+        return Page[ProjectResponse](
+            items=[ProjectResponse.from_entity(r) for r in rows], total=total
+        )
 
     async def get_by_id(self, project_id: UUID, principal: Principal) -> ProjectResponse:
         project = await self._load_workspace_project(project_id, principal)

@@ -72,17 +72,28 @@ def service(repo: AsyncMock) -> DepartmentService:
 
 async def test_member_can_list(service: DepartmentService, repo: AsyncMock) -> None:
     p = _principal(role=MemberRole.WORKSPACE_USER)
-    repo.list_for_workspace.return_value = [_dept(p.workspace_id)]
-    result = await service.list_for_workspace(p)
-    assert len(result) == 1
-    repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, name=None)
+    repo.list_for_workspace.return_value = ([_dept(p.workspace_id)], 1)
+    page = await service.list_for_workspace(p)
+    assert page.total == 1
+    assert len(page.items) == 1
+    repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, name=None, skip=0, limit=None)
 
 
 async def test_list_passes_name_filter(service: DepartmentService, repo: AsyncMock) -> None:
     p = _principal()
-    repo.list_for_workspace.return_value = []
+    repo.list_for_workspace.return_value = ([], 0)
     await service.list_for_workspace(p, name="eng")
-    repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, name="eng")
+    repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, name="eng", skip=0, limit=None)
+
+
+async def test_list_paginates(service: DepartmentService, repo: AsyncMock) -> None:
+    """skip / limit forward to the repo and the service surfaces the
+    repo's total count untouched."""
+    p = _principal()
+    repo.list_for_workspace.return_value = ([], 17)
+    page = await service.list_for_workspace(p, skip=5, limit=3)
+    assert page.total == 17
+    repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, name=None, skip=5, limit=3)
 
 
 async def test_get_cross_tenant_404s(service: DepartmentService, repo: AsyncMock) -> None:

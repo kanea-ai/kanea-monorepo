@@ -132,9 +132,12 @@ function SidePanel({ task }: { task: Task }) {
   const setBlocked = useSetTaskBlocked(task.id);
   const updateLinks = useUpdateTaskLinks(task.id);
   const updatePriority = useUpdateTaskPriority();
-  const { data: projects } = useProjects();
-  const { data: teams } = useTeams();
-  const { data: members } = useMembers();
+  const { data: projectsPage } = useProjects();
+  const projects = projectsPage?.items ?? [];
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
+  const { data: membersPage } = useMembers();
+  const members = membersPage?.items ?? [];
   const principal = useCurrentPrincipal();
   const [reason, setReason] = useState('');
   const [openBlock, setOpenBlock] = useState(false);
@@ -142,7 +145,7 @@ function SidePanel({ task }: { task: Task }) {
   // Priority editor RBAC mirrors the api: workspace OWNER/ADMIN, or
   // a HEAD/MANAGER on the task's team. The api still enforces this
   // — we hide the control to avoid showing actions that 403.
-  const me = (members ?? []).find((m) => m.id === principal?.member_id);
+  const me = members.find((m) => m.id === principal?.member_id);
   const canEditPriority =
     principal?.role === 'WORKSPACE_OWNER' ||
     principal?.role === 'WORKSPACE_ADMIN' ||
@@ -239,7 +242,7 @@ function SidePanel({ task }: { task: Task }) {
               className="rounded border border-slate-300 px-2 py-1 text-xs"
             >
               <option value="">Backlog</option>
-              {(projects ?? []).map((p) => (
+              {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
@@ -254,7 +257,7 @@ function SidePanel({ task }: { task: Task }) {
               className="rounded border border-slate-300 px-2 py-1 text-xs"
             >
               <option value="">No team</option>
-              {(teams ?? []).map((t) => (
+              {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
@@ -364,7 +367,8 @@ function ActivityPanel({ taskId }: { taskId: string }) {
 
 function CommentThread({ taskId }: { taskId: string }) {
   const { data: comments, isLoading, isError, error } = useTaskComments(taskId);
-  const { data: members } = useMembers();
+  const { data: membersPage } = useMembers();
+  const members = membersPage?.items ?? [];
   const post = usePostComment(taskId);
   const [body, setBody] = useState('');
   const [postError, setPostError] = useState<string | null>(null);
@@ -413,7 +417,7 @@ function CommentThread({ taskId }: { taskId: string }) {
           rows={3}
           value={body}
           onChange={setBody}
-          members={members ?? []}
+          members={members}
           placeholder="Add a comment… type @ to mention a teammate"
         />
         {postError ? (

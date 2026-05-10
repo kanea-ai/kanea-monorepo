@@ -14,9 +14,12 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 import { ActorProfileDialog } from '../../components/ActorProfileDialog';
+import { Pagination } from '../../components/Pagination';
 import type { AuditAction, AuditLog, AuditResourceType } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import { useAuditLogs } from '../../lib/queries';
+
+const PAGE_SIZE = 25;
 
 const RESOURCE_TYPE_LABEL: Record<AuditResourceType, string> = {
   WORKSPACE: 'Workspace',
@@ -53,11 +56,23 @@ export default function AuditPage() {
   // returns the limited shape automatically when the principal is
   // lower-rank than the actor.
   const [actorOpenId, setActorOpenId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
-  const { data: logs, isLoading, isError, error } = useAuditLogs({ limit: 200 });
+  // Server-side pagination via skip/limit; the resource and actor
+  // filters above are client-side narrowing on top of the page slice
+  // — fine for the audit log's scale, and keeps the URL contract
+  // simple for now.
+  const {
+    data: logsPage,
+    isLoading,
+    isError,
+    error,
+  } = useAuditLogs({ skip: (page - 1) * PAGE_SIZE, limit: PAGE_SIZE });
+  const items = logsPage?.items ?? [];
+  const total = logsPage?.total ?? 0;
 
   const filtered = useMemo(() => {
-    let rows = logs ?? [];
+    let rows = items;
     if (resourceFilter !== 'all') {
       rows = rows.filter((r) => r.resource_type === resourceFilter);
     }
@@ -66,7 +81,7 @@ export default function AuditPage() {
       rows = rows.filter((r) => (r.actor_name ?? '').toLowerCase().includes(q));
     }
     return rows;
-  }, [logs, resourceFilter, actorFilter]);
+  }, [items, resourceFilter, actorFilter]);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -125,16 +140,19 @@ export default function AuditPage() {
           ) : filtered.length === 0 ? (
             <EmptyState narrowed={resourceFilter !== 'all' || actorFilter !== ''} />
           ) : (
-            <ol className="divide-y divide-slate-100">
-              {filtered.map((row) => (
-                <AuditRow
-                  key={row.id}
-                  log={row}
-                  onActorClick={setActorOpenId}
-                  onMemberResourceClick={setActorOpenId}
-                />
-              ))}
-            </ol>
+            <>
+              <ol className="divide-y divide-slate-100">
+                {filtered.map((row) => (
+                  <AuditRow
+                    key={row.id}
+                    log={row}
+                    onActorClick={setActorOpenId}
+                    onMemberResourceClick={setActorOpenId}
+                  />
+                ))}
+              </ol>
+              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+            </>
           )}
         </section>
       )}

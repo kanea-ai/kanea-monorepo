@@ -34,7 +34,9 @@ class TenantMemberRepository(Protocol):
         # restrict non-admins to their team's members + themselves.
         visibility_team_id: UUID | None = None,
         visibility_self_id: UUID | None = None,
-    ) -> list[Member]: ...
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Member], int]: ...
     async def get_by_id(self, member_id: UUID) -> Member | None: ...
     async def update_profile(
         self,

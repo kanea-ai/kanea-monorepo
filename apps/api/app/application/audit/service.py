@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from app.application.audit.ports import AuditLogRepository
 from app.application.audit.schemas import AuditLogResponse
 from app.application.auth.ports import MemberRepository
+from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
 from app.domain.entities import AuditLog, Member
 from app.domain.enums import AuditAction, AuditResourceType, MemberRole, TeamRole
@@ -60,19 +61,19 @@ class AuditLogService:
         self,
         principal: Principal,
         *,
+        skip: int = 0,
         limit: int = 100,
-        before: UUID | None = None,
-    ) -> list[AuditLogResponse]:
+    ) -> Page[AuditLogResponse]:
         scope = await self._compute_visibility(principal)
         if scope is _NONE_SCOPE:
-            return []
+            return Page[AuditLogResponse](items=[], total=0)
 
-        rows = await self.audit_logs.list_for_workspace(
+        rows, total = await self.audit_logs.list_for_workspace(
             principal.workspace_id,
             resource_types=scope.resource_types,
             team_resource_ids=scope.team_resource_ids,
+            skip=skip,
             limit=limit,
-            before=before,
         )
 
         # Single batch lookup so the response shape includes actor names.
@@ -85,15 +86,20 @@ class AuditLogService:
             if actor is not None:
                 actor_names[actor.id] = actor.name
 
-        return [
-            AuditLogResponse.from_entity(
-                r,
-                actor_name=(
-                    actor_names.get(r.actor_member_id) if r.actor_member_id is not None else None
-                ),
-            )
-            for r in rows
-        ]
+        return Page[AuditLogResponse](
+            items=[
+                AuditLogResponse.from_entity(
+                    r,
+                    actor_name=(
+                        actor_names.get(r.actor_member_id)
+                        if r.actor_member_id is not None
+                        else None
+                    ),
+                )
+                for r in rows
+            ],
+            total=total,
+        )
 
     async def _compute_visibility(self, principal: Principal) -> _Scope:
         """Translate a principal into a query scope for the repo.

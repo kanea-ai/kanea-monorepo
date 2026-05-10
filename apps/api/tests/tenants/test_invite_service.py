@@ -363,7 +363,7 @@ async def test_list_members_admin_sees_everyone(
     """OWNER/ADMIN principals get the workspace-wide listing — no
     visibility scoping is layered on the repo call."""
     p = _principal(role=MemberRole.WORKSPACE_OWNER)
-    tenant_members.list_for_workspace.return_value = []
+    tenant_members.list_for_workspace.return_value = ([], len([]))
     await service.list_workspace_members(p)
     tenant_members.list_for_workspace.assert_awaited_once_with(
         p.workspace_id,
@@ -375,6 +375,8 @@ async def test_list_members_admin_sees_everyone(
         humans_only=False,
         visibility_team_id=None,
         visibility_self_id=None,
+        skip=0,
+        limit=None,
     )
 
 
@@ -384,7 +386,7 @@ async def test_list_members_passes_filters_through(
     from app.application.tenants.schemas import MemberFilters
 
     p = _principal(role=MemberRole.WORKSPACE_ADMIN)
-    tenant_members.list_for_workspace.return_value = []
+    tenant_members.list_for_workspace.return_value = ([], len([]))
     project_id = uuid4()
     team_id = uuid4()
     await service.list_workspace_members(
@@ -407,6 +409,8 @@ async def test_list_members_passes_filters_through(
         humans_only=True,
         visibility_team_id=None,
         visibility_self_id=None,
+        skip=0,
+        limit=None,
     )
 
 
@@ -418,7 +422,7 @@ async def test_list_members_non_admin_scoped_to_team(
     self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
     self_member.team_id = uuid4()
     tenant_members.get_by_id.return_value = self_member
-    tenant_members.list_for_workspace.return_value = []
+    tenant_members.list_for_workspace.return_value = ([], len([]))
 
     await service.list_workspace_members(p)
     call = tenant_members.list_for_workspace.await_args
@@ -434,7 +438,7 @@ async def test_list_members_non_admin_no_team_self_only(
     self_member = make_human(member_id=p.member_id, workspace_id=p.workspace_id)
     self_member.team_id = None
     tenant_members.get_by_id.return_value = self_member
-    tenant_members.list_for_workspace.return_value = []
+    tenant_members.list_for_workspace.return_value = ([], len([]))
 
     await service.list_workspace_members(p)
     call = tenant_members.list_for_workspace.await_args
@@ -542,7 +546,7 @@ async def test_update_member_profile_blocks_demoting_last_owner(
     target.role = MemberRole.WORKSPACE_OWNER
     tenant_members.get_by_id.return_value = target
     # Only the target is an OWNER -> demoting would leave none.
-    tenant_members.list_for_workspace.return_value = [target]
+    tenant_members.list_for_workspace.return_value = ([target], len([target]))
 
     with pytest.raises(ForbiddenError, match="last workspace owner"):
         await service.update_member_profile(
@@ -563,7 +567,10 @@ async def test_update_member_profile_demotion_ok_when_other_owner_exists(
     other_owner = make_human(workspace_id=p.workspace_id)
     other_owner.role = MemberRole.WORKSPACE_OWNER
     tenant_members.get_by_id.return_value = target
-    tenant_members.list_for_workspace.return_value = [target, other_owner]
+    tenant_members.list_for_workspace.return_value = (
+        [target, other_owner],
+        len([target, other_owner]),
+    )
     tenant_members.update_profile.return_value = target
 
     await service.update_member_profile(

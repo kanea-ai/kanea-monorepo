@@ -16,9 +16,12 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
   const createTask = useCreateTask();
   const principal = useCurrentPrincipal();
   const { data: me } = useMe();
-  const { data: members } = useMembers();
-  const { data: projects } = useProjects();
-  const { data: teams } = useTeams();
+  const { data: membersPage } = useMembers();
+  const members = membersPage?.items ?? [];
+  const { data: projectsPage } = useProjects();
+  const projects = projectsPage?.items ?? [];
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
 
   // Non-admin users can only create tasks on their own team. The api
   // already enforces this via CrossTeamForbiddenError; the UI mirrors
@@ -125,7 +128,7 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
           <MentionTextarea
             value={description}
             onChange={setDescription}
-            members={members ?? []}
+            members={members}
             rows={3}
           />
         </Field>
@@ -151,7 +154,7 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">Unassigned</option>
-              {(members ?? []).map((m: Member) => (
+              {members.map((m: Member) => (
                 <option key={m.id} value={m.id}>
                   {m.name} {m.type === 'AGENT' ? '(agent)' : ''}
                 </option>
@@ -169,7 +172,7 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">Backlog (no project)</option>
-              {(projects ?? []).map((p) => (
+              {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
@@ -198,7 +201,7 @@ export function CreateTaskDialog({ open, onClose }: { open: boolean; onClose: ()
               ) : (
                 <option value="">No team</option>
               )}
-              {(teams ?? []).map((t) => (
+              {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>

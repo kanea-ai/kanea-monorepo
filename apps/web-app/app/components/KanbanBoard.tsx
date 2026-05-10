@@ -272,9 +272,12 @@ function FilterBar({
   filters: TaskListFilters;
   onChange: (next: TaskListFilters) => void;
 }) {
-  const { data: teams } = useTeams();
-  const { data: projects } = useProjects();
-  const { data: members } = useMembers();
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
+  const { data: projectsPage } = useProjects();
+  const projects = projectsPage?.items ?? [];
+  const { data: membersPage } = useMembers();
+  const members = membersPage?.items ?? [];
   const principal = useCurrentPrincipal();
 
   const set = <K extends keyof TaskListFilters>(key: K, value: TaskListFilters[K]) => {
@@ -292,17 +295,14 @@ function FilterBar({
     else set('assigneeId', undefined);
   };
 
-  const teamOptions = useMemo(
-    () => (teams ?? []).map((t) => ({ value: t.id, label: t.name })),
-    [teams],
-  );
+  const teamOptions = useMemo(() => teams.map((t) => ({ value: t.id, label: t.name })), [teams]);
   const projectOptions = useMemo(
-    () => (projects ?? []).map((p) => ({ value: p.id, label: p.name })),
+    () => projects.map((p) => ({ value: p.id, label: p.name })),
     [projects],
   );
   const memberOptions = useMemo(
     () =>
-      (members ?? []).map((m) => ({
+      members.map((m) => ({
         value: m.id,
         label: m.name,
         hint: m.type === 'AGENT' ? '(agent)' : undefined,

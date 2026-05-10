@@ -66,8 +66,9 @@ function TeamSection({ teamId, teamRole }: { teamId: string | null; teamRole: Te
   // change a member's team. The team list comes from the same
   // `useTeams` cache the rest of the app uses, so the lookup is
   // free (already loaded via Departments / Teams / dialogs).
-  const { data: teams } = useTeams();
-  const teamName = teamId ? ((teams ?? []).find((t) => t.id === teamId)?.name ?? '—') : null;
+  const { data: teamsPage } = useTeams();
+  const teams = teamsPage?.items ?? [];
+  const teamName = teamId ? (teams.find((t) => t.id === teamId)?.name ?? '—') : null;
 
   return (
     <Section title="Team" subtitle="Workspace admins manage team membership from the Directory.">

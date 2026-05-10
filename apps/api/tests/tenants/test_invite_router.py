@@ -217,9 +217,10 @@ def test_list_members_passes_query_filters(
 ) -> None:
     """Router must build a MemberFilters from the query string and
     pass it to the service alongside the principal."""
-    from app.application.tenants.schemas import MemberFilters
+    from app.application.pagination import Page
+    from app.application.tenants.schemas import MemberFilters, MemberResponse
 
-    invite_service.list_workspace_members.return_value = []
+    invite_service.list_workspace_members.return_value = Page[MemberResponse](items=[], total=0)
     team_id = uuid4()
     project_id = uuid4()
     response = client.get(
@@ -228,6 +229,8 @@ def test_list_members_passes_query_filters(
         headers=_bearer(MemberRole.WORKSPACE_OWNER, jwt_service),
     )
     assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
     invite_service.list_workspace_members.assert_awaited_once()
     _principal_arg, filters_arg = invite_service.list_workspace_members.await_args.args
     assert isinstance(filters_arg, MemberFilters)

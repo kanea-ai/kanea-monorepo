@@ -14,7 +14,19 @@ class TeamRepository(Protocol):
         workspace_id: UUID,
         *,
         department_id: UUID | None = None,
-    ) -> list[Team]: ...
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Team], int]:
+        """Paginated listing.
+
+        Returns ``(items, total)`` where ``total`` is the unfiltered
+        count matching ``department_id`` etc. — the size of the full
+        result set before ``skip`` / ``limit`` is applied. ``limit=None``
+        means "no upper bound" — used by the few callers (member-team
+        picker, profile lookup) that need every team.
+        """
+        ...
+
     async def create(self, team: Team) -> Team: ...
     async def update(
         self,

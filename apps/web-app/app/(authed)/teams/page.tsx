@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Modal } from '../../components/Modal';
+import { Pagination } from '../../components/Pagination';
 import {
   ApiError,
   type Department,
@@ -62,9 +63,6 @@ export default function TeamsPage() {
 const TEAMS_PAGE_SIZE = 20;
 
 function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
-  const { data: teams, isLoading, isError, error } = useTeams();
-  const { data: members } = useMembers();
-  const { data: departments } = useDepartments();
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState('');
   // 'all' = show every team, '' (empty string) = unfiled-only, else
@@ -73,6 +71,37 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const [openTeam, setOpenTeam] = useState<TeamRecord | null>(null);
+
+  // Server-side pagination on the team list. ``departmentFilter`` is
+  // forwarded to the api when it picks a specific department; the
+  // 'all' / '' (unfiled) modes stay client-side because the api
+  // doesn't have a "where department_id IS NULL" filter today.
+  // ``search`` is also client-side narrowing on the page slice —
+  // good enough for typical workspaces where the page covers most
+  // teams; we can promote it to a query param later.
+  const teamsQueryDept =
+    departmentFilter !== '' && departmentFilter !== 'all' ? departmentFilter : undefined;
+  const {
+    data: teamsPage,
+    isLoading,
+    isError,
+    error,
+  } = useTeams({
+    departmentId: teamsQueryDept,
+    skip: (page - 1) * TEAMS_PAGE_SIZE,
+    limit: TEAMS_PAGE_SIZE,
+  });
+  const teams = teamsPage?.items ?? [];
+  // total reflects the *server-side* filter (department_id when set);
+  // client-side search/unfiled trimming below shrinks ``filtered``
+  // but the Pagination control still uses the server total — that's
+  // the right call when the search is narrowing-only-on-this-page.
+  const total = teamsPage?.total ?? 0;
+
+  const { data: membersPage } = useMembers();
+  const members = membersPage?.items ?? [];
+  const { data: departmentsPage } = useDepartments();
+  const departments = departmentsPage?.items ?? [];
 
   // Deep link: ?open=<team_id> opens that team's drawer once the
   // list arrives. Used by /audit when an admin clicks a TEAM-typed
@@ -83,7 +112,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const requestedOpen = searchParams.get('open');
   useEffect(() => {
     if (!requestedOpen) return;
-    const match = (teams ?? []).find((t) => t.id === requestedOpen);
+    const match = teams.find((t) => t.id === requestedOpen);
     if (match) {
       setOpenTeam(match);
       router.replace('/teams');
@@ -92,28 +121,22 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
 
   const departmentsById = useMemo(() => {
     const map = new Map<string, Department>();
-    for (const d of departments ?? []) map.set(d.id, d);
+    for (const d of departments) map.set(d.id, d);
     return map;
   }, [departments]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let rows = teams ?? [];
+    let rows = teams;
     if (departmentFilter === '') {
       rows = rows.filter((t) => t.department_id == null);
-    } else if (departmentFilter !== 'all') {
-      rows = rows.filter((t) => t.department_id === departmentFilter);
     }
     if (q) rows = rows.filter((t) => t.name.toLowerCase().includes(q));
     return rows;
   }, [teams, search, departmentFilter]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / TEAMS_PAGE_SIZE));
-  const safePage = Math.min(page, pageCount);
-  const visible = filtered.slice((safePage - 1) * TEAMS_PAGE_SIZE, safePage * TEAMS_PAGE_SIZE);
-
-  const membersByTeam = (teamId: string) => (members ?? []).filter((m) => m.team_id === teamId);
-  const unassigned = (members ?? []).filter((m) => m.team_id == null);
+  const membersByTeam = (teamId: string) => members.filter((m) => m.team_id === teamId);
+  const unassigned = members.filter((m) => m.team_id == null);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -154,7 +177,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         >
           <option value="all">All departments</option>
           <option value="">Unfiled (no department)</option>
-          {(departments ?? []).map((d) => (
+          {departments.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name}
             </option>
@@ -178,7 +201,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         </p>
       ) : (
         <ul className="divide-y divide-slate-100">
-          {visible.map((t) => {
+          {filtered.map((t) => {
             const teamMembers = membersByTeam(t.id);
             return (
               <TeamRow
@@ -200,27 +223,20 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         </p>
       ) : null}
 
-      {filtered.length > 0 ? (
-        <Paginator
-          page={safePage}
-          pageCount={pageCount}
-          total={filtered.length}
-          onChange={setPage}
-        />
-      ) : null}
+      <Pagination page={page} pageSize={TEAMS_PAGE_SIZE} total={total} onChange={setPage} />
 
       <CreateTeamDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        departments={departments ?? []}
+        departments={departments}
       />
 
       {openTeam ? (
         <TeamDetailDrawer
           team={openTeam}
           isAdmin={isAdmin}
-          members={members ?? []}
-          departments={departments ?? []}
+          members={members}
+          departments={departments}
           onClose={() => setOpenTeam(null)}
         />
       ) : null}
@@ -956,71 +972,6 @@ function InboxRequestRow({ request }: { request: TaskRequest }) {
         </p>
       ) : null}
     </li>
-  );
-}
-
-function Paginator({
-  page,
-  pageCount,
-  total,
-  onChange,
-}: {
-  page: number;
-  pageCount: number;
-  total: number;
-  onChange: (next: number) => void;
-}) {
-  if (pageCount <= 1) {
-    return (
-      <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-        {total} {total === 1 ? 'team' : 'teams'}
-      </div>
-    );
-  }
-  const start = (page - 1) * 20 + 1;
-  const end = Math.min(page * 20, total);
-  return (
-    <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-      <span>
-        Showing {start}–{end} of {total}
-      </span>
-      <nav className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onChange(Math.max(1, page - 1))}
-          disabled={page === 1}
-          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          ‹
-        </button>
-        {Array.from({ length: pageCount }).map((_, i) => {
-          const n = i + 1;
-          const isCurrent = n === page;
-          return (
-            <button
-              key={n}
-              type="button"
-              onClick={() => onChange(n)}
-              className={`rounded px-2 py-0.5 ${
-                isCurrent
-                  ? 'bg-indigo-600 text-white'
-                  : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              {n}
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => onChange(Math.min(pageCount, page + 1))}
-          disabled={page === pageCount}
-          className="rounded border border-slate-200 px-2 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          ›
-        </button>
-      </nav>
-    </div>
   );
 }
 

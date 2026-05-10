@@ -24,7 +24,9 @@ class AuditLogRepository(Protocol):
         # resource_id IN team_resource_ids)``.
         resource_types: list[AuditResourceType] | None = None,
         team_resource_ids: list[UUID] | None = None,
-        # Pagination — newest first.
+        # Pagination — newest first. The ``total`` returned alongside
+        # ``items`` is the unfiltered count under the visibility
+        # scope, so the UI can render page numbers.
+        skip: int = 0,
         limit: int = 100,
-        before: UUID | None = None,
-    ) -> list[AuditLog]: ...
+    ) -> tuple[list[AuditLog], int]: ...

@@ -138,7 +138,7 @@ async def test_principal_can_revoke_self(service: InviteService, members_repo: A
     self_member.id = p.member_id
     members_repo.get_by_id.return_value = self_member
     members_repo.set_suspended.return_value = self_member
-    members_repo.list_for_workspace.return_value = []
+    members_repo.list_for_workspace.return_value = ([], len([]))
 
     await service.set_member_suspension(
         p.member_id, SetMemberSuspensionRequest(is_suspended=False), p
@@ -155,7 +155,7 @@ async def test_cannot_suspend_last_active_owner(
     p = _principal()
     only_owner = _member(p.workspace_id, role=MemberRole.WORKSPACE_OWNER)
     members_repo.get_by_id.return_value = only_owner
-    members_repo.list_for_workspace.return_value = [only_owner]
+    members_repo.list_for_workspace.return_value = ([only_owner], len([only_owner]))
     with pytest.raises(ForbiddenError):
         await service.set_member_suspension(
             only_owner.id, SetMemberSuspensionRequest(is_suspended=True), p
@@ -170,7 +170,10 @@ async def test_can_suspend_owner_when_another_active_owner_remains(
     target_owner = _member(p.workspace_id, role=MemberRole.WORKSPACE_OWNER)
     other_owner = _member(p.workspace_id, role=MemberRole.WORKSPACE_OWNER)
     members_repo.get_by_id.return_value = target_owner
-    members_repo.list_for_workspace.return_value = [target_owner, other_owner]
+    members_repo.list_for_workspace.return_value = (
+        [target_owner, other_owner],
+        len([target_owner, other_owner]),
+    )
     members_repo.set_suspended.return_value = target_owner
 
     await service.set_member_suspension(
@@ -189,7 +192,10 @@ async def test_already_suspended_owner_does_not_count_as_active(
     target_owner = _member(p.workspace_id, role=MemberRole.WORKSPACE_OWNER)
     other_owner = _member(p.workspace_id, role=MemberRole.WORKSPACE_OWNER, suspended=True)
     members_repo.get_by_id.return_value = target_owner
-    members_repo.list_for_workspace.return_value = [target_owner, other_owner]
+    members_repo.list_for_workspace.return_value = (
+        [target_owner, other_owner],
+        len([target_owner, other_owner]),
+    )
     with pytest.raises(ForbiddenError):
         await service.set_member_suspension(
             target_owner.id, SetMemberSuspensionRequest(is_suspended=True), p

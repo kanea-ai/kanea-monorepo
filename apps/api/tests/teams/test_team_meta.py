@@ -82,17 +82,33 @@ def service(teams_repo: AsyncMock, departments_repo: AsyncMock) -> TeamService:
 
 async def test_list_forwards_department_filter(service: TeamService, teams_repo: AsyncMock) -> None:
     p = _principal()
-    teams_repo.list_for_workspace.return_value = []
+    teams_repo.list_for_workspace.return_value = ([], 0)
     dept_id = uuid4()
     await service.list_for_workspace(p, department_id=dept_id)
-    teams_repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, department_id=dept_id)
+    teams_repo.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id, department_id=dept_id, skip=0, limit=None
+    )
 
 
 async def test_list_default_passes_none(service: TeamService, teams_repo: AsyncMock) -> None:
     p = _principal()
-    teams_repo.list_for_workspace.return_value = []
+    teams_repo.list_for_workspace.return_value = ([], 0)
     await service.list_for_workspace(p)
-    teams_repo.list_for_workspace.assert_awaited_once_with(p.workspace_id, department_id=None)
+    teams_repo.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id, department_id=None, skip=0, limit=None
+    )
+
+
+async def test_list_returns_paginated_total(service: TeamService, teams_repo: AsyncMock) -> None:
+    """Service surfaces the repo's total count alongside the page
+    slice, untouched."""
+    p = _principal()
+    teams_repo.list_for_workspace.return_value = ([], 42)
+    page = await service.list_for_workspace(p, skip=10, limit=5)
+    assert page.total == 42
+    teams_repo.list_for_workspace.assert_awaited_once_with(
+        p.workspace_id, department_id=None, skip=10, limit=5
+    )
 
 
 # ---------- create with description / department ----------

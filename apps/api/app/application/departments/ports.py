@@ -14,7 +14,9 @@ class DepartmentRepository(Protocol):
         workspace_id: UUID,
         *,
         name: str | None = None,
-    ) -> list[Department]: ...
+        skip: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[Department], int]: ...
     async def create(self, department: Department) -> Department: ...
     async def update(
         self,

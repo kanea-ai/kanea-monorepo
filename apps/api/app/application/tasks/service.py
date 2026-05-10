@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from app.application.auth.ports import MemberRepository
 from app.application.notifications.service import NotificationService
+from app.application.pagination import Page
 from app.application.projects.ports import ProjectRepository
 from app.application.tasks.ports import (
     TaskActivityRepository,
@@ -51,6 +52,7 @@ from app.domain.entities import (
     TaskRequest,
 )
 from app.domain.enums import (
+    BlocksSort,
     MemberRole,
     RequestStatus,
     TaskActivityType,
@@ -135,6 +137,53 @@ class TaskService:
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         return TaskResponse.from_entity(updated, prefix=prefix)
+
+    async def list_blocks(
+        self,
+        requester: Principal,
+        *,
+        status: TaskStatus | None = None,
+        team_id: UUID | None = None,
+        project_id: UUID | None = None,
+        assignee_id: UUID | None = None,
+        sort: BlocksSort = BlocksSort.PRIORITY,
+        skip: int = 0,
+        limit: int = 25,
+    ) -> Page[TaskResponse]:
+        """Paginated Blocks page with filters + sort.
+
+        Default order is priority ASC (lowest priority number =
+        highest rank, so the most urgent blocks land first); the
+        ``sort`` arg lets callers flip to NEWEST / OLDEST when they
+        want chronological scans.
+
+        Visibility: non-admin members can only see tasks assigned to
+        them — any ``assignee_id`` they pass is silently overridden
+        with their own member id. Admins / owners see the whole
+        workspace and can pass any filter freely.
+        """
+        is_admin = requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
+        # Pin the assignee filter for non-admins. The kanban path
+        # uses the same defensive override; we mirror it here so a
+        # USER who knows the /blocks endpoint can't peek at peers'
+        # work by passing a different assignee_id.
+        effective_assignee_id = assignee_id if is_admin else requester.member_id
+
+        rows, total = await self.tasks.list_blocks_for_workspace(
+            requester.workspace_id,
+            status=status,
+            team_id=team_id,
+            project_id=project_id,
+            assignee_id=effective_assignee_id,
+            sort=sort,
+            skip=skip,
+            limit=limit,
+        )
+        prefix = await self._workspace_prefix(requester.workspace_id)
+        return Page[TaskResponse](
+            items=[TaskResponse.from_entity(r, prefix=prefix) for r in rows],
+            total=total,
+        )
 
     async def list_for_workspace(
         self,

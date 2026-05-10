@@ -11,6 +11,7 @@ from app.api.deps import (
     WorkspaceAdminDep,
 )
 from app.application.auth.schemas import TokenResponse
+from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.application.tenants.schemas import (
     AdminSetMemberPasswordRequest,
     InviteAcceptRequest,
@@ -99,7 +100,7 @@ async def accept_invite(
 
 @router.get(
     "/members",
-    response_model=list[MemberResponse],
+    response_model=Page[MemberResponse],
 )
 async def list_members(
     principal: PrincipalDep,
@@ -110,10 +111,14 @@ async def list_members(
     team_id: Annotated[UUID | None, Query()] = None,
     project_id: Annotated[UUID | None, Query()] = None,
     humans_only: Annotated[bool, Query()] = False,
-) -> list[MemberResponse]:
-    """Visibility-aware members directory. Admins/owners see everyone;
-    everyone else sees their team plus themselves. Filters narrow the
-    result on top of that scope."""
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[MemberResponse]:
+    """Paginated, visibility-aware members directory. Admins/owners
+    see everyone; everyone else sees their team plus themselves.
+    Filters narrow the result on top of that scope; ``skip``/``limit``
+    page through it. Response carries the unfiltered ``total`` for
+    page-number controls."""
     filters = MemberFilters(
         name=name,
         member_id=member_id,
@@ -122,8 +127,7 @@ async def list_members(
         project_id=project_id,
         humans_only=humans_only,
     )
-    members = await service.list_workspace_members(principal, filters)
-    return [MemberResponse.from_entity(m) for m in members]
+    return await service.list_workspace_members(principal, filters, skip=skip, limit=limit)
 
 
 @router.get(

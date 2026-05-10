@@ -174,6 +174,23 @@ class NotificationType(StrEnum):
     MENTION_COMMENT = "MENTION_COMMENT"
 
 
+class BlocksSort(StrEnum):
+    """Sort modes for the Blocks list. Default is ``PRIORITY`` —
+    lower numerical priority = higher rank, so the most urgent
+    blocks land first.
+
+    The other two are time-based:
+    - ``NEWEST``: most recently *created* tasks first. Useful for
+      catching freshly-blocked work as it arrives.
+    - ``OLDEST``: longest-blocked first. Surfaces tasks that have
+      been blocked for a while and may have been forgotten.
+    """
+
+    PRIORITY = "priority"
+    NEWEST = "newest"
+    OLDEST = "oldest"
+
+
 class TeamRole(StrEnum):
     """A member's rank within a Team. Distinct from MemberRole, which
     governs workspace-level permissions; TeamRole is per-team and

@@ -11,6 +11,7 @@ from app.application.departments.schemas import (
     DepartmentResponse,
     UpdateDepartmentRequest,
 )
+from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.domain.exceptions import (
     DepartmentNameConflictError,
     DepartmentNotFoundError,
@@ -22,19 +23,20 @@ router = APIRouter(prefix="/departments", tags=["departments"])
 
 @router.get(
     "",
-    response_model=list[DepartmentResponse],
+    response_model=Page[DepartmentResponse],
     status_code=status.HTTP_200_OK,
 )
 async def list_departments(
     principal: PrincipalDep,
     service: DepartmentServiceDep,
     name: Annotated[str | None, Query(max_length=120)] = None,
-) -> list[DepartmentResponse]:
-    """List departments in the requester's workspace. Anyone in the
-    workspace can list; only OWNER/ADMIN can mutate. The optional
-    ``name`` query is a case-insensitive substring filter — keeps the
-    UI's search bar to one HTTP call."""
-    return await service.list_for_workspace(principal, name=name)
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[DepartmentResponse]:
+    """Paginated list of departments. Anyone in the workspace can
+    list; only OWNER/ADMIN can mutate. ``name`` is an optional
+    case-insensitive substring filter."""
+    return await service.list_for_workspace(principal, name=name, skip=skip, limit=limit)
 
 
 @router.post(
