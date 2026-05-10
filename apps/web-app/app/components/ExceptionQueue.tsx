@@ -88,14 +88,23 @@ export function ExceptionQueue({
 }
 
 function CollapsedRail({ count, onExpand }: { count: number; onExpand: () => void }) {
-  // Desktop: thin vertical rail along the right edge. Mobile: a small
-  // bar across the top of where the panel would be. Both share the
-  // same toggle button + count badge with an amber pulse when count
-  // > 0 so unresolved work surfaces without sacrificing board space.
+  // Desktop: a narrow rail (5rem) along the right edge — wide enough
+  // to read "Exceptions" plus a count badge horizontally, narrow
+  // enough to keep the kanban as the protagonist. Mobile: a single
+  // bar above where the panel would be.
+  //
+  // An earlier revision used `animate-ping` to call attention; the
+  // ping's transform scaled past the rail's right edge by a couple
+  // pixels and made the page's horizontal scrollbar flicker on/off.
+  // Killed it — the warm amber fill on the rail when `count > 0` is
+  // already enough signal, and `overflow-hidden` here is the belt to
+  // that brace if any future child decides to bleed past.
   const hasExceptions = count > 0;
   return (
     <aside
-      className="flex shrink-0 items-stretch border-t border-slate-200 bg-white lg:w-10 lg:flex-col lg:border-l lg:border-t-0"
+      className={`flex shrink-0 items-stretch overflow-hidden border-t border-slate-200 lg:w-20 lg:flex-col lg:border-l lg:border-t-0 ${
+        hasExceptions ? 'bg-amber-50' : 'bg-white'
+      }`}
       aria-label="Exception queue collapsed"
     >
       <button
@@ -104,26 +113,22 @@ function CollapsedRail({ count, onExpand }: { count: number; onExpand: () => voi
         aria-label={
           hasExceptions ? `Expand exception queue (${count} pending)` : 'Expand exception queue'
         }
-        className="group relative flex w-full items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 lg:flex-col lg:gap-3 lg:py-4"
+        title={
+          hasExceptions ? `${count} pending exception${count === 1 ? '' : 's'}` : 'Exception queue'
+        }
+        className={`group flex w-full items-center justify-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-700 transition-colors lg:flex-col lg:gap-2 lg:py-4 ${
+          hasExceptions ? 'hover:bg-amber-100' : 'hover:bg-slate-50'
+        }`}
       >
         <ChevronLeft className="h-4 w-4 text-slate-400 group-hover:text-slate-600" />
-        <span className="lg:rotate-180 lg:[writing-mode:vertical-rl]">Exceptions</span>
-        {hasExceptions ? (
-          <span
-            className="absolute right-1.5 top-1.5 inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white shadow-sm lg:right-1.5 lg:top-1.5"
-            aria-hidden="true"
-          >
-            {count > 99 ? '99+' : count}
-          </span>
-        ) : null}
-        {hasExceptions ? (
-          // Subtle pulsing dot underneath the badge — visible even at
-          // a glance from across the room.
-          <span
-            aria-hidden="true"
-            className="absolute right-1.5 top-1.5 h-4 w-4 animate-ping rounded-full bg-amber-400 opacity-60"
-          />
-        ) : null}
+        <span>Exceptions</span>
+        <span
+          className={`inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+            hasExceptions ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-100 text-slate-500'
+          }`}
+        >
+          {count > 99 ? '99+' : count}
+        </span>
       </button>
     </aside>
   );

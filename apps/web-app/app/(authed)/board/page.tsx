@@ -13,14 +13,16 @@ const COLLAPSE_KEY = 'kanea_exception_queue_collapsed';
 
 export default function BoardPage() {
   const [createOpen, setCreateOpen] = useState(false);
-  const [queueCollapsed, setQueueCollapsed] = useState(false);
-  // The board renders before localStorage hydrates, so initial paint
-  // is "expanded". The effect rehydrates on mount; SSR doesn't have
-  // localStorage so this is the cleanest split.
+  // Default to collapsed — the kanban is the primary surface, the
+  // exception queue is the warning lamp. The user can pin it open and
+  // we'll remember.
+  const [queueCollapsed, setQueueCollapsed] = useState(true);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const stored = window.localStorage.getItem(COLLAPSE_KEY);
-    if (stored === '1') setQueueCollapsed(true);
+    // Only "0" (explicit expand) overrides the default. Anything else
+    // — never set, "1", garbage — stays collapsed.
+    if (stored === '0') setQueueCollapsed(false);
   }, []);
   const toggleQueue = () => {
     setQueueCollapsed((v) => {
