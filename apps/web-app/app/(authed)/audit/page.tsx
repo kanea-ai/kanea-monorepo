@@ -74,7 +74,7 @@ export default function AuditPage() {
         <h1 className="text-xl font-semibold text-slate-900">Audit log</h1>
         <p className="text-sm text-slate-500">
           Org and access-control events: department / team CRUD, role changes, suspensions, team
-          assignments. Per-task events live on each task's detail page.
+          assignments. Per-task events live on each task&apos;s detail page.
         </p>
         {isAdmin ? (
           <p className="mt-1 text-xs text-slate-500">

@@ -146,7 +146,7 @@ export default function DepartmentsPage() {
         {unfiledTeams.length > 0 ? (
           <p className="border-t border-slate-100 bg-slate-50 px-4 py-2 text-[11px] text-slate-500">
             {unfiledTeams.length} team{unfiledTeams.length === 1 ? '' : 's'} not yet filed under a
-            department — file them from each team's drawer in{' '}
+            department — file them from each team&apos;s drawer in{' '}
             <Link href="/teams" className="font-medium text-indigo-700 hover:underline">
               Teams
             </Link>
