@@ -1,79 +1,57 @@
 'use client';
 
+// Teams page. Phase 5 batch 2 reshape:
+// - Invite flow moved to /directory (single home for all "add" flows).
+// - Members table moved to /directory; this page is teams-only now.
+// - Team rows are dense single-liners; click opens a side drawer with
+//   rename + delete (admin) and the team-role editor for assigned
+//   members. The drawer's footer links back to /directory.
+
+import Link from 'next/link';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Modal } from '../../components/Modal';
 import {
   ApiError,
-  type InviteCreateResponse,
   type Member,
-  type MemberRole,
   type TaskRequest,
   type TeamRecord,
   type TeamRole,
 } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import {
-  useCreateInvite,
   useCreateTeam,
+  useDeleteTeam,
   useFulfillRequest,
   useMembers,
   useRejectRequest,
   useSetMemberTeam,
   useTeamInboxRequests,
   useTeams,
+  useUpdateTeam,
 } from '../../lib/queries';
 
-// Teams page. Three sections:
-//  1. Invite form — workspace admins create one-time invite links.
-//  2. Teams — a directory of teams; only admins see the create form.
-//  3. Members — workspace roster, with team + team-role editors gated
-//     to admins so MEMBERs can browse but not modify the org chart.
-
 export default function TeamsPage() {
-  const { data: members, isLoading, isError, error } = useMembers();
   const principal = useCurrentPrincipal();
   const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Teams</h1>
-        <p className="text-sm text-slate-500">
-          Workspace members, organised into teams. Each team has a head, managers, leads, and
-          members. Only workspace admins can create teams or change team assignments.
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">Teams</h1>
+          <p className="text-sm text-slate-500">
+            Group members under a head, managers, leads, and standard members. Workspace admins can
+            create teams and edit assignments.
+          </p>
+        </div>
+        <Link href="/directory" className="text-sm font-medium text-indigo-700 hover:underline">
+          People &amp; agents →
+        </Link>
       </header>
 
-      <InviteSection isAdmin={isAdmin} />
-
       <TeamsSection isAdmin={isAdmin} />
-
-      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">Members</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Everyone with access to this workspace, including agents.
-          </p>
-        </header>
-        <div className="p-1">
-          {isError ? (
-            <p className="px-3 py-6 text-sm text-red-600">
-              Failed to load members: {(error as Error).message}
-            </p>
-          ) : isLoading ? (
-            <SkeletonRows count={3} />
-          ) : !members || members.length === 0 ? (
-            <p className="px-3 py-6 text-center text-sm text-slate-500">No members yet.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {members.map((m) => (
-                <MemberRow key={m.id} member={m} isAdmin={isAdmin} />
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
     </div>
   );
 }
@@ -86,6 +64,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [openTeam, setOpenTeam] = useState<TeamRecord | null>(null);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -94,7 +73,6 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
   }, [teams, search]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / TEAMS_PAGE_SIZE));
-  // Clamp the page when results shrink under the cursor.
   const safePage = Math.min(page, pageCount);
   const visible = filtered.slice((safePage - 1) * TEAMS_PAGE_SIZE, safePage * TEAMS_PAGE_SIZE);
 
@@ -106,9 +84,7 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
       <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-900">Teams</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Each team groups members under a head, managers, leads, and standard members.
-          </p>
+          <p className="mt-0.5 text-xs text-slate-500">Click a team to manage members and roles.</p>
         </div>
         {isAdmin ? (
           <button
@@ -134,34 +110,42 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
         />
       </div>
 
-      <div className="p-1">
-        {isError ? (
-          <p className="px-3 py-6 text-sm text-red-600">
-            Failed to load teams: {(error as Error).message}
-          </p>
-        ) : isLoading ? (
-          <p className="px-3 py-6 text-sm text-slate-500">Loading teams…</p>
-        ) : filtered.length === 0 ? (
-          <p className="px-3 py-6 text-center text-sm italic text-slate-500">
-            {search
-              ? 'No teams match your search.'
-              : isAdmin
-                ? 'No teams yet. Create one above.'
-                : 'No teams yet. Ask an admin to create one.'}
-          </p>
-        ) : (
-          <ul className="space-y-2 px-2 py-2">
-            {visible.map((t) => (
-              <TeamCard key={t.id} team={t} members={membersByTeam(t.id)} isAdmin={isAdmin} />
-            ))}
-          </ul>
-        )}
-        {unassigned.length > 0 ? (
-          <p className="px-4 py-2 text-[11px] text-slate-500">
-            {unassigned.length} member{unassigned.length === 1 ? '' : 's'} not assigned to a team.
-          </p>
-        ) : null}
-      </div>
+      {isError ? (
+        <p className="px-4 py-6 text-sm text-red-600">
+          Failed to load teams: {(error as Error).message}
+        </p>
+      ) : isLoading ? (
+        <p className="px-4 py-6 text-sm text-slate-500">Loading teams…</p>
+      ) : filtered.length === 0 ? (
+        <p className="px-4 py-6 text-center text-sm italic text-slate-500">
+          {search
+            ? 'No teams match your search.'
+            : isAdmin
+              ? 'No teams yet. Create one above.'
+              : 'No teams yet. Ask an admin to create one.'}
+        </p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {visible.map((t) => {
+            const teamMembers = membersByTeam(t.id);
+            return (
+              <TeamRow
+                key={t.id}
+                team={t}
+                memberCount={teamMembers.length}
+                onOpen={() => setOpenTeam(t)}
+              />
+            );
+          })}
+        </ul>
+      )}
+
+      {unassigned.length > 0 ? (
+        <p className="border-t border-slate-100 bg-slate-50 px-4 py-2 text-[11px] text-slate-500">
+          {unassigned.length} member{unassigned.length === 1 ? '' : 's'} not assigned to a team —
+          assign them from a team drawer.
+        </p>
+      ) : null}
 
       {filtered.length > 0 ? (
         <Paginator
@@ -173,7 +157,55 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
       ) : null}
 
       <CreateTeamDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+
+      {openTeam ? (
+        <TeamDetailDrawer
+          team={openTeam}
+          isAdmin={isAdmin}
+          members={members ?? []}
+          onClose={() => setOpenTeam(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function TeamRow({
+  team,
+  memberCount,
+  onOpen,
+}: {
+  team: TeamRecord;
+  memberCount: number;
+  onOpen: () => void;
+}) {
+  // Pending cross-team-request count surfaces inline so admins know
+  // there's something to action without opening the drawer.
+  const { data: pending } = useTeamInboxRequests(team.id, 'PENDING');
+  const pendingCount = pending?.length ?? 0;
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-center justify-between gap-3 px-4 py-2 text-left transition-colors hover:bg-slate-50"
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-slate-900">{team.name}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3 text-xs">
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+            {memberCount} {memberCount === 1 ? 'member' : 'members'}
+          </span>
+          {pendingCount > 0 ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+              {pendingCount} pending
+            </span>
+          ) : null}
+          <span className="text-slate-400">›</span>
+        </div>
+      </button>
+    </li>
   );
 }
 
@@ -182,8 +214,6 @@ function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => voi
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Reset state every time the modal is reopened so the previous error
-  // doesn't linger across attempts.
   useEffect(() => {
     if (open) {
       setName('');
@@ -259,6 +289,418 @@ function CreateTeamDialog({ open, onClose }: { open: boolean; onClose: () => voi
   );
 }
 
+// ---------- Team detail drawer ----------
+
+function TeamDetailDrawer({
+  team,
+  isAdmin,
+  members,
+  onClose,
+}: {
+  team: TeamRecord;
+  isAdmin: boolean;
+  members: Member[];
+  onClose: () => void;
+}) {
+  const update = useUpdateTeam();
+  const remove = useDeleteTeam();
+  const setMemberTeam = useSetMemberTeam();
+  const [name, setName] = useState(team.name);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Reset name when a different team is opened.
+  useEffect(() => {
+    setName(team.name);
+    setError(null);
+  }, [team.id, team.name]);
+
+  // Escape closes the drawer.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !update.isPending && !remove.isPending) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, update.isPending, remove.isPending]);
+
+  const onTeam = members.filter((m) => m.team_id === team.id);
+  const ranked = [...onTeam].sort((a, b) => roleRank(a.team_role) - roleRank(b.team_role));
+
+  const onSaveName = async (e: FormEvent) => {
+    e.preventDefault();
+    if (name.trim() === '' || name.trim() === team.name) return;
+    setError(null);
+    try {
+      await update.mutateAsync({ id: team.id, payload: { name: name.trim() } });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to rename');
+    }
+  };
+
+  const onDelete = async () => {
+    setError(null);
+    try {
+      await remove.mutateAsync(team.id);
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to delete');
+    }
+  };
+
+  return (
+    <>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Team ${team.name}`}
+        className="fixed inset-0 z-40 flex justify-end bg-slate-900/30"
+        onClick={() => {
+          if (!update.isPending && !remove.isPending) onClose();
+        }}
+      >
+        <aside
+          className="flex h-full w-full max-w-md flex-col overflow-hidden bg-white shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Team
+              </p>
+              <h2 className="truncate text-base font-semibold text-slate-900">{team.name}</h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
+            >
+              ✕
+            </button>
+          </header>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {isAdmin ? (
+              <form onSubmit={onSaveName} className="mb-5 space-y-2">
+                <label
+                  htmlFor="team_drawer_name"
+                  className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                >
+                  Rename
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="team_drawer_name"
+                    type="text"
+                    required
+                    value={name}
+                    maxLength={120}
+                    onChange={(e) => setName(e.target.value)}
+                    className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={update.isPending || name.trim() === '' || name.trim() === team.name}
+                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {update.isPending ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </form>
+            ) : null}
+
+            <div className="mb-3 flex items-baseline justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">
+                Members
+                <span className="ml-1.5 text-xs font-normal text-slate-500">({onTeam.length})</span>
+              </h3>
+              <Link
+                href="/directory"
+                className="text-xs font-medium text-indigo-700 hover:underline"
+              >
+                Manage in Directory →
+              </Link>
+            </div>
+
+            {ranked.length === 0 ? (
+              <p className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-xs italic text-slate-500">
+                No members yet.{' '}
+                {isAdmin ? 'Pick people from the Unassigned list below.' : 'Ask an admin.'}
+              </p>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {ranked.map((m) => (
+                  <DrawerMemberRow
+                    key={m.id}
+                    member={m}
+                    isAdmin={isAdmin}
+                    onChangeRole={async (role) => {
+                      await setMemberTeam.mutateAsync({
+                        memberId: m.id,
+                        payload: { team_id: team.id, team_role: role },
+                      });
+                    }}
+                    onRemove={async () => {
+                      await setMemberTeam.mutateAsync({
+                        memberId: m.id,
+                        payload: { team_id: null, team_role: null },
+                      });
+                    }}
+                    pending={setMemberTeam.isPending}
+                  />
+                ))}
+              </ul>
+            )}
+
+            {isAdmin ? (
+              <UnassignedSection
+                team={team}
+                members={members}
+                pending={setMemberTeam.isPending}
+                onAssign={async (memberId) => {
+                  await setMemberTeam.mutateAsync({
+                    memberId,
+                    payload: { team_id: team.id, team_role: 'MEMBER' },
+                  });
+                }}
+              />
+            ) : null}
+
+            <TeamInboxBlock teamId={team.id} />
+
+            {error ? (
+              <p role="alert" className="mt-4 text-sm text-red-600">
+                {error}
+              </p>
+            ) : null}
+          </div>
+
+          {isAdmin ? (
+            <footer className="border-t border-slate-200 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                disabled={remove.isPending}
+                className="w-full rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+              >
+                {remove.isPending ? 'Deleting…' : 'Delete team'}
+              </button>
+            </footer>
+          ) : null}
+        </aside>
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete "${team.name}"?`}
+        message="Members on this team are unassigned but kept. Tasks owned by the team are unlinked, not deleted."
+        confirmLabel="Delete team"
+        pending={remove.isPending}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={async () => {
+          await onDelete();
+          setConfirmDelete(false);
+        }}
+      />
+    </>
+  );
+}
+
+function DrawerMemberRow({
+  member,
+  isAdmin,
+  onChangeRole,
+  onRemove,
+  pending,
+}: {
+  member: Member;
+  isAdmin: boolean;
+  onChangeRole: (role: TeamRole) => Promise<void>;
+  onRemove: () => Promise<void>;
+  pending: boolean;
+}) {
+  return (
+    <li className="flex items-center justify-between gap-2 py-2 text-sm">
+      <div className="min-w-0">
+        <p className="truncate font-medium text-slate-900">
+          {member.name}
+          {member.type === 'AGENT' ? (
+            <span className="ml-1.5 rounded bg-violet-100 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700">
+              Agent
+            </span>
+          ) : null}
+        </p>
+        {member.email ? (
+          <p className="mt-0.5 truncate text-xs text-slate-500">{member.email}</p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {isAdmin ? (
+          <>
+            <select
+              value={member.team_role ?? 'MEMBER'}
+              disabled={pending}
+              onChange={(e) => onChangeRole(e.target.value as TeamRole)}
+              className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px]"
+            >
+              <option value="HEAD">HEAD</option>
+              <option value="MANAGER">MANAGER</option>
+              <option value="LEAD">LEAD</option>
+              <option value="MEMBER">MEMBER</option>
+            </select>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onRemove}
+              aria-label={`Remove ${member.name} from team`}
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-red-600 disabled:opacity-40"
+            >
+              ✕
+            </button>
+          </>
+        ) : (
+          <TeamRolePill role={member.team_role} />
+        )}
+      </div>
+    </li>
+  );
+}
+
+function UnassignedSection({
+  team,
+  members,
+  onAssign,
+  pending,
+}: {
+  team: TeamRecord;
+  members: Member[];
+  onAssign: (memberId: string) => Promise<void>;
+  pending: boolean;
+}) {
+  const unassigned = members.filter((m) => m.team_id == null && m.type === 'HUMAN');
+  if (unassigned.length === 0) {
+    return (
+      <p className="mt-4 text-[11px] italic text-slate-400">
+        Everyone in the workspace is already on a team.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-5 rounded-md border border-dashed border-slate-200 p-3">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Unassigned humans
+      </p>
+      <ul className="space-y-1">
+        {unassigned.map((m) => (
+          <li key={m.id} className="flex items-center justify-between text-xs">
+            <span className="truncate text-slate-800">{m.name}</span>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => onAssign(m.id)}
+              className="rounded border border-indigo-200 bg-white px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+            >
+              Add to {team.name}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function TeamInboxBlock({ teamId }: { teamId: string }) {
+  const { data: requests, isLoading } = useTeamInboxRequests(teamId, 'PENDING');
+  const count = requests?.length ?? 0;
+
+  return (
+    <section className="mt-5 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+      <div className="mb-2 flex items-baseline justify-between">
+        <h3 className="text-xs font-semibold text-slate-900">Cross-team requests</h3>
+        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+          {count} pending
+        </span>
+      </div>
+      {isLoading ? (
+        <p className="text-[11px] text-slate-500">Loading…</p>
+      ) : count === 0 ? (
+        <p className="text-[11px] italic text-slate-500">Nothing to action.</p>
+      ) : (
+        <ul className="space-y-2">
+          {(requests ?? []).map((r) => (
+            <InboxRequestRow key={r.id} request={r} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function InboxRequestRow({ request }: { request: TaskRequest }) {
+  const fulfill = useFulfillRequest(request.id);
+  const reject = useRejectRequest(request.id);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const onFulfill = async () => {
+    setError(null);
+    try {
+      await fulfill.mutateAsync({});
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to fulfill');
+    }
+  };
+
+  const onReject = async () => {
+    setError(null);
+    try {
+      await reject.mutateAsync({ reason: reason.trim() || null });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Failed to reject');
+    }
+  };
+
+  return (
+    <li className="rounded-md border border-slate-200 bg-white p-2 text-[12px]">
+      <p className="font-medium text-slate-900">{request.suggested_title}</p>
+      {request.justification ? (
+        <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-600">{request.justification}</p>
+      ) : null}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onFulfill}
+          disabled={fulfill.isPending || reject.isPending}
+          className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+        >
+          Accept
+        </button>
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reject reason (optional)"
+          className="flex-1 rounded border border-slate-300 px-2 py-1 text-[11px]"
+        />
+        <button
+          type="button"
+          onClick={onReject}
+          disabled={fulfill.isPending || reject.isPending}
+          className="rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+        >
+          Reject
+        </button>
+      </div>
+      {error ? (
+        <p role="alert" className="mt-1 text-[11px] text-red-600">
+          {error}
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
 function Paginator({
   page,
   pageCount,
@@ -270,12 +712,10 @@ function Paginator({
   total: number;
   onChange: (next: number) => void;
 }) {
-  // Tight page-number row + "X of Y matches". Hides itself when there's
-  // only a single page worth of results.
   if (pageCount <= 1) {
     return (
       <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-        {total} match{total === 1 ? '' : 'es'}
+        {total} {total === 1 ? 'team' : 'teams'}
       </div>
     );
   }
@@ -326,225 +766,6 @@ function Paginator({
   );
 }
 
-function TeamCard({
-  team,
-  members,
-  isAdmin,
-}: {
-  team: TeamRecord;
-  members: Member[];
-  isAdmin: boolean;
-}) {
-  // Sort by role rank so HEAD floats to the top.
-  const ranked = [...members].sort((a, b) => roleRank(a.team_role) - roleRank(b.team_role));
-  return (
-    <li className="rounded-md border border-slate-200 bg-white">
-      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-        <p className="text-sm font-semibold text-slate-900">{team.name}</p>
-        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-          {members.length} {members.length === 1 ? 'member' : 'members'}
-        </span>
-      </div>
-      {ranked.length === 0 ? (
-        <p className="px-3 py-2 text-xs italic text-slate-400">
-          {isAdmin ? 'No members yet — assign someone below.' : 'No members yet.'}
-        </p>
-      ) : (
-        <ul className="divide-y divide-slate-100">
-          {ranked.map((m) => (
-            <li key={m.id} className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
-              <span className="truncate text-slate-800">
-                {m.name}
-                {m.type === 'AGENT' ? (
-                  <span className="ml-1 text-[10px] text-violet-700">(agent)</span>
-                ) : null}
-              </span>
-              <TeamRolePill role={m.team_role} />
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <TeamInbox teamId={team.id} />
-    </li>
-  );
-}
-
-function TeamInbox({ teamId }: { teamId: string }) {
-  // Pending cross-team requests anchored to a task on *this* team.
-  // Surfaces what the team's leadership needs to act on. Visible to
-  // every workspace member; the actions are gated server-side.
-  const { data: requests, isLoading } = useTeamInboxRequests(teamId, 'PENDING');
-  const count = requests?.length ?? 0;
-
-  return (
-    <details className="border-t border-slate-100 [&_summary::-webkit-details-marker]:hidden">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-1.5 text-xs hover:bg-slate-50">
-        <span className="font-medium text-slate-700">Pending requests</span>
-        <span
-          className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-            count > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'
-          }`}
-        >
-          {count}
-        </span>
-      </summary>
-      <div className="space-y-1.5 px-3 py-2">
-        {isLoading ? (
-          <p className="text-[11px] text-slate-500">Loading…</p>
-        ) : count === 0 ? (
-          <p className="text-[11px] italic text-slate-400">Nothing waiting.</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {requests!.map((r) => (
-              <InboxRequestRow key={r.id} request={r} />
-            ))}
-          </ul>
-        )}
-      </div>
-    </details>
-  );
-}
-
-function InboxRequestRow({ request }: { request: TaskRequest }) {
-  const fulfill = useFulfillRequest(request.id);
-  const reject = useRejectRequest(request.id);
-  const [open, setOpen] = useState<'fulfill' | 'reject' | null>(null);
-  const [title, setTitle] = useState(request.suggested_title);
-  const [description, setDescription] = useState(request.suggested_description ?? '');
-  const [priority, setPriority] = useState(0);
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const onFulfill = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      await fulfill.mutateAsync({
-        title: title.trim() || null,
-        description: description.trim() || null,
-        priority,
-      });
-      setOpen(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to fulfill');
-    }
-  };
-
-  const onReject = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      await reject.mutateAsync({ reason: reason.trim() || null });
-      setOpen(null);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to reject');
-    }
-  };
-
-  return (
-    <li className="rounded-md border border-amber-200 bg-amber-50/40 p-2 text-[11px]">
-      <p className="font-medium text-slate-800">{request.suggested_title}</p>
-      <p className="mt-0.5 text-[10px] text-slate-500">
-        from {request.requester_name ?? 'unknown'} · {new Date(request.created_at).toLocaleString()}
-      </p>
-      {request.justification ? (
-        <p className="mt-1 whitespace-pre-wrap text-slate-700">{request.justification}</p>
-      ) : null}
-
-      {open === 'fulfill' ? (
-        <form onSubmit={onFulfill} className="mt-2 space-y-1">
-          <input
-            type="text"
-            value={title}
-            maxLength={200}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Final title for the new task"
-            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
-          />
-          <textarea
-            rows={2}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description"
-            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
-          />
-          <input
-            type="number"
-            value={priority}
-            min={0}
-            max={1000}
-            onChange={(e) => setPriority(Number(e.target.value))}
-            placeholder="Priority"
-            className="w-24 rounded border border-slate-300 px-2 py-1 text-[11px]"
-          />
-          {error ? <p className="text-red-600">{error}</p> : null}
-          <div className="flex justify-end gap-1">
-            <button
-              type="button"
-              onClick={() => setOpen(null)}
-              className="rounded border border-slate-200 px-2 py-0.5 text-[10px] text-slate-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={fulfill.isPending}
-              className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-            >
-              {fulfill.isPending ? 'Fulfilling…' : 'Mint task & link'}
-            </button>
-          </div>
-        </form>
-      ) : open === 'reject' ? (
-        <form onSubmit={onReject} className="mt-2 space-y-1">
-          <textarea
-            rows={2}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Optional reason"
-            className="w-full rounded border border-slate-300 px-2 py-1 text-[11px]"
-          />
-          {error ? <p className="text-red-600">{error}</p> : null}
-          <div className="flex justify-end gap-1">
-            <button
-              type="button"
-              onClick={() => setOpen(null)}
-              className="rounded border border-slate-200 px-2 py-0.5 text-[10px] text-slate-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={reject.isPending}
-              className="rounded bg-red-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-red-700 disabled:opacity-60"
-            >
-              {reject.isPending ? 'Rejecting…' : 'Reject'}
-            </button>
-          </div>
-        </form>
-      ) : (
-        <div className="mt-1 flex gap-1">
-          <button
-            type="button"
-            onClick={() => setOpen('fulfill')}
-            className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700"
-          >
-            Fulfill
-          </button>
-          <button
-            type="button"
-            onClick={() => setOpen('reject')}
-            className="rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] font-medium text-red-700 hover:bg-red-50"
-          >
-            Reject
-          </button>
-        </div>
-      )}
-    </li>
-  );
-}
-
 function roleRank(role: TeamRole | null): number {
   switch (role) {
     case 'HEAD':
@@ -580,234 +801,5 @@ function TeamRolePill({ role }: { role: TeamRole | null }) {
     <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase ${tone}`}>
       {role}
     </span>
-  );
-}
-
-function InviteSection({ isAdmin }: { isAdmin: boolean }) {
-  const createInvite = useCreateInvite();
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER'>('WORKSPACE_MEMBER');
-  const [lastInvite, setLastInvite] = useState<InviteCreateResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!isAdmin) return null;
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    try {
-      const invite = await createInvite.mutateAsync({ email, role });
-      setLastInvite(invite);
-      setEmail('');
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to create invite');
-    }
-  };
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <header className="border-b border-slate-100 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-900">Invite a member</h2>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Generates a one-time link. Copy and share it via your usual channel — we don&apos;t send
-          email yet.
-        </p>
-      </header>
-
-      <form
-        className="grid gap-3 px-4 py-4 sm:grid-cols-[1fr_auto_auto] sm:items-end"
-        onSubmit={onSubmit}
-      >
-        <Field label="Email" htmlFor="invite_email">
-          <input
-            id="invite_email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="bob@example.com"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
-        </Field>
-        <Field label="Role" htmlFor="invite_role">
-          <select
-            id="invite_role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as 'WORKSPACE_ADMIN' | 'WORKSPACE_MEMBER')}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="WORKSPACE_MEMBER">Member</option>
-            <option value="WORKSPACE_ADMIN">Admin</option>
-          </select>
-        </Field>
-        <button
-          type="submit"
-          disabled={createInvite.isPending}
-          className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {createInvite.isPending ? 'Creating…' : 'Create invite'}
-        </button>
-      </form>
-
-      {error ? (
-        <p role="alert" className="px-4 pb-4 text-sm text-red-600">
-          {error}
-        </p>
-      ) : null}
-
-      {lastInvite ? <InviteLinkReveal invite={lastInvite} /> : null}
-    </section>
-  );
-}
-
-function InviteLinkReveal({ invite }: { invite: InviteCreateResponse }) {
-  // Phase 2: stop revealing the raw invite URL in the UI. Once Gmail is
-  // wired the api will deliver the link directly to the invitee; for
-  // now we just confirm the invite was queued.
-  return (
-    <div className="border-t border-slate-100 bg-emerald-50/50 px-4 py-3">
-      <p className="text-sm font-medium text-emerald-900">
-        Invite queued for {invite.email} ({roleLabel(invite.role)}).
-      </p>
-      <p className="mt-1 text-xs text-emerald-800">
-        We&apos;ll email it shortly. The link expires {new Date(invite.expires_at).toLocaleString()}
-        .
-      </p>
-    </div>
-  );
-}
-
-function MemberRow({ member, isAdmin }: { member: Member; isAdmin: boolean }) {
-  const { data: teams } = useTeams();
-  const setTeam = useSetMemberTeam();
-
-  const onChangeTeam = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const team_id = e.target.value || null;
-    // When picking a team, default the role to MEMBER unless one is
-    // already set; clear team_role if the team is unset.
-    const team_role = team_id == null ? null : (member.team_role ?? 'MEMBER');
-    await setTeam.mutateAsync({
-      memberId: member.id,
-      payload: { team_id, team_role },
-    });
-  };
-
-  const onChangeRole = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    if (member.team_id == null) return; // role makes no sense without a team
-    await setTeam.mutateAsync({
-      memberId: member.id,
-      payload: { team_id: member.team_id, team_role: e.target.value as TeamRole },
-    });
-  };
-
-  return (
-    <li className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-900">{member.name}</p>
-        {member.email ? (
-          <p className="mt-0.5 truncate text-xs text-slate-500">{member.email}</p>
-        ) : null}
-      </div>
-
-      <div className="flex shrink-0 items-center gap-2">
-        {member.type === 'AGENT' ? (
-          <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800">
-            Agent
-          </span>
-        ) : null}
-        <RolePill role={member.role} />
-
-        {isAdmin ? (
-          <>
-            <select
-              value={member.team_id ?? ''}
-              onChange={onChangeTeam}
-              disabled={setTeam.isPending}
-              className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px]"
-            >
-              <option value="">— No team —</option>
-              {(teams ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={member.team_role ?? ''}
-              onChange={onChangeRole}
-              disabled={setTeam.isPending || member.team_id == null}
-              className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px]"
-            >
-              <option value="" disabled>
-                — Role —
-              </option>
-              <option value="HEAD">HEAD</option>
-              <option value="MANAGER">MANAGER</option>
-              <option value="LEAD">LEAD</option>
-              <option value="MEMBER">MEMBER</option>
-            </select>
-          </>
-        ) : (
-          <TeamRolePill role={member.team_role} />
-        )}
-      </div>
-    </li>
-  );
-}
-
-const ROLE_PILL: Record<MemberRole, string> = {
-  WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
-  WORKSPACE_ADMIN: 'bg-blue-100 text-blue-800',
-  WORKSPACE_MEMBER: 'bg-slate-100 text-slate-700',
-};
-
-function RolePill({ role }: { role: MemberRole }) {
-  return (
-    <span
-      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${ROLE_PILL[role]}`}
-    >
-      {roleLabel(role)}
-    </span>
-  );
-}
-
-function roleLabel(role: MemberRole): string {
-  // Strip the WORKSPACE_ prefix and title-case the rest.
-  const tail = role.slice('WORKSPACE_'.length);
-  return tail.charAt(0) + tail.slice(1).toLowerCase();
-}
-
-function SkeletonRows({ count }: { count: number }) {
-  return (
-    <ul className="divide-y divide-slate-100">
-      {Array.from({ length: count }).map((_, i) => (
-        <li key={i} className="px-3 py-3">
-          <div className="h-3 w-1/3 animate-pulse rounded bg-slate-100" />
-          <div className="mt-2 h-3 w-1/4 animate-pulse rounded bg-slate-100" />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label
-        htmlFor={htmlFor}
-        className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
-      >
-        {label}
-      </label>
-      {children}
-    </div>
   );
 }

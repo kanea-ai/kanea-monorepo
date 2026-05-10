@@ -612,6 +612,31 @@ export function useCreateTeam() {
   });
 }
 
+export function useUpdateTeam() {
+  const qc = useQueryClient();
+  return useMutation<TeamRecord, Error, { id: string; payload: CreateTeamPayload }>({
+    mutationFn: ({ id, payload }) => teamsApi.update(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: teamKeys.all });
+      // Member-team labels surface team names — bust the directory list too.
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
+  });
+}
+
+export function useDeleteTeam() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => teamsApi.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: teamKeys.all });
+      // Members previously on the team go to "no team" — refresh the
+      // directory so the side panel doesn't show stale assignments.
+      qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
+  });
+}
+
 // ---------- Task project / team move ----------
 
 export function useUpdateTaskLinks(id: string) {
