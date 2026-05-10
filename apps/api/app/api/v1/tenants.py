@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import (
     InviteServiceDep,
@@ -9,15 +12,24 @@ from app.api.deps import (
 )
 from app.application.auth.schemas import TokenResponse
 from app.application.tenants.schemas import (
+    AdminSetMemberPasswordRequest,
     InviteAcceptRequest,
     InviteCreateRequest,
     InviteCreateResponse,
     InvitePreviewResponse,
+    MemberFilters,
+    MemberProfileResponse,
     MemberResponse,
+    MemberStatsResponse,
+    SetMemberSuspensionRequest,
+    SetMemberTeamRequest,
+    UpdateMemberProfileRequest,
 )
+from app.domain.enums import MemberRole
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
+    InvalidMemberTypeError,
     InviteAlreadyAcceptedError,
     InviteExpiredError,
     InviteNotFoundError,
@@ -89,6 +101,192 @@ async def accept_invite(
     "/members",
     response_model=list[MemberResponse],
 )
-async def list_members(principal: PrincipalDep, service: InviteServiceDep) -> list[MemberResponse]:
-    members = await service.list_workspace_members(principal)
+async def list_members(
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+    name: Annotated[str | None, Query(max_length=120)] = None,
+    member_id: Annotated[UUID | None, Query()] = None,
+    role: Annotated[MemberRole | None, Query()] = None,
+    team_id: Annotated[UUID | None, Query()] = None,
+    project_id: Annotated[UUID | None, Query()] = None,
+    humans_only: Annotated[bool, Query()] = False,
+) -> list[MemberResponse]:
+    """Visibility-aware members directory. Admins/owners see everyone;
+    everyone else sees their team plus themselves. Filters narrow the
+    result on top of that scope."""
+    filters = MemberFilters(
+        name=name,
+        member_id=member_id,
+        role=role,
+        team_id=team_id,
+        project_id=project_id,
+        humans_only=humans_only,
+    )
+    members = await service.list_workspace_members(principal, filters)
     return [MemberResponse.from_entity(m) for m in members]
+
+
+@router.get(
+    "/members/{member_id}",
+    response_model=MemberResponse,
+)
+async def get_member(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Single-member fetch. Same visibility rule as the list endpoint:
+    admins see anyone in the workspace; everyone else can only fetch
+    themselves or a teammate."""
+    try:
+        member = await service.get_member(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.get(
+    "/members/{member_id}/profile",
+    response_model=MemberProfileResponse,
+)
+async def get_member_profile(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberProfileResponse:
+    """Priority-scoped profile lookup. Drives the click-the-actor flow
+    on /audit: the response is full for owners and same-rank-or-higher
+    admins, but reduced (id / name / email / type only) when the
+    principal is lower-rank than the target. The visibility rule from
+    GET /members/{id} is the outer gate — callers who can't see the
+    member at all still get 403."""
+    try:
+        return await service.get_member_profile(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.get(
+    "/members/{member_id}/stats",
+    response_model=MemberStatsResponse,
+)
+async def get_member_stats(
+    member_id: UUID,
+    principal: PrincipalDep,
+    service: InviteServiceDep,
+) -> MemberStatsResponse:
+    """Per-member stats panel for the directory detail dialog. Same
+    visibility rule as GET /members/{id}: admins see anyone, everyone
+    else only sees themselves or a teammate."""
+    try:
+        stats = await service.get_member_stats(member_id, principal)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberStatsResponse(
+        assigned_count=stats.assigned_count,
+        completed_count=stats.completed_count,
+        avg_resolution_seconds=stats.avg_resolution_seconds,
+        accuracy_percent=stats.accuracy_percent,
+        last_activity_at=stats.last_activity_at,
+        total_tokens_used=stats.total_tokens_used,
+    )
+
+
+@router.patch(
+    "/members/{member_id}",
+    response_model=MemberResponse,
+)
+async def update_member_profile(
+    member_id: UUID,
+    payload: UpdateMemberProfileRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Admin-only edit of a member's display name and/or workspace
+    role. The "last owner" invariant is enforced at the service layer:
+    you can't demote the last WORKSPACE_OWNER."""
+    try:
+        member = await service.update_member_profile(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.patch(
+    "/members/{member_id}/suspension",
+    response_model=MemberResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_member_suspension(
+    member_id: UUID,
+    payload: SetMemberSuspensionRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Toggle the workspace-scoped soft lock. POST with
+    ``is_suspended=true`` to suspend, ``false`` to revoke. The
+    requester must be a workspace OWNER/ADMIN; you cannot suspend
+    yourself; the last active owner can't be suspended."""
+    try:
+        member = await service.set_member_suspension(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.patch(
+    "/members/{member_id}/team",
+    response_model=MemberResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def set_member_team(
+    member_id: UUID,
+    payload: SetMemberTeamRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> MemberResponse:
+    """Workspace admins assign a member to a Team and set their
+    intra-team role. Use team_id=null to unassign."""
+    try:
+        member = await service.set_member_team(member_id, payload, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return MemberResponse.from_entity(member)
+
+
+@router.post(
+    "/members/{member_id}/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def admin_set_member_password(
+    member_id: UUID,
+    payload: AdminSetMemberPasswordRequest,
+    admin: WorkspaceAdminDep,
+    service: InviteServiceDep,
+) -> Response:
+    """Admin-side password reset. Useful straight after an invite —
+    the User row exists with a random placeholder, so the admin can
+    seed something temporary the invitee will then change. The
+    service refuses for cross-workspace users (their credential
+    isn't this admin's to overwrite) and for the principal's own
+    membership (use /me/password)."""
+    try:
+        await service.admin_set_member_password(member_id, payload.new_password, admin)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

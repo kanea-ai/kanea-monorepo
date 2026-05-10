@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import secrets
 from typing import Annotated
 from urllib.parse import urlencode
@@ -7,16 +9,23 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import AuthServiceDep, get_oauth_client, get_settings
+from app.api.deps import AuthServiceDep, RawPrincipalDep, get_oauth_client, get_settings
 from app.application.auth.schemas import (
     AgentTokenRequest,
     LoginRequest,
+    LoginResponse,
     RegisterRequest,
+    SelectWorkspaceRequest,
+    SwitchWorkspaceRequest,
     TokenResponse,
 )
 from app.core.config import Settings
 from app.domain.enums import OAuthProvider
-from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
+from app.domain.exceptions import (
+    AuthenticationError,
+    EmailAlreadyExistsError,
+    WorkspaceNameConflictError,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,12 +39,71 @@ async def register(payload: RegisterRequest, service: AuthServiceDep) -> TokenRe
         return await service.register(payload)
     except EmailAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except WorkspaceNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-@router.post("/login", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-async def login(payload: LoginRequest, service: AuthServiceDep) -> TokenResponse:
+@router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
+async def login(payload: LoginRequest, service: AuthServiceDep) -> LoginResponse:
+    """Phase 1 multi-tenancy. Returns either an access_token (single
+    workspace) or a selection_token + workspaces list (multi-workspace
+    user picks one). Both shapes share LoginResponse — switch on
+    requires_selection client-side."""
     try:
         return await service.login(payload)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+@router.post(
+    "/select-workspace",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def select_workspace(
+    payload: SelectWorkspaceRequest, service: AuthServiceDep
+) -> TokenResponse:
+    """Exchange a short-lived selection token + a chosen workspace_id
+    for the final access token. The user's membership in the workspace
+    is verified — the selection token alone is not enough."""
+    try:
+        return await service.select_workspace(payload)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+@router.post(
+    "/switch-workspace",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def switch_workspace(
+    payload: SwitchWorkspaceRequest,
+    principal: RawPrincipalDep,
+    service: AuthServiceDep,
+) -> TokenResponse:
+    """Already-signed-in user reissues their access token bound to a
+    different workspace they belong to. Distinct from
+    /auth/select-workspace, which is the post-login picker that
+    requires a selection_token. Drives the sidebar switcher.
+
+    Uses ``RawPrincipalDep`` so a member who is suspended in their
+    *current* workspace can still hit this endpoint to escape into
+    another workspace where their membership is active. The auth
+    service still verifies the requester holds a membership in the
+    target workspace.
+    Returns 401 when the user has no membership in the requested
+    workspace — same shape we use for cross-tenant attempts."""
+    try:
+        return await service.switch_workspace(principal, payload)
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -149,20 +217,45 @@ async def oauth_callback(
             detail=f"oauth provider error: {exc}",
         ) from exc
 
-    token_resp = await service.oauth_login(identity)
+    login_resp = await service.oauth_login(identity)
 
-    response = _redirect_to_frontend(settings, token=token_resp.access_token)
+    # Single-workspace OAuth users get the token straight away.
+    # Multi-workspace users get bounced with a selection token; the
+    # frontend renders the workspace picker and POSTs to /auth/select-
+    # workspace with that token + the chosen workspace_id.
+    if login_resp.requires_selection:
+        response = _redirect_to_frontend(
+            settings,
+            selection_token=login_resp.selection_token,
+            workspaces=login_resp.workspaces,
+        )
+    else:
+        response = _redirect_to_frontend(settings, token=login_resp.access_token)
     # Clear the state cookie now that it's been consumed.
     response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
     return response
 
 
 def _redirect_to_frontend(
-    settings: Settings, *, token: str | None = None, error: str | None = None
+    settings: Settings,
+    *,
+    token: str | None = None,
+    selection_token: str | None = None,
+    workspaces: list | None = None,
+    error: str | None = None,
 ) -> RedirectResponse:
     params: dict[str, str] = {}
     if token is not None:
         params["token"] = token
+    if selection_token is not None:
+        params["selection_token"] = selection_token
+    if workspaces is not None:
+        # Embed workspaces alongside the selection token so the picker
+        # page can render without a follow-up api round-trip. Base64url
+        # of compact JSON keeps the URL clean and pop-safe across the
+        # tiny realistic counts (<10 workspaces).
+        payload = json.dumps([w.model_dump(mode="json") for w in workspaces], separators=(",", ":"))
+        params["workspaces"] = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
     if error is not None:
         params["error"] = error
     suffix = f"?{urlencode(params)}" if params else ""

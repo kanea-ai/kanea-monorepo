@@ -11,7 +11,7 @@ const V1 = '/api/v1';
 
 export const TOKEN_STORAGE_KEY = 'kanea_token';
 
-export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'BLOCKED' | 'DONE' | 'CANCELLED';
+export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE' | 'CANCELLED';
 
 export interface Task {
   id: string;
@@ -20,17 +20,160 @@ export interface Task {
   title: string;
   status: TaskStatus;
   priority: number;
+  seq: number;
+  // Human-readable id like ``DEVOPS-001``. Built server-side from the
+  // workspace prefix + zero-padded seq.
+  public_id: string;
   description: string | null;
   assignee_id: string | null;
+  // Workspace -> Project -> Task -> Team links. Both nullable: a
+  // backlog task can live without a project, an unowned task without
+  // a team. Server SET-NULLs them when the parent is deleted.
+  project_id: string | null;
+  team_id: string | null;
   due_at: string | null;
+  // Blocked is orthogonal to status. A task can be PENDING/IN_PROGRESS
+  // and blocked at the same time. The Kanban renders blocked cards
+  // with a red border regardless of column.
+  is_blocked: boolean;
   blocked_reason: string | null;
   created_at: string;
   updated_at: string;
 }
 
+// Returned by GET /tasks/{id}. Same shape as Task plus the seven
+// relation buckets so agents (and the detail page) get the full
+// linked-work graph in a single round-trip.
+export interface TaskDetail extends Task {
+  relations: TaskRelations;
+}
+
 export interface UpdateStatusPayload {
   status: TaskStatus;
-  blocked_reason?: string | null;
+  // Cumulative tokens spent on the task. Optional — agents pass it on
+  // status updates so tokens roll up across iterations.
+  tokens_used?: number | null;
+}
+
+export interface SetBlockedPayload {
+  is_blocked: boolean;
+  reason?: string | null;
+}
+
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  author_member_id: string | null;
+  author_name: string | null;
+  body: string;
+  created_at: string;
+}
+
+export interface CreateCommentPayload {
+  body: string;
+}
+
+export type RequestStatus = 'PENDING' | 'FULFILLED' | 'REJECTED';
+
+export interface TaskRequest {
+  id: string;
+  source_task_id: string;
+  requested_team_id: string | null;
+  requester_member_id: string | null;
+  requester_name: string | null;
+  suggested_title: string;
+  suggested_description: string | null;
+  justification: string | null;
+  status: RequestStatus;
+  fulfilled_task_id: string | null;
+  reject_reason: string | null;
+  resolver_member_id: string | null;
+  resolver_name: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface CreateRequestPayload {
+  requested_team_id: string;
+  suggested_title: string;
+  suggested_description?: string | null;
+  justification?: string | null;
+}
+
+export interface FulfillRequestPayload {
+  title?: string | null;
+  description?: string | null;
+  priority?: number;
+  assignee_id?: string | null;
+}
+
+export interface RejectRequestPayload {
+  reason?: string | null;
+}
+
+export type TaskActivityType =
+  | 'CREATED'
+  | 'STATUS_CHANGED'
+  | 'ASSIGNED'
+  | 'DELEGATED'
+  | 'BLOCKED'
+  | 'UNBLOCKED'
+  | 'PROJECT_CHANGED'
+  | 'TEAM_CHANGED'
+  | 'RATED';
+
+export interface TaskActivity {
+  id: string;
+  task_id: string;
+  actor_member_id: string | null;
+  actor_name: string | null;
+  event_type: TaskActivityType;
+  // Free-form payload, shape depends on event_type. The web view
+  // treats it as Record<string, unknown>; consumers that need stricter
+  // typing should narrow on event_type.
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export type RelationType = 'BLOCKS' | 'MITIGATES' | 'DUPLICATES' | 'RELATES_TO';
+
+export interface RelationItem {
+  relation_id: string;
+  task_id: string;
+  public_id: string;
+  title: string;
+  status: TaskStatus;
+  is_blocked: boolean;
+}
+
+export interface TaskRelations {
+  blocks: RelationItem[];
+  blocked_by: RelationItem[];
+  mitigates: RelationItem[];
+  mitigated_by: RelationItem[];
+  duplicates: RelationItem[];
+  duplicated_by: RelationItem[];
+  relates_to: RelationItem[];
+}
+
+export interface CreateRelationPayload {
+  relation_type: RelationType;
+  target_task_id: string;
+}
+
+export interface CreateTaskPayload {
+  title: string;
+  description?: string | null;
+  priority?: number;
+  assignee_id?: string | null;
+  project_id?: string | null;
+  team_id?: string | null;
+  due_at?: string | null;
+}
+
+export interface UpdateTaskLinksPayload {
+  project_id?: string | null;
+  team_id?: string | null;
 }
 
 export interface LoginPayload {
@@ -51,6 +194,29 @@ export interface TokenResponse {
   expires_in: number;
 }
 
+// Login is branched in Phase 1: single-workspace users get a token
+// straight away, multi-workspace users get a selection token + the
+// list of workspaces they can pick from.
+export interface WorkspaceOption {
+  workspace_id: string;
+  name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
+}
+
+export interface LoginResponse {
+  requires_selection: boolean;
+  access_token: string | null;
+  token_type: string;
+  expires_in: number | null;
+  selection_token: string | null;
+  workspaces: WorkspaceOption[] | null;
+}
+
+export interface SelectWorkspacePayload {
+  selection_token: string;
+  workspace_id: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -61,10 +227,35 @@ export class ApiError extends Error {
   }
 }
 
+// Global 401 handler. AuthProvider registers this on mount; api code
+// invokes it whenever the backend returns 401 on an authenticated
+// request (token expired / revoked / workspace removed). Auth-bearing
+// endpoints (/auth/login, /auth/select-workspace, /auth/register) are
+// excluded — there a 401 just means "wrong credentials" and shouldn't
+// trigger a redirect loop.
+type UnauthorizedHandler = () => void;
+let onUnauthorized: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(fn: UnauthorizedHandler | null): void {
+  onUnauthorized = fn;
+}
+
+const AUTH_PATHS_NO_REDIRECT = new Set([
+  `${V1}/auth/login`,
+  `${V1}/auth/register`,
+  `${V1}/auth/select-workspace`,
+]);
+
 function authHeader(): HeadersInit {
   if (typeof window === 'undefined') return {};
   const token = window.localStorage.getItem(TOKEN_STORAGE_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function maybeUnauthorized(path: string, status: number): void {
+  if (status !== 401) return;
+  if (AUTH_PATHS_NO_REDIRECT.has(path)) return;
+  onUnauthorized?.();
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -82,14 +273,36 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       .json()
       .then((b: { detail?: string }) => b.detail)
       .catch(() => response.statusText);
+    maybeUnauthorized(path, response.status);
     throw new ApiError(response.status, detail || `HTTP ${response.status}`);
   }
   return response.json() as Promise<T>;
 }
 
+// Helper for the bare-fetch sites (DELETE / 201-no-body endpoints) so
+// they share the same 401 handling as request<T>().
+async function requestVoid(path: string, init: RequestInit = {}): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeader(),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((b: { detail?: string }) => b.detail)
+      .catch(() => response.statusText);
+    maybeUnauthorized(path, response.status);
+    throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+  }
+}
+
 export const authApi = {
   login: (payload: LoginPayload) =>
-    request<TokenResponse>(`${V1}/auth/login`, {
+    request<LoginResponse>(`${V1}/auth/login`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -98,12 +311,137 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  selectWorkspace: (payload: SelectWorkspacePayload) =>
+    request<TokenResponse>(`${V1}/auth/select-workspace`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
+
+// ---------- Me (self profile) ----------
+
+export interface MeProfile {
+  user_id: string;
+  email: string;
+  full_name: string;
+  has_password: boolean;
+  oauth_provider: 'GOOGLE' | 'GITHUB' | null;
+  member_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
+  type: 'HUMAN' | 'AGENT';
+  team_id: string | null;
+  team_role: 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER' | null;
+}
+
+export interface MeStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+export interface UpdateMePayload {
+  full_name: string;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+}
+
+export const meApi = {
+  get: () => request<MeProfile>(`${V1}/me`),
+  update: (payload: UpdateMePayload) =>
+    request<MeProfile>(`${V1}/me`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  changePassword: (payload: ChangePasswordPayload) =>
+    requestVoid(`${V1}/me/password`, { method: 'POST', body: JSON.stringify(payload) }),
+  stats: () => request<MeStats>(`${V1}/me/stats`),
+  // Phase 4 — notifications inbox
+  notifications: () => request<NotificationItem[]>(`${V1}/me/notifications`),
+  unreadCount: () => request<NotificationCount>(`${V1}/me/notifications/unread-count`),
+  markRead: (id: string) =>
+    requestVoid(`${V1}/me/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' }),
+  markAllRead: () => requestVoid(`${V1}/me/notifications/read-all`, { method: 'POST' }),
+  // Phase 5 batch 1 — workspace switcher
+  workspaces: () => request<MeWorkspace[]>(`${V1}/me/workspaces`),
+  createWorkspace: (payload: CreateMyWorkspacePayload) =>
+    request<CreateMyWorkspaceResponse>(`${V1}/me/workspaces`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  // Phase 5 batch 3 — role-scoped dashboard
+  dashboard: () => request<DashboardResponse>(`${V1}/me/dashboard`),
+};
+
+export interface DashboardScope {
+  label: string;
+  is_admin: boolean;
+  member_id: string | null;
+  team_id: string | null;
+  project_count: number;
+}
+
+export interface DashboardResponse {
+  scope: DashboardScope;
+  tasks: Task[];
+}
+
+export const authSwitchApi = {
+  switchWorkspace: (payload: { workspace_id: string }) =>
+    request<TokenResponse>(`${V1}/auth/switch-workspace`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
+export interface MeWorkspace {
+  workspace_id: string;
+  name: string;
+  role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
+  member_id: string;
+  is_current: boolean;
+}
+
+export interface CreateMyWorkspacePayload {
+  name: string;
+}
+
+export interface CreateMyWorkspaceResponse {
+  workspace_id: string;
+  name: string;
+  member_id: string;
+  access_token: string;
+  expires_in: number;
+}
+
+export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT';
+
+export interface NotificationItem {
+  id: string;
+  type: NotificationKind;
+  source_task_id: string | null;
+  source_comment_id: string | null;
+  source_member_id: string | null;
+  source_member_name: string | null;
+  preview: string;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationCount {
+  unread: number;
+}
 
 // ---------- Tenants ----------
 
-export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+// Org-level role. Renamed in Phase 1 to disambiguate from TeamRole
+// (which uses MEMBER too) and to read clearly in JWTs / audit log.
+export type MemberRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 export type MemberKind = 'HUMAN' | 'AGENT';
+export type TeamRole = 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER';
 
 export interface Member {
   id: string;
@@ -113,11 +451,29 @@ export interface Member {
   type: MemberKind;
   role: MemberRole;
   priority: number;
+  // Section 1: intra-team rank, set when the member is assigned to a
+  // Team. Null when unassigned.
+  team_id: string | null;
+  team_role: TeamRole | null;
+  // Workspace-scoped soft lock. When true, every workspace-scoped
+  // request from this member's JWT is rejected with 403 by the api.
+  // The user can still log in to OTHER workspaces where they're not
+  // suspended.
+  is_suspended: boolean;
+}
+
+export interface SetMemberSuspensionPayload {
+  is_suspended: boolean;
+}
+
+export interface SetMemberTeamPayload {
+  team_id: string | null;
+  team_role: TeamRole | null;
 }
 
 export interface InviteCreatePayload {
   email: string;
-  role: 'ADMIN' | 'MEMBER';
+  role: 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 }
 
 export interface InviteCreateResponse {
@@ -143,8 +499,71 @@ export interface InviteAcceptPayload {
   password: string;
 }
 
+export interface MemberListFilters {
+  name?: string;
+  memberId?: string;
+  role?: MemberRole;
+  teamId?: string;
+  projectId?: string;
+  humansOnly?: boolean;
+}
+
+export interface UpdateMemberProfilePayload {
+  name?: string | null;
+  role?: MemberRole | null;
+  priority?: number | null;
+}
+
+export interface MemberStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  accuracy_percent: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+// Priority-scoped profile shape returned by /tenants/members/{id}/profile.
+// When ``is_limited_view`` is true (lower-rank admin viewing a
+// higher-rank member), the restricted fields below are null.
+export interface MemberProfile {
+  id: string;
+  workspace_id: string;
+  name: string;
+  email: string | null;
+  type: MemberKind;
+  is_limited_view: boolean;
+  role: MemberRole | null;
+  priority: number | null;
+  team_id: string | null;
+  team_role: TeamRole | null;
+  is_suspended: boolean | null;
+}
+
+export interface AdminSetMemberPasswordPayload {
+  new_password: string;
+}
+
 export const tenantsApi = {
-  listMembers: () => request<Member[]>(`${V1}/tenants/members`),
+  listMembers: (filters: MemberListFilters = {}) => {
+    const params = new URLSearchParams();
+    if (filters.name) params.set('name', filters.name);
+    if (filters.memberId) params.set('member_id', filters.memberId);
+    if (filters.role) params.set('role', filters.role);
+    if (filters.teamId) params.set('team_id', filters.teamId);
+    if (filters.projectId) params.set('project_id', filters.projectId);
+    if (filters.humansOnly) params.set('humans_only', 'true');
+    const qs = params.toString();
+    return request<Member[]>(`${V1}/tenants/members${qs ? `?${qs}` : ''}`);
+  },
+  getMember: (id: string) => request<Member>(`${V1}/tenants/members/${id}`),
+  getMemberProfile: (id: string) => request<MemberProfile>(`${V1}/tenants/members/${id}/profile`),
+  getMemberStats: (id: string) => request<MemberStats>(`${V1}/tenants/members/${id}/stats`),
+  updateMemberProfile: (id: string, payload: UpdateMemberProfilePayload) =>
+    request<Member>(`${V1}/tenants/members/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   createInvite: (payload: InviteCreatePayload) =>
     request<InviteCreateResponse>(`${V1}/tenants/invites`, {
       method: 'POST',
@@ -157,16 +576,403 @@ export const tenantsApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  setMemberTeam: (memberId: string, payload: SetMemberTeamPayload) =>
+    request<Member>(`${V1}/tenants/members/${memberId}/team`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  setMemberSuspension: (memberId: string, payload: SetMemberSuspensionPayload) =>
+    request<Member>(`${V1}/tenants/members/${memberId}/suspension`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  adminSetMemberPassword: (memberId: string, payload: AdminSetMemberPasswordPayload) =>
+    requestVoid(`${V1}/tenants/members/${memberId}/password`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 
 export const tasksApi = {
-  list: (status?: TaskStatus) => {
-    const qs = status ? `?status_filter=${status}` : '';
-    return request<Task[]>(`${V1}/tasks${qs}`);
+  list: (
+    opts: {
+      status?: TaskStatus;
+      blockedOnly?: boolean;
+      projectId?: string;
+      teamId?: string;
+      assigneeId?: string;
+      priorityMin?: number;
+      priorityMax?: number;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.status) params.set('status_filter', opts.status);
+    if (opts.blockedOnly) params.set('blocked_only', 'true');
+    if (opts.projectId) params.set('project_id', opts.projectId);
+    if (opts.teamId) params.set('team_id', opts.teamId);
+    if (opts.assigneeId) params.set('assignee_id', opts.assigneeId);
+    if (opts.priorityMin != null) params.set('priority_min', String(opts.priorityMin));
+    if (opts.priorityMax != null) params.set('priority_max', String(opts.priorityMax));
+    const qs = params.toString();
+    return request<Task[]>(`${V1}/tasks${qs ? `?${qs}` : ''}`);
   },
+  get: (id: string) => request<TaskDetail>(`${V1}/tasks/${id}`),
+  create: (payload: CreateTaskPayload) =>
+    request<Task>(`${V1}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updateStatus: (id: string, payload: UpdateStatusPayload) =>
     request<Task>(`${V1}/tasks/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  setBlocked: (id: string, payload: SetBlockedPayload) =>
+    request<Task>(`${V1}/tasks/${id}/block`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  updatePriority: (id: string, priority: number) =>
+    request<Task>(`${V1}/tasks/${id}/priority`, {
+      method: 'PATCH',
+      body: JSON.stringify({ priority }),
+    }),
+  updateLinks: (id: string, payload: UpdateTaskLinksPayload) =>
+    request<Task>(`${V1}/tasks/${id}/links`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  rate: (id: string, payload: RateTaskPayload) =>
+    request<TaskRating>(`${V1}/tasks/${id}/rate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listActivity: (id: string) => request<TaskActivity[]>(`${V1}/tasks/${id}/activity`),
+  listRequests: (id: string) => request<TaskRequest[]>(`${V1}/tasks/${id}/requests`),
+  createRequest: (id: string, payload: CreateRequestPayload) =>
+    request<TaskRequest>(`${V1}/tasks/${id}/requests`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listComments: (id: string) => request<TaskComment[]>(`${V1}/tasks/${id}/comments`),
+  postComment: (id: string, payload: CreateCommentPayload) =>
+    request<TaskComment>(`${V1}/tasks/${id}/comments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listRelations: (id: string) => request<TaskRelations>(`${V1}/tasks/${id}/relations`),
+  // 201 with no body — request<T> would JSON-parse and explode, so
+  // these go through requestVoid (which still funnels 401s to the
+  // global handler so an expired token logs the user out cleanly).
+  createRelation: (id: string, payload: CreateRelationPayload) =>
+    requestVoid(`${V1}/tasks/${id}/relations`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteRelation: (id: string, relationId: string) =>
+    requestVoid(`${V1}/tasks/${id}/relations/${relationId}`, { method: 'DELETE' }),
+};
+
+// ---------- Agents ----------
+
+export type HealthStatus = 'ONLINE' | 'IDLE' | 'STALE';
+
+export interface Agent {
+  id: string;
+  workspace_id: string;
+  name: string;
+  priority: number;
+  model: string | null;
+  created_at: string;
+  // Most recent api contact (heartbeat or JWT exchange). Null until
+  // the agent has authenticated at least once.
+  last_seen_at: string | null;
+  health_status: HealthStatus;
+}
+
+export interface AgentStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  accuracy_percent: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+export interface AgentDetail extends Agent {
+  stats: AgentStats;
+}
+
+export interface CreateAgentPayload {
+  name: string;
+  priority?: number;
+  model?: string | null;
+}
+
+export interface UpdateAgentPayload {
+  name?: string;
+  priority?: number;
+  model?: string | null;
+}
+
+export interface CreateAgentResponse extends Agent {
+  // Plaintext API key. Surfaced exactly once on creation; subsequent
+  // GETs return the safe Agent shape only — bcrypt-hashed on persist.
+  api_key: string;
+}
+
+export const agentsApi = {
+  list: () => request<Agent[]>(`${V1}/agents`),
+  get: (id: string) => request<AgentDetail>(`${V1}/agents/${id}`),
+  create: (payload: CreateAgentPayload) =>
+    request<CreateAgentResponse>(`${V1}/agents`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateAgentPayload) =>
+    request<Agent>(`${V1}/agents/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  // Returns 204 (no body). request<T> would JSON-parse — handle via
+  // requestVoid so 401s still flow to the global logout handler.
+  remove: (id: string) => requestVoid(`${V1}/agents/${id}`, { method: 'DELETE' }),
+};
+
+export interface RateTaskPayload {
+  score: number;
+  feedback?: string | null;
+}
+
+export interface TaskRating {
+  task_id: string;
+  rated_by_id: string;
+  rated_member_id: string | null;
+  score: number;
+  feedback: string | null;
+  created_at: string;
+}
+
+// ---------- Projects ----------
+
+export type ProjectStatus = 'ACTIVE' | 'ARCHIVED';
+
+export interface Project {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  status: ProjectStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProjectPayload {
+  name: string;
+  description?: string | null;
+}
+
+export interface UpdateProjectPayload {
+  name?: string;
+  description?: string | null;
+  status?: ProjectStatus;
+}
+
+export const projectsApi = {
+  list: (includeArchived = false) =>
+    request<Project[]>(`${V1}/projects${includeArchived ? '?include_archived=true' : ''}`),
+  get: (id: string) => request<Project>(`${V1}/projects/${id}`),
+  create: (payload: CreateProjectPayload) =>
+    request<Project>(`${V1}/projects`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateProjectPayload) =>
+    request<Project>(`${V1}/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) => requestVoid(`${V1}/projects/${id}`, { method: 'DELETE' }),
+  listTasks: (id: string) => request<Task[]>(`${V1}/projects/${id}/tasks`),
+  history: (id: string) => request<ProjectHistory>(`${V1}/projects/${id}/history`),
+};
+
+export interface ProjectHistorySummary {
+  total_tasks: number;
+  by_status: Record<TaskStatus, number>;
+  blocked_now: number;
+  avg_resolution_seconds: number | null;
+  total_tokens_used: number;
+  rated_count: number;
+  avg_rating: number | null;
+}
+
+export interface ProjectTaskHistory {
+  id: string;
+  public_id: string;
+  title: string;
+  status: TaskStatus;
+  is_blocked: boolean;
+  blocked_reason: string | null;
+  description: string | null;
+  priority: number;
+  assignee_id: string | null;
+  project_id: string | null;
+  team_id: string | null;
+  tokens_used: number;
+  created_at: string;
+  completed_at: string | null;
+  rating: TaskRating | null;
+  activities: TaskActivity[];
+  comments: TaskComment[];
+}
+
+export interface ProjectHistory {
+  project: Project;
+  summary: ProjectHistorySummary;
+  tasks: ProjectTaskHistory[];
+}
+
+// ---------- Departments ----------
+
+export interface Department {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateDepartmentPayload {
+  name: string;
+  description?: string | null;
+}
+
+export interface UpdateDepartmentPayload {
+  name?: string | null;
+  description?: string | null;
+}
+
+export const departmentsApi = {
+  list: (name?: string) => {
+    const qs = name ? `?name=${encodeURIComponent(name)}` : '';
+    return request<Department[]>(`${V1}/departments${qs}`);
+  },
+  get: (id: string) => request<Department>(`${V1}/departments/${id}`),
+  create: (payload: CreateDepartmentPayload) =>
+    request<Department>(`${V1}/departments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateDepartmentPayload) =>
+    request<Department>(`${V1}/departments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) => requestVoid(`${V1}/departments/${id}`, { method: 'DELETE' }),
+};
+
+// ---------- Teams ----------
+
+export interface TeamRecord {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  department_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTeamPayload {
+  name: string;
+  description?: string | null;
+  department_id?: string | null;
+}
+
+export interface UpdateTeamPayload {
+  name?: string | null;
+  description?: string | null;
+  department_id?: string | null;
+}
+
+export const requestsApi = {
+  listInbox: (teamId: string, status?: RequestStatus) => {
+    const qs = status ? `?status_filter=${status}` : '';
+    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs}`);
+  },
+  fulfill: (requestId: string, payload: FulfillRequestPayload) =>
+    request<TaskRequest>(`${V1}/requests/${requestId}/fulfill`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  reject: (requestId: string, payload: RejectRequestPayload) =>
+    request<TaskRequest>(`${V1}/requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
+export const teamsApi = {
+  list: (departmentId?: string) => {
+    const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : '';
+    return request<TeamRecord[]>(`${V1}/teams${qs}`);
+  },
+  create: (payload: CreateTeamPayload) =>
+    request<TeamRecord>(`${V1}/teams`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  update: (id: string, payload: UpdateTeamPayload) =>
+    request<TeamRecord>(`${V1}/teams/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) => requestVoid(`${V1}/teams/${id}`, { method: 'DELETE' }),
+};
+
+// ---------- Audit logs ----------
+
+export type AuditAction =
+  | 'CREATED'
+  | 'UPDATED'
+  | 'DELETED'
+  | 'SUSPENDED'
+  | 'SUSPENSION_REVOKED'
+  | 'ROLE_CHANGED'
+  | 'TEAM_ASSIGNED'
+  | 'TEAM_UNASSIGNED';
+
+export type AuditResourceType = 'WORKSPACE' | 'DEPARTMENT' | 'TEAM' | 'MEMBER';
+
+export interface AuditLog {
+  id: string;
+  workspace_id: string;
+  actor_member_id: string | null;
+  actor_name: string | null;
+  action: AuditAction;
+  resource_type: AuditResourceType;
+  resource_id: string | null;
+  // Free-form per AuditAction. Common shapes:
+  // - CREATED: {<field>: <value>, ...}
+  // - UPDATED: {<field>: {from, to}, ...}
+  // - DELETED: {<field>: <captured_value>, ...}
+  // - SUSPENDED / SUSPENSION_REVOKED: {member_name, member_email}
+  // - ROLE_CHANGED: {from, to, member_name}
+  // - TEAM_ASSIGNED / TEAM_UNASSIGNED: {to_team_id?, from_team_id?,
+  //                                     to_team_role?, from_team_role?,
+  //                                     member_name}
+  changes: Record<string, unknown>;
+  created_at: string;
+}
+
+export const auditApi = {
+  list: (opts: { limit?: number; before?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.before) params.set('before', opts.before);
+    const qs = params.toString();
+    return request<AuditLog[]>(`${V1}/audit/logs${qs ? `?${qs}` : ''}`);
+  },
 };

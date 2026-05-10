@@ -38,8 +38,18 @@ def member_repo() -> AsyncMock:
 
 
 @pytest.fixture
-def service(task_repo: AsyncMock, member_repo: AsyncMock) -> TaskService:
-    return TaskService(tasks=task_repo, members=member_repo)
+def service(
+    task_repo: AsyncMock,
+    member_repo: AsyncMock,
+    workspace_repo: AsyncMock,
+    seq_allocator: AsyncMock,
+) -> TaskService:
+    return TaskService(
+        tasks=task_repo,
+        members=member_repo,
+        workspaces=workspace_repo,
+        seq_allocator=seq_allocator,
+    )
 
 
 # ---------- success path ----------

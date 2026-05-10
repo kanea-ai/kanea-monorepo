@@ -13,6 +13,12 @@ class EmailAlreadyExistsError(DomainError):
     """Raised on signup when the email collides with an existing member."""
 
 
+class WorkspaceNameConflictError(DomainError):
+    """Raised on signup when the requested workspace name collides
+    with an existing one. Phase 1 enforces global uniqueness on
+    workspaces.name."""
+
+
 class InvalidMemberTypeError(DomainError):
     """Raised when an operation receives a member of the wrong type."""
 
@@ -48,3 +54,112 @@ class InviteExpiredError(DomainError):
 
 class InviteAlreadyAcceptedError(DomainError):
     """Raised when the invite has already been accepted; tokens are single-use."""
+
+
+class AgentNotFoundError(DomainError):
+    """Raised when an agent ID doesn't resolve to an AGENT-typed member in the
+    requester's workspace. Returned as a 404 — same shape as truly-missing so
+    cross-tenant probing reveals nothing."""
+
+
+class AgentHasCreatedTasksError(DomainError):
+    """Raised when DELETE /agents/{id} is attempted but the agent created tasks
+    that other members still own. Returned as 409 with guidance."""
+
+
+class TaskNotInDoneStateError(DomainError):
+    """Raised when rating a task that hasn't transitioned to DONE."""
+
+
+class TaskAlreadyRatedError(DomainError):
+    """Raised when a second rating is attempted on a task. Tokens are
+    single-shot — re-rating is a separate UX we haven't designed yet."""
+
+
+class ProjectNotFoundError(DomainError):
+    """Raised when a project id doesn't resolve in the requester's
+    workspace. Returned as 404 — same shape as truly-missing so cross-
+    tenant probing reveals nothing."""
+
+
+class ProjectNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace name
+    uniqueness constraint."""
+
+
+class DepartmentNotFoundError(DomainError):
+    """Raised when a department id doesn't resolve in the requester's
+    workspace. Returned as 404 — same shape as truly-missing so
+    cross-tenant probing reveals nothing."""
+
+
+class DepartmentNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace
+    department name uniqueness constraint."""
+
+
+class MemberSuspendedError(DomainError):
+    """Raised when a workspace-scoped JWT belongs to a suspended member.
+    The auth dependency catches this and maps to 403 Forbidden so the UI
+    can show a clear "your access to this workspace was revoked"
+    message; the underlying user can still log in to other workspaces."""
+
+
+class TeamNotFoundError(DomainError):
+    """Raised when a team id doesn't resolve in the requester's
+    workspace."""
+
+
+class TeamNameConflictError(DomainError):
+    """Raised when create/update would violate the per-workspace team
+    name uniqueness constraint."""
+
+
+class CrossTeamForbiddenError(DomainError):
+    """Raised when a non-admin / non-leadership member tries to create
+    a task on a team they don't belong to. Pushes them through the
+    cross-team request flow instead of letting them dump tasks
+    arbitrarily."""
+
+
+class TaskRequestNotFoundError(DomainError):
+    """Raised when a task request id can't be resolved or is cross-tenant."""
+
+
+class TaskRequestAlreadyResolvedError(DomainError):
+    """Raised when fulfill / reject is called on a non-PENDING request.
+    Makes the lifecycle a strict state machine — once resolved, the
+    record is immutable."""
+
+
+class TaskRequestForbiddenError(DomainError):
+    """Raised when the requester lacks the team-leadership rank needed
+    to fulfill / reject a request, or when a non-admin tries to file
+    a request against a task they don't own."""
+
+
+class TaskRelationSelfLinkError(DomainError):
+    """Raised when a caller tries to relate a task to itself. Caught at
+    the service boundary; the DB-level CHECK is the belt to the service's
+    braces."""
+
+
+class TaskRelationAlreadyExistsError(DomainError):
+    """Raised on a duplicate (source, target, type) tuple. Distinct from
+    a generic IntegrityError so the route can map to 409 cleanly."""
+
+
+class TaskRelationNotFoundError(DomainError):
+    """Raised when a relation id doesn't resolve, or when its task is
+    cross-tenant (404 to avoid leaking existence)."""
+
+
+class RatingForbiddenError(DomainError):
+    """Raised when the rater isn't the task creator. Only the issuing party
+    can rate the work — assignees can't self-rate or rate peers."""
+
+
+class NotificationNotFoundError(DomainError):
+    """Raised when a notification id doesn't resolve for the principal,
+    or when it's already read (the mark-read endpoint refuses no-op
+    second writes to keep the audit trail honest)."""

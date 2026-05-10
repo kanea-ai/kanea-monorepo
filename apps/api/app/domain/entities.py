@@ -4,7 +4,42 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from app.domain.enums import MemberRole, MemberType, OAuthProvider, TaskStatus
+from app.domain.enums import (
+    AuditAction,
+    AuditResourceType,
+    MemberRole,
+    MemberType,
+    NotificationType,
+    OAuthProvider,
+    ProjectStatus,
+    RequestStatus,
+    TaskActivityType,
+    TaskRelationType,
+    TaskStatus,
+    TeamRole,
+)
+
+
+@dataclass(slots=True)
+class User:
+    """Global human identity. One row per email across the whole tenant.
+    A User can hold memberships in multiple Workspaces (the
+    `members.user_id` FK is the join). Auth — password / OAuth — lives
+    here, not on members; multi-workspace login becomes a single
+    credential check.
+
+    AGENT-typed members don't have an associated User row; they auth
+    via the per-workspace API-key handshake (Credentials.agent_secret_hash).
+    """
+
+    id: UUID
+    email: str
+    full_name: str
+    password_hash: str | None = None
+    oauth_provider: OAuthProvider | None = None
+    oauth_id: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)
@@ -12,8 +47,31 @@ class Workspace:
     id: UUID
     name: str
     slug: str
+    # Short alpha prefix for human-readable task ids ("DEVOPS" -> DEVOPS-001).
+    # Always uppercase, derived from `name` on signup, capped at 8 chars.
+    task_prefix: str
+    # Monotonic counter incremented atomically when a task is created.
+    # Always points at the *next* seq to hand out.
+    next_task_seq: int
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(slots=True)
+class Department:
+    """Workspace-scoped grouping that sits one level above Teams.
+
+    A Department holds zero-or-more Teams (the join is on
+    teams.department_id, SET NULL on delete). Departments don't grant
+    permissions on their own — they're an organisational tag for the
+    UI's directory and team views."""
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    description: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)
@@ -21,8 +79,26 @@ class Team:
     id: UUID
     workspace_id: UUID
     name: str
-    created_at: datetime
-    updated_at: datetime
+    description: str | None = None
+    department_id: UUID | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class Project:
+    """Workspace-scoped goal. A Project groups Tasks toward a single
+    objective; tasks across the same Project can sit on different
+    Teams. Status flips between ACTIVE and ARCHIVED — archive hides
+    the project from default lists without deleting its tasks."""
+
+    id: UUID
+    workspace_id: UUID
+    name: str
+    status: ProjectStatus
+    description: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass(slots=True)
@@ -32,9 +108,28 @@ class Member:
     type: MemberType
     name: str
     priority: int
+    # Phase 1: HUMAN members link to a global User row; AGENTs don't.
+    # Enforced by a CHECK constraint in migration 0017.
+    user_id: UUID | None = None
     team_id: UUID | None = None
     email: str | None = None
-    role: MemberRole = MemberRole.MEMBER
+    role: MemberRole = MemberRole.WORKSPACE_USER
+    # Underlying LLM model identifier for AGENT-typed members. Free-form
+    # so the user can label however they want ("claude-opus-4-7", "gpt-5",
+    # "Custom: agent-pipeline-v2", etc.). Null on humans.
+    model: str | None = None
+    # Last time this member touched the api — stamped on agent JWT
+    # issuance and on POST /api/v1/agents/me/heartbeat. Drives the
+    # derived health_status pill on the agent detail view. Null on
+    # humans (we only surface it for agents).
+    last_seen_at: datetime | None = None
+    # Intra-team rank when team_id is set. Null when the member isn't
+    # on a team. Distinct from `role` (which is workspace-level).
+    team_role: TeamRole | None = None
+    # Workspace-scoped soft lock. When True, every workspace-scoped
+    # JWT this member holds is rejected at the auth dep with 403; the
+    # underlying User can still log in to other workspaces.
+    is_suspended: bool = False
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -50,7 +145,7 @@ class Member:
     def can_invite(self) -> bool:
         """OWNER and ADMIN can invite; MEMBER cannot. Same shape applies
         to most workspace-management actions."""
-        return self.role in (MemberRole.OWNER, MemberRole.ADMIN)
+        return self.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
 
 
 @dataclass(slots=True)
@@ -91,9 +186,180 @@ class Task:
     title: str
     status: TaskStatus
     priority: int
+    # Per-workspace integer. Combined with the workspace task_prefix it
+    # produces a human-readable id like ``DEVOPS-001``. Allocated at
+    # creation via an atomic UPDATE ... RETURNING on the workspace row.
+    seq: int = 0
     description: str | None = None
     assignee_id: UUID | None = None
+    # Optional links into the Workspace -> Project -> Task -> Team
+    # hierarchy. Both nullable: a backlog task lives without a project,
+    # an unowned task can live without a team. SET NULL on cascade so
+    # deleting a project/team doesn't orphan the task itself.
+    project_id: UUID | None = None
+    team_id: UUID | None = None
     due_at: datetime | None = None
+    # Blocked-flag is orthogonal to status. A task can be IN_PROGRESS
+    # and blocked at the same time. blocked_reason is only meaningful
+    # when is_blocked is true.
+    is_blocked: bool = False
     blocked_reason: str | None = None
+    completed_at: datetime | None = None
+    # Running total of LLM tokens an agent has spent on this task. Agents
+    # report it back through the status-update endpoint so it accumulates
+    # across iterations.
+    tokens_used: int = 0
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskRequest:
+    """A cross-team work request anchored to a source task. The
+    source task's team leadership (MANAGER / LEAD / HEAD) decides
+    whether to fulfill (mint a target task on requested_team_id and
+    link it via BLOCKS) or reject.
+
+    fulfilled_task_id holds the new task id once fulfilled; null
+    otherwise. resolver_member_id captures who acted on the request."""
+
+    id: UUID
+    source_task_id: UUID
+    requested_team_id: UUID | None
+    requester_member_id: UUID | None
+    suggested_title: str
+    suggested_description: str | None
+    justification: str | None
+    status: RequestStatus
+    fulfilled_task_id: UUID | None = None
+    reject_reason: str | None = None
+    resolver_member_id: UUID | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+    resolved_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class TaskRelation:
+    """One directed link between two tasks. Lives in its own table so
+    relations can be added/removed without touching the task rows."""
+
+    id: UUID
+    source_task_id: UUID
+    target_task_id: UUID
+    relation_type: TaskRelationType
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskActivity:
+    """One row of the append-only audit log on a task. The actor is
+    null after the member is deleted — the event still survives so the
+    agent can trace what happened."""
+
+    id: UUID
+    task_id: UUID
+    actor_member_id: UUID | None
+    event_type: TaskActivityType
+    # Free-form JSON payload — see TaskActivityType docstring for the
+    # per-event shape.
+    payload: dict
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskComment:
+    """One line of a task's discussion thread. Authors can be human or
+    agent members; `author_member_id` is null after the author is
+    deleted (FK SET NULL) so threads stay legible."""
+
+    id: UUID
+    task_id: UUID
+    author_member_id: UUID | None
+    body: str
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True)
+class TaskRating:
+    """A 0-100 score the issue creator leaves for the assignee after a
+    task lands in DONE. One rating per task (the primary key constraint
+    enforces it). Drives `accuracy_percent` on agent stats."""
+
+    id: UUID
+    task_id: UUID
+    rated_by_id: UUID
+    rated_member_id: UUID | None  # null after the rated member is deleted
+    score: int  # 0-100, validated at the schema layer
+    feedback: str | None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(slots=True, frozen=True)
+class AgentStats:
+    """Materialised at request time from queries against tasks +
+    task_ratings. Computed in one or two SQL aggregations rather than
+    Python-side iteration so it scales to workspaces with thousands of
+    tasks."""
+
+    assigned_count: int
+    completed_count: int
+    avg_resolution_seconds: float | None
+    accuracy_percent: float | None
+    last_activity_at: datetime | None
+    total_tokens_used: int
+
+
+@dataclass(slots=True)
+class Notification:
+    """A single inbox row for a user. The pointer fields are nullable
+    so deleting the source task / comment doesn't cascade-delete the
+    history; the denormalised `preview` keeps the bell readable even
+    after the source is gone."""
+
+    id: UUID
+    user_id: UUID
+    type: NotificationType
+    source_task_id: UUID | None
+    source_comment_id: UUID | None
+    source_member_id: UUID | None
+    preview: str
+    read_at: datetime | None
+    created_at: datetime
+
+
+@dataclass(slots=True)
+class AuditLog:
+    """One row of the unified workspace audit trail.
+
+    Captures org/RBAC events: a department was created, a team's
+    description changed, a member was suspended, etc. Per-task events
+    keep living in ``task_activities`` — that one's tied to the task
+    detail page, this one drives the workspace-wide /audit view.
+
+    ``actor_member_id`` is nullable because the FK is SET NULL: if the
+    actor is later deleted we keep the audit row (the *fact* that the
+    event happened still matters), we just lose the linked-member
+    surface.
+
+    ``resource_id`` is nullable for events that target the workspace
+    itself (e.g. workspace settings changes, which we don't write yet
+    but the schema supports).
+    """
+
+    id: UUID
+    workspace_id: UUID
+    actor_member_id: UUID | None
+    action: AuditAction
+    resource_type: AuditResourceType
+    resource_id: UUID | None
+    # Free-form JSON. Convention:
+    # - CREATED:           {"<field>": <new_value>, ...}
+    # - UPDATED:           {"<field>": {"from": <old>, "to": <new>}, ...}
+    # - DELETED:           {"<field>": <captured_value>, ...}
+    # - SUSPENDED / SUSPENSION_REVOKED / ROLE_CHANGED: shape per action.
+    changes: dict
+    created_at: datetime

@@ -16,8 +16,8 @@ export default function BlockedPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Blocked tasks</h1>
           <p className="text-sm text-slate-500">
-            Work an agent could not complete on its own. Review the agent&apos;s reason and either
-            unblock or cancel.
+            Work flagged as blocked by an agent or teammate. Review the reason and either unblock or
+            cancel.
           </p>
         </div>
         <Link
@@ -65,37 +65,46 @@ function BlockedTaskCard({ task }: { task: Task }) {
 
   return (
     <li className="rounded-lg border border-amber-200 bg-white shadow-sm">
-      <header className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-slate-900">{task.title}</h2>
-          {task.description ? (
-            <p className="mt-1 line-clamp-2 text-sm text-slate-600">{task.description}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
-            Blocked
-          </span>
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
-            P{task.priority}
-          </span>
-        </div>
-      </header>
+      {/* Title + reason are wrapped in a Link so the user can click
+          almost anywhere on the row to open the task. The action
+          footer below is intentionally outside the Link so the
+          Resume / Cancel buttons don't double-fire navigation. */}
+      <Link href={`/tasks/${task.id}`} className="block transition-colors hover:bg-slate-50">
+        <header className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <div className="min-w-0">
+            <p className="font-mono text-[10px] font-medium uppercase text-slate-400">
+              {task.public_id}
+            </p>
+            <h2 className="truncate text-base font-semibold text-slate-900 hover:text-indigo-700">
+              {task.title}
+            </h2>
+            {task.description ? (
+              <p className="mt-1 line-clamp-2 text-sm text-slate-600">{task.description}</p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
+              Blocked
+            </span>
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+              P{task.priority}
+            </span>
+          </div>
+        </header>
 
-      <div className="px-4 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-          Agent reported
-        </p>
-        {task.blocked_reason ? (
-          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
-            {task.blocked_reason}
-          </p>
-        ) : (
-          <p className="mt-1 text-sm italic text-slate-500">
-            No reason provided. Consider asking the agent to elaborate before unblocking.
-          </p>
-        )}
-      </div>
+        <div className="px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Reason</p>
+          {task.blocked_reason ? (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
+              {task.blocked_reason}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm italic text-slate-500">
+              No reason provided. Consider asking before unblocking.
+            </p>
+          )}
+        </div>
+      </Link>
 
       <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
         {confirmingCancel ? (

@@ -1,14 +1,20 @@
 'use client';
 
-// Landing page for the OAuth round-trip. The api's /oauth/{provider}/callback
-// handler 302s the browser here with `?token=…` (success) or `?error=…`
-// (provider denied / consent failed). We hydrate the AuthContext from the
-// token, then bounce to the dashboard.
+// OAuth round-trip landing. Phase 5 batch 1: the multi-workspace
+// picker has moved to /workspaces; this page now just hydrates the
+// AuthContext from the api's redirect query and bounces.
+//
+// Possible inputs (set by the api's /oauth/{provider}/callback):
+//   ?token=…                                     → single workspace
+//   ?selection_token=…&workspaces=<base64-json>  → multi workspace
+//   ?error=…                                     → provider denied / consent failed
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
-import { TOKEN_STORAGE_KEY } from '../../lib/api';
+import { type WorkspaceOption } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
+import { SELECTION_KEY } from '../../workspaces/page';
 
 export default function AuthCallbackPage() {
   return (
@@ -23,6 +29,7 @@ export default function AuthCallbackPage() {
 function CallbackHandler() {
   const params = useSearchParams();
   const router = useRouter();
+  const { setTokenFromOAuth } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,14 +40,35 @@ function CallbackHandler() {
     }
 
     const token = params.get('token');
-    if (!token) {
-      setError('missing_token');
+    if (token) {
+      setTokenFromOAuth(token);
+      router.replace('/');
       return;
     }
 
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    router.replace('/');
-  }, [params, router]);
+    const selectionToken = params.get('selection_token');
+    const workspacesB64 = params.get('workspaces');
+    if (selectionToken && workspacesB64) {
+      try {
+        const padded = workspacesB64.replace(/-/g, '+').replace(/_/g, '/');
+        const json = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
+        const workspaces = JSON.parse(json) as WorkspaceOption[];
+        // Hand off to /workspaces — the same picker that's reused by
+        // the password-login multi-workspace branch.
+        window.sessionStorage.setItem(
+          SELECTION_KEY,
+          JSON.stringify({ selection_token: selectionToken, workspaces }),
+        );
+        router.replace('/workspaces');
+        return;
+      } catch {
+        setError('invalid_workspaces_payload');
+        return;
+      }
+    }
+
+    setError('missing_token');
+  }, [params, router, setTokenFromOAuth]);
 
   if (error) {
     return (

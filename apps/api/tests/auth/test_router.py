@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_service
-from app.application.auth.schemas import TokenResponse
+from app.application.auth.schemas import LoginResponse, TokenResponse
 from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
 from app.main import app
 
@@ -28,7 +28,9 @@ def client(auth_service: AsyncMock) -> Iterator[TestClient]:
 
 
 def test_login_returns_token(client: TestClient, auth_service: AsyncMock) -> None:
-    auth_service.login.return_value = TokenResponse(access_token="jwt", expires_in=3600)
+    auth_service.login.return_value = LoginResponse(
+        requires_selection=False, access_token="jwt", expires_in=3600
+    )
 
     response = client.post(
         "/api/v1/auth/login",
@@ -36,12 +38,32 @@ def test_login_returns_token(client: TestClient, auth_service: AsyncMock) -> Non
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "access_token": "jwt",
-        "token_type": "bearer",
-        "expires_in": 3600,
-    }
+    body = response.json()
+    assert body["requires_selection"] is False
+    assert body["access_token"] == "jwt"
+    assert body["expires_in"] == 3600
     auth_service.login.assert_awaited_once()
+
+
+def test_login_multi_workspace_returns_selection(
+    client: TestClient, auth_service: AsyncMock
+) -> None:
+    auth_service.login.return_value = LoginResponse(
+        requires_selection=True,
+        selection_token="sel.jwt",
+        workspaces=[],  # populated by the real service
+    )
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "alice@kanea.ai", "password": "hunter2"},  # pragma: allowlist secret
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["requires_selection"] is True
+    assert body["selection_token"] == "sel.jwt"
+    assert body["access_token"] is None
 
 
 def test_login_invalid_credentials_returns_401(client: TestClient, auth_service: AsyncMock) -> None:
