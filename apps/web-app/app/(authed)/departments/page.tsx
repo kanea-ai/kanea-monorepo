@@ -14,12 +14,13 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Modal } from '../../components/Modal';
 import { Pagination } from '../../components/Pagination';
-import { ApiError, type Department, type TeamRecord } from '../../lib/api';
+import { ApiError, type Department, type Member, type TeamRecord } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
 import {
   useCreateDepartment,
   useDeleteDepartment,
   useDepartments,
+  useMembers,
   useTeams,
   useUpdateDepartment,
 } from '../../lib/queries';
@@ -214,6 +215,14 @@ function DepartmentRow({
       >
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-900">{department.name}</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Head:{' '}
+            {department.head ? (
+              <span className="font-medium text-slate-700">{department.head.name}</span>
+            ) : (
+              <span className="italic text-slate-400">none</span>
+            )}
+          </p>
           {department.description ? (
             <p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{department.description}</p>
           ) : (
@@ -245,14 +254,18 @@ function DepartmentRow({
 
 function CreateDepartmentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateDepartment();
+  const { data: membersPage } = useMembers({ humansOnly: true });
+  const members = membersPage?.items ?? [];
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [headId, setHeadId] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setName('');
       setDescription('');
+      setHeadId('');
       setError(null);
     }
   }, [open]);
@@ -264,6 +277,7 @@ function CreateDepartmentDialog({ open, onClose }: { open: boolean; onClose: () 
       await create.mutateAsync({
         name: name.trim(),
         description: description.trim() || null,
+        head_id: headId || null,
       });
       onClose();
     } catch (err) {
@@ -335,6 +349,28 @@ function CreateDepartmentDialog({ open, onClose }: { open: boolean; onClose: () 
             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
+        <div>
+          <label
+            htmlFor="dept_head"
+            className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600"
+          >
+            Head (optional)
+          </label>
+          <select
+            id="dept_head"
+            value={headId}
+            onChange={(e) => setHeadId(e.target.value)}
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            <option value="">No head</option>
+            {members.map((m: Member) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.email ? ` — ${m.email}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
         {error ? (
           <p role="alert" className="text-sm text-red-600">
             {error}
@@ -358,8 +394,11 @@ function DepartmentDetailDrawer({
 }) {
   const update = useUpdateDepartment();
   const remove = useDeleteDepartment();
+  const { data: membersPage } = useMembers({ humansOnly: true });
+  const members = membersPage?.items ?? [];
   const [name, setName] = useState(department.name);
   const [description, setDescription] = useState(department.description ?? '');
+  const [headId, setHeadId] = useState(department.head_id ?? '');
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -367,8 +406,9 @@ function DepartmentDetailDrawer({
   useEffect(() => {
     setName(department.name);
     setDescription(department.description ?? '');
+    setHeadId(department.head_id ?? '');
     setError(null);
-  }, [department.id, department.name, department.description]);
+  }, [department.id, department.name, department.description, department.head_id]);
 
   // Escape closes the drawer.
   useEffect(() => {
@@ -386,7 +426,8 @@ function DepartmentDetailDrawer({
     const trimmedDesc = description.trim();
     const nameChanged = trimmedName !== department.name && trimmedName !== '';
     const descChanged = trimmedDesc !== (department.description ?? '');
-    if (!nameChanged && !descChanged) return;
+    const headChanged = (headId || null) !== (department.head_id ?? null);
+    if (!nameChanged && !descChanged && !headChanged) return;
     try {
       await update.mutateAsync({
         id: department.id,
@@ -396,6 +437,9 @@ function DepartmentDetailDrawer({
           // and the dept previously had one — that's the api's clear
           // signal.
           ...(descChanged ? { description: trimmedDesc === '' ? null : trimmedDesc } : {}),
+          // Same clear-signal convention for head_id: '' (empty
+          // select) maps to null which the api treats as "clear".
+          ...(headChanged ? { head_id: headId || null } : {}),
         },
       });
     } catch (err) {
@@ -481,6 +525,28 @@ function DepartmentDetailDrawer({
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
+                <div>
+                  <label
+                    htmlFor="dept_drawer_head"
+                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                  >
+                    Head
+                  </label>
+                  <select
+                    id="dept_drawer_head"
+                    value={headId}
+                    onChange={(e) => setHeadId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">No head</option>
+                    {members.map((m: Member) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                        {m.email ? ` — ${m.email}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="flex justify-end">
                   <button
                     type="submit"
@@ -492,17 +558,31 @@ function DepartmentDetailDrawer({
                 </div>
               </form>
             ) : (
-              <section className="mb-5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                  Description
-                </p>
-                <p className="mt-1 text-sm text-slate-800">
-                  {department.description ? (
-                    department.description
-                  ) : (
-                    <span className="italic text-slate-500">No description.</span>
-                  )}
-                </p>
+              <section className="mb-5 space-y-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Head
+                  </p>
+                  <p className="mt-1 text-sm text-slate-800">
+                    {department.head ? (
+                      department.head.name
+                    ) : (
+                      <span className="italic text-slate-500">None.</span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Description
+                  </p>
+                  <p className="mt-1 text-sm text-slate-800">
+                    {department.description ? (
+                      department.description
+                    ) : (
+                      <span className="italic text-slate-500">No description.</span>
+                    )}
+                  </p>
+                </div>
               </section>
             )}
 

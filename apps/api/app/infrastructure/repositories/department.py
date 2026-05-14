@@ -15,6 +15,7 @@ def _to_entity(row: DepartmentModel) -> Department:
         workspace_id=row.workspace_id,
         name=row.name,
         description=row.description,
+        head_id=row.head_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -56,6 +57,7 @@ class SqlAlchemyDepartmentRepository:
             workspace_id=department.workspace_id,
             name=department.name,
             description=department.description,
+            head_id=department.head_id,
         )
         self._session.add(row)
         await self._session.flush()
@@ -69,6 +71,8 @@ class SqlAlchemyDepartmentRepository:
         name: str | None = None,
         description: str | None = None,
         clear_description: bool = False,
+        head_id: UUID | None = None,
+        clear_head: bool = False,
     ) -> Department:
         from app.domain.exceptions import DepartmentNotFoundError
 
@@ -81,6 +85,10 @@ class SqlAlchemyDepartmentRepository:
             row.description = None
         elif description is not None:
             row.description = description
+        if clear_head:
+            row.head_id = None
+        elif head_id is not None:
+            row.head_id = head_id
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
@@ -93,3 +101,8 @@ class SqlAlchemyDepartmentRepository:
             raise DepartmentNotFoundError("department not found")
         await self._session.delete(row)
         await self._session.flush()
+
+    async def get_for_head(self, head_member_id: UUID) -> Department | None:
+        stmt = select(DepartmentModel).where(DepartmentModel.head_id == head_member_id)
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _to_entity(row) if row is not None else None

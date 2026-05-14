@@ -343,7 +343,7 @@ class MeService:
         else:
             team_role = member.team_role
             on_team = member.team_id is not None
-            if on_team and team_role in (TeamRole.HEAD, TeamRole.MANAGER):
+            if on_team and team_role is TeamRole.MANAGER:
                 scope_label = "Projects you oversee"
                 scope_team_id = member.team_id
                 scope_project_ids = await self.tasks.list_project_ids_for_team(

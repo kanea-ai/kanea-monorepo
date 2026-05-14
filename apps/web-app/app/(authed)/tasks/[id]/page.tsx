@@ -143,8 +143,11 @@ function SidePanel({ task }: { task: Task }) {
   const [openBlock, setOpenBlock] = useState(false);
 
   // Priority editor RBAC mirrors the api: workspace OWNER/ADMIN, or
-  // a HEAD/MANAGER on the task's team. The api still enforces this
-  // — we hide the control to avoid showing actions that 403.
+  // the MANAGER on the task's team. (Department-head bypass also
+  // applies on the api side, but the UI doesn't have the
+  // task-team->department->head_id link cheaply here — the api 403
+  // is the safety net for that edge case.) The api still enforces
+  // this — we hide the control to avoid showing actions that 403.
   const me = members.find((m) => m.id === principal?.member_id);
   const canEditPriority =
     principal?.role === 'WORKSPACE_OWNER' ||
@@ -152,7 +155,7 @@ function SidePanel({ task }: { task: Task }) {
     (me != null &&
       task.team_id != null &&
       me.team_id === task.team_id &&
-      (me.team_role === 'HEAD' || me.team_role === 'MANAGER'));
+      me.team_role === 'MANAGER');
 
   const onChangeStatus = (e: React.ChangeEvent<HTMLSelectElement>) => {
     updateStatus.mutate({ id: task.id, payload: { status: e.target.value as Task['status'] } });

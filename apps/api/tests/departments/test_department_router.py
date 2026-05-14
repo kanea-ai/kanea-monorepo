@@ -87,6 +87,8 @@ def _stub_dept(workspace_id: UUID) -> DepartmentResponse:
         workspace_id=workspace_id,
         name="Engineering",
         description="x",
+        head_id=None,
+        head=None,
         created_at=now,
         updated_at=now,
     )

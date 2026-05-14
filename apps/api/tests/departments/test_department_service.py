@@ -25,12 +25,14 @@ from app.application.departments.schemas import (
 )
 from app.application.departments.service import DepartmentService
 from app.application.tasks.schemas import Principal
-from app.domain.entities import Department
+from app.domain.entities import Department, Member
 from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
+    DepartmentHeadNotInWorkspaceError,
     DepartmentNameConflictError,
     DepartmentNotFoundError,
     ForbiddenError,
+    MemberAlreadyDepartmentHeadError,
 )
 
 
@@ -45,13 +47,29 @@ def _principal(*, role: MemberRole = MemberRole.WORKSPACE_OWNER, workspace_id=No
     )
 
 
-def _dept(workspace_id) -> Department:
+def _dept(workspace_id, *, head_id=None) -> Department:
     now = datetime.now(UTC)
     return Department(
         id=uuid4(),
         workspace_id=workspace_id,
         name="Engineering",
         description="Builds the product.",
+        head_id=head_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _member(workspace_id, *, name: str = "Jane") -> Member:
+    now = datetime.now(UTC)
+    return Member(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        type=MemberType.HUMAN,
+        name=name,
+        email=f"{name.lower()}@example.com",
+        priority=2,
+        role=MemberRole.WORKSPACE_ADMIN,
         created_at=now,
         updated_at=now,
     )
@@ -59,12 +77,22 @@ def _dept(workspace_id) -> Department:
 
 @pytest.fixture
 def repo() -> AsyncMock:
+    r = AsyncMock()
+    # Default: no other department is headed by this member. Tests
+    # that exercise the conflict explicitly override this.
+    r.get_for_head.return_value = None
+    return r
+
+
+@pytest.fixture
+def members() -> AsyncMock:
+    """Mock MemberRepository — needed for head_id validation."""
     return AsyncMock()
 
 
 @pytest.fixture
-def service(repo: AsyncMock) -> DepartmentService:
-    return DepartmentService(departments=repo)
+def service(repo: AsyncMock, members: AsyncMock) -> DepartmentService:
+    return DepartmentService(departments=repo, members=members)
 
 
 # ---------- list / get ----------
@@ -128,6 +156,83 @@ async def test_create_name_conflict_raises(service: DepartmentService, repo: Asy
         await service.create(CreateDepartmentRequest(name="Eng"), p)
 
 
+# ---------- create with head_id ----------
+
+
+async def test_create_with_head_persists_head_id(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """When head_id is supplied and resolves to a workspace member,
+    it lands on the persisted Department entity and the response
+    embeds a Head summary."""
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    head = _member(p.workspace_id, name="Alice")
+    members.get_by_id.return_value = head
+    repo.create.side_effect = lambda dept: dept  # passthrough
+
+    response = await service.create(CreateDepartmentRequest(name="Eng", head_id=head.id), p)
+
+    members.get_by_id.assert_awaited_once_with(head.id)
+    created = repo.create.await_args.args[0]
+    assert created.head_id == head.id
+    assert response.head_id == head.id
+    assert response.head is not None
+    assert response.head.id == head.id
+    assert response.head.name == "Alice"
+
+
+async def test_create_with_head_in_other_workspace_raises(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    foreign_head = _member(uuid4(), name="Eve")  # different workspace
+    members.get_by_id.return_value = foreign_head
+    with pytest.raises(DepartmentHeadNotInWorkspaceError):
+        await service.create(CreateDepartmentRequest(name="Eng", head_id=foreign_head.id), p)
+    repo.create.assert_not_called()
+
+
+async def test_create_with_unknown_head_raises(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    members.get_by_id.return_value = None
+    with pytest.raises(DepartmentHeadNotInWorkspaceError):
+        await service.create(CreateDepartmentRequest(name="Eng", head_id=uuid4()), p)
+    repo.create.assert_not_called()
+
+
+async def test_create_without_head_does_not_lookup(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """When head_id is omitted, the service must not call the member
+    lookup. Saves a query on the common create-without-head path."""
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    repo.create.side_effect = lambda dept: dept
+    await service.create(CreateDepartmentRequest(name="Eng"), p)
+    members.get_by_id.assert_not_called()
+
+
+async def test_create_conflicts_when_head_already_heads_other_dept(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """A member can only head ONE department. If they already head
+    another, the create call must surface
+    ``MemberAlreadyDepartmentHeadError`` (mapped to 409 at the
+    route) — the repo is NEVER asked to create the row."""
+    p = _principal(role=MemberRole.WORKSPACE_ADMIN)
+    head = _member(p.workspace_id, name="Alice")
+    members.get_by_id.return_value = head
+    existing = _dept(p.workspace_id, head_id=head.id)
+    repo.get_for_head.return_value = existing
+
+    with pytest.raises(MemberAlreadyDepartmentHeadError):
+        await service.create(CreateDepartmentRequest(name="Eng", head_id=head.id), p)
+
+    repo.get_for_head.assert_awaited_once_with(head.id)
+    repo.create.assert_not_called()
+
+
 # ---------- update ----------
 
 
@@ -161,7 +266,12 @@ async def test_update_clears_description_explicitly(
         p,
     )
     repo.update.assert_awaited_once_with(
-        target.id, name=None, description=None, clear_description=True
+        target.id,
+        name=None,
+        description=None,
+        clear_description=True,
+        head_id=None,
+        clear_head=False,
     )
 
 
@@ -174,8 +284,117 @@ async def test_update_omits_description_field(service: DepartmentService, repo: 
 
     await service.update(target.id, UpdateDepartmentRequest(name="Eng2"), p)
     repo.update.assert_awaited_once_with(
-        target.id, name="Eng2", description=None, clear_description=False
+        target.id,
+        name="Eng2",
+        description=None,
+        clear_description=False,
+        head_id=None,
+        clear_head=False,
     )
+
+
+# ---------- update head_id ----------
+
+
+async def test_update_sets_head(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    p = _principal()
+    target = _dept(p.workspace_id)
+    head = _member(p.workspace_id, name="Bob")
+    repo.get_by_id.return_value = target
+    members.get_by_id.return_value = head
+    repo.update.return_value = _dept(p.workspace_id, head_id=head.id)
+
+    response = await service.update(target.id, UpdateDepartmentRequest(head_id=head.id), p)
+    repo.update.assert_awaited_once_with(
+        target.id,
+        name=None,
+        description=None,
+        clear_description=False,
+        head_id=head.id,
+        clear_head=False,
+    )
+    assert response.head_id == head.id
+    assert response.head is not None and response.head.id == head.id
+
+
+async def test_update_clears_head_explicitly(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """head_id=null in the body clears the FK rather than leaving it
+    untouched. Mirrors the description-clear contract."""
+    p = _principal()
+    target = _dept(p.workspace_id, head_id=uuid4())
+    repo.get_by_id.return_value = target
+    repo.update.return_value = _dept(p.workspace_id, head_id=None)
+
+    await service.update(
+        target.id,
+        UpdateDepartmentRequest.model_validate({"head_id": None}),
+        p,
+    )
+    repo.update.assert_awaited_once_with(
+        target.id,
+        name=None,
+        description=None,
+        clear_description=False,
+        head_id=None,
+        clear_head=True,
+    )
+    members.get_by_id.assert_not_called()
+
+
+async def test_update_head_other_workspace_raises(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    p = _principal()
+    target = _dept(p.workspace_id)
+    repo.get_by_id.return_value = target
+    members.get_by_id.return_value = _member(uuid4(), name="Eve")
+    with pytest.raises(DepartmentHeadNotInWorkspaceError):
+        await service.update(target.id, UpdateDepartmentRequest(head_id=uuid4()), p)
+    repo.update.assert_not_called()
+
+
+async def test_update_conflicts_when_head_already_heads_other_dept(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """Updating dept B to set head_id=X must conflict if X is already
+    heading some other department A."""
+    p = _principal()
+    target = _dept(p.workspace_id)
+    head = _member(p.workspace_id, name="Alice")
+    other_dept = _dept(p.workspace_id, head_id=head.id)
+    repo.get_by_id.return_value = target
+    members.get_by_id.return_value = head
+    repo.get_for_head.return_value = other_dept
+
+    with pytest.raises(MemberAlreadyDepartmentHeadError):
+        await service.update(target.id, UpdateDepartmentRequest(head_id=head.id), p)
+    repo.update.assert_not_called()
+
+
+async def test_update_keeping_same_head_does_not_conflict(
+    service: DepartmentService, repo: AsyncMock, members: AsyncMock
+) -> None:
+    """The conflict check must exclude the department being edited
+    itself — re-saving a department with its already-current head is
+    a no-op, not a conflict."""
+    p = _principal()
+    head = _member(p.workspace_id, name="Alice")
+    target = _dept(p.workspace_id, head_id=head.id)
+    repo.get_by_id.return_value = target
+    members.get_by_id.return_value = head
+    # The repo would normally return ``target`` for this lookup —
+    # which is the SAME department being edited. Service must treat
+    # that as "no other department headed by this member".
+    repo.get_for_head.return_value = target
+    repo.update.return_value = target
+
+    response = await service.update(target.id, UpdateDepartmentRequest(head_id=head.id), p)
+    assert response.head_id == head.id
+    repo.update.assert_awaited_once()
 
 
 # ---------- delete ----------

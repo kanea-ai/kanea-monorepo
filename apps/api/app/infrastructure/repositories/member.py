@@ -66,6 +66,17 @@ class SqlAlchemyMemberRepository:
         row = await self._session.get(MemberModel, member_id)
         return _to_entity(row) if row is not None else None
 
+    async def list_by_ids(self, member_ids: list[UUID]) -> list[Member]:
+        """Bulk lookup. Used by surfaces that resolve a denormalised
+        ``member_id`` set into the member rows in one round-trip —
+        e.g. DepartmentService building head summaries for the
+        departments list."""
+        if not member_ids:
+            return []
+        stmt = select(MemberModel).where(MemberModel.id.in_(member_ids))
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
     async def create(self, member: Member) -> Member:
         row = MemberModel(
             id=member.id,

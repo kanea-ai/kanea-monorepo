@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities import Team
-from app.infrastructure.db.models import TeamModel
+from app.infrastructure.db.models import DepartmentModel, TeamModel
 
 
 def _to_entity(row: TeamModel) -> Team:
@@ -104,3 +104,24 @@ class SqlAlchemyTeamRepository:
             raise TeamNotFoundError("team not found")
         await self._session.delete(row)
         await self._session.flush()
+
+    async def get_department_head_for_team(self, team_id: UUID) -> UUID | None:
+        """Single-query lookup of the head_id of the department a team
+        belongs to. Returns None if the team has no department, the
+        department has no head, or the team itself is missing.
+        """
+        stmt = (
+            select(DepartmentModel.head_id)
+            .join(TeamModel, TeamModel.department_id == DepartmentModel.id)
+            .where(TeamModel.id == team_id)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list_team_ids_for_department_head(self, member_id: UUID) -> list[UUID]:
+        stmt = (
+            select(TeamModel.id)
+            .join(DepartmentModel, DepartmentModel.id == TeamModel.department_id)
+            .where(DepartmentModel.head_id == member_id)
+        )
+        result = await self._session.execute(stmt)
+        return [row for row in result.scalars().all()]

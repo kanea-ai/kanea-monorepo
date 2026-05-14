@@ -39,3 +39,19 @@ class TeamRepository(Protocol):
         clear_department: bool = False,
     ) -> Team: ...
     async def delete(self, team_id: UUID) -> None: ...
+    async def get_department_head_for_team(self, team_id: UUID) -> UUID | None:
+        """Walk the team -> department -> head_id link in a single query.
+
+        Returns the head member's id, or ``None`` if the team has no
+        department or the department has no head. Used by the
+        leadership predicate in TaskService so a Department Head
+        inherits team-leader rights on every team in their department.
+        """
+        ...
+
+    async def list_team_ids_for_department_head(self, member_id: UUID) -> list[UUID]:
+        """Inverse lookup: every team that sits under a department
+        whose ``head_id`` == ``member_id``. Used by AuditLogService to
+        widen a Priority-3 Admin's reach: a department head oversees
+        all teams in their department, not just the one they're on."""
+        ...

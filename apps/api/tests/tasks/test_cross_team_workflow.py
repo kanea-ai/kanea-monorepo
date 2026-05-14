@@ -504,6 +504,120 @@ async def test_unknown_request_404s(service: TaskService, requests_repo: AsyncMo
         await service.fulfill_request(uuid4(), FulfillRequestPayload(), p)
 
 
+# ---------- department-head bypass (added with migration 0022) ----------
+#
+# When TeamRole.HEAD was removed, the "Department Head" concept moved
+# onto ``departments.head_id``. The leadership predicates now query
+# ``TeamRepository.get_department_head_for_team`` and accept a member
+# who is the head of the team's department, in addition to the
+# team-level (MANAGER / LEAD) and workspace-level (admin / owner)
+# bypasses.
+
+
+async def test_department_head_can_target_team_outside_their_team(
+    service: TaskService,
+    members: AsyncMock,
+    teams_repo: AsyncMock,
+    task_repo: AsyncMock,
+) -> None:
+    """A USER who is the head of department D can create tasks on
+    any team in D, even though their own ``members.team_id`` is some
+    other team."""
+    p = make_principal(role=MemberRole.WORKSPACE_USER)
+    target_team = _team(p.workspace_id)
+    teams_repo.get_by_id.return_value = target_team
+    members.get_by_id.return_value = _member(
+        workspace_id=p.workspace_id,
+        member_id=p.member_id,
+        team_id=uuid4(),  # member sits on a different team
+        team_role=TeamRole.MEMBER,
+    )
+    # The principal is head of the target team's department.
+    teams_repo.get_department_head_for_team.return_value = p.member_id
+    task_repo.create.side_effect = lambda t: t
+
+    await service.create(CreateTaskRequest(title="x", team_id=target_team.id), p)
+
+    teams_repo.get_department_head_for_team.assert_awaited_once_with(target_team.id)
+    task_repo.create.assert_awaited_once()
+
+
+async def test_non_department_head_still_blocked_cross_team(
+    service: TaskService,
+    members: AsyncMock,
+    teams_repo: AsyncMock,
+    task_repo: AsyncMock,
+) -> None:
+    """The department-head check must NOT leak as a generic bypass:
+    a member who is NOT the head of the target team's department
+    still gets blocked."""
+    p = make_principal(role=MemberRole.WORKSPACE_USER)
+    target_team = _team(p.workspace_id)
+    teams_repo.get_by_id.return_value = target_team
+    members.get_by_id.return_value = _member(
+        workspace_id=p.workspace_id,
+        member_id=p.member_id,
+        team_id=uuid4(),
+        team_role=TeamRole.MEMBER,
+    )
+    # Department exists but its head is someone else.
+    teams_repo.get_department_head_for_team.return_value = uuid4()
+
+    with pytest.raises(CrossTeamForbiddenError):
+        await service.create(CreateTaskRequest(title="x", team_id=target_team.id), p)
+    task_repo.create.assert_not_called()
+
+
+async def test_department_head_can_fulfill_source_team_request(
+    service: TaskService,
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    teams_repo: AsyncMock,
+    requests_repo: AsyncMock,
+    relations: AsyncMock,
+) -> None:
+    """A USER who is the head of the department containing the
+    source task's team can fulfil a cross-team request even though
+    they're not on the source team and hold no team_role on it."""
+    p = make_principal(role=MemberRole.WORKSPACE_USER)
+    source_team = _team(p.workspace_id, name="Source")
+    target_team = _team(p.workspace_id, name="Target")
+    source = make_task(workspace_id=p.workspace_id)
+    source.team_id = source_team.id
+    request_row = _request(source_task_id=source.id, requested_team_id=target_team.id)
+
+    requests_repo.get_by_id.return_value = request_row
+    task_repo.get_by_id.return_value = source
+    members.get_by_id.return_value = _member(
+        workspace_id=p.workspace_id,
+        member_id=p.member_id,
+        team_id=uuid4(),  # not on the source team
+        team_role=TeamRole.MEMBER,
+    )
+    # Source team belongs to a department this user heads.
+    teams_repo.get_department_head_for_team.return_value = p.member_id
+    teams_repo.get_by_id.return_value = target_team
+    task_repo.create.side_effect = lambda t: t
+    requests_repo.mark_fulfilled.side_effect = lambda *_a, **kw: TaskRequest(
+        id=request_row.id,
+        source_task_id=source.id,
+        requested_team_id=request_row.requested_team_id,
+        requester_member_id=request_row.requester_member_id,
+        suggested_title=request_row.suggested_title,
+        suggested_description=None,
+        justification=None,
+        status=RequestStatus.FULFILLED,
+        fulfilled_task_id=kw["fulfilled_task_id"],
+        resolver_member_id=kw["resolver_member_id"],
+        resolved_at=kw["resolved_at"],
+        created_at=request_row.created_at,
+        updated_at=request_row.updated_at,
+    )
+
+    response = await service.fulfill_request(request_row.id, FulfillRequestPayload(), p)
+    assert response.status is RequestStatus.FULFILLED
+
+
 async def test_cross_tenant_request_404s(
     service: TaskService,
     requests_repo: AsyncMock,

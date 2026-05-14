@@ -28,7 +28,8 @@ async def list_audit_logs(
 
     - Owner: every row in the workspace.
     - Admin, priority ≤ 2: department/team/member rows.
-    - Admin, priority ≤ 3: team rows for teams they HEAD or MANAGER.
+    - Admin, priority ≤ 3: team rows for teams they MANAGE on, plus
+      every team in any department they HEAD.
     - Anyone else: empty page (the route guard rejects USER role
       first, so this branch is only hit by unusual admin priorities).
 

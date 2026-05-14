@@ -98,6 +98,21 @@ class DepartmentNameConflictError(DomainError):
     department name uniqueness constraint."""
 
 
+class DepartmentHeadNotInWorkspaceError(DomainError):
+    """Raised when ``head_id`` on a department create/update does not
+    resolve to a member of the same workspace. Mapped to 422 by the
+    route — it's a request-body validation failure, not a missing
+    resource."""
+
+
+class MemberAlreadyDepartmentHeadError(DomainError):
+    """Raised when ``head_id`` on a department create/update would
+    cause a member to head more than one department. A member can be
+    the head of at most one Department (one-to-one constraint, also
+    enforced by a partial unique index on ``departments.head_id``).
+    Mapped to 409 at the route."""
+
+
 class MemberSuspendedError(DomainError):
     """Raised when a workspace-scoped JWT belongs to a suspended member.
     The auth dependency catches this and maps to 403 Forbidden so the UI

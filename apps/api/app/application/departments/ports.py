@@ -18,6 +18,14 @@ class DepartmentRepository(Protocol):
         limit: int | None = None,
     ) -> tuple[list[Department], int]: ...
     async def create(self, department: Department) -> Department: ...
+    async def get_for_head(self, head_member_id: UUID) -> Department | None:
+        """Reverse lookup: the (at most one) Department whose
+        ``head_id`` equals the given member. ``None`` if no
+        department is headed by this member. Used by the service
+        layer to enforce the one-department-per-head rule before
+        attempting the write."""
+        ...
+
     async def update(
         self,
         department_id: UUID,
@@ -25,5 +33,7 @@ class DepartmentRepository(Protocol):
         name: str | None = None,
         description: str | None = None,
         clear_description: bool = False,
+        head_id: UUID | None = None,
+        clear_head: bool = False,
     ) -> Department: ...
     async def delete(self, department_id: UUID) -> None: ...

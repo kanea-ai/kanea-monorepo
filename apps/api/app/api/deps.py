@@ -254,8 +254,9 @@ def get_audit_log_repository(session: SessionDep) -> AuditLogRepository:
 def get_audit_log_service(
     audit_logs: Annotated[AuditLogRepository, Depends(get_audit_log_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    teams: Annotated[TeamRepository, Depends(get_team_repository)],
 ) -> AuditLogService:
-    return AuditLogService(audit_logs=audit_logs, members=members)
+    return AuditLogService(audit_logs=audit_logs, members=members, teams=teams)
 
 
 AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
@@ -264,8 +265,9 @@ AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
 def get_department_service(
     departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
     audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
 ) -> DepartmentService:
-    return DepartmentService(departments=departments, audit_logs=audit_logs)
+    return DepartmentService(departments=departments, audit_logs=audit_logs, members=members)
 
 
 DepartmentServiceDep = Annotated[DepartmentService, Depends(get_department_service)]

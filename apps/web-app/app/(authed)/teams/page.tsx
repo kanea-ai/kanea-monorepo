@@ -774,7 +774,6 @@ function DrawerMemberRow({
               onChange={(e) => onChangeRole(e.target.value as TeamRole)}
               className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px]"
             >
-              <option value="HEAD">HEAD</option>
               <option value="MANAGER">MANAGER</option>
               <option value="LEAD">LEAD</option>
               <option value="MEMBER">MEMBER</option>
@@ -977,16 +976,14 @@ function InboxRequestRow({ request }: { request: TaskRequest }) {
 
 function roleRank(role: TeamRole | null): number {
   switch (role) {
-    case 'HEAD':
-      return 0;
     case 'MANAGER':
-      return 1;
+      return 0;
     case 'LEAD':
-      return 2;
+      return 1;
     case 'MEMBER':
-      return 3;
+      return 2;
     default:
-      return 4;
+      return 3;
   }
 }
 
@@ -999,13 +996,11 @@ function TeamRolePill({ role }: { role: TeamRole | null }) {
     );
   }
   const tone =
-    role === 'HEAD'
-      ? 'bg-indigo-100 text-indigo-800'
-      : role === 'MANAGER'
-        ? 'bg-amber-100 text-amber-800'
-        : role === 'LEAD'
-          ? 'bg-blue-100 text-blue-800'
-          : 'bg-slate-100 text-slate-700';
+    role === 'MANAGER'
+      ? 'bg-amber-100 text-amber-800'
+      : role === 'LEAD'
+        ? 'bg-blue-100 text-blue-800'
+        : 'bg-slate-100 text-slate-700';
   return (
     <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase ${tone}`}>
       {role}

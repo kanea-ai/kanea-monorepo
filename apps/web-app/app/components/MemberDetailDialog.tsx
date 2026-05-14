@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiError, type Member, type MemberRole, type TeamRole } from '../lib/api';
 import {
   useAdminSetMemberPassword,
+  useDepartments,
   useMemberStats,
   useSetMemberSuspension,
   useSetMemberTeam,
@@ -44,6 +45,27 @@ export function MemberDetailDialog({
   const setSuspension = useSetMemberSuspension();
   const { data: teamsPage } = useTeams();
   const teams = teamsPage?.items ?? [];
+  // Departments are needed in two places: (a) to infer the member's
+  // department from their team, and (b) to flag whether they're a
+  // Department Head (departments.head_id === member.id). Both reads
+  // share a single fetch — TanStack Query dedupes the call.
+  const { data: departmentsPage } = useDepartments();
+  const departments = departmentsPage?.items ?? [];
+  const memberTeam = useMemo(
+    () => teams.find((t) => t.id === member.team_id) ?? null,
+    [teams, member.team_id],
+  );
+  const teamDepartment = useMemo(
+    () =>
+      memberTeam?.department_id
+        ? (departments.find((d) => d.id === memberTeam.department_id) ?? null)
+        : null,
+    [departments, memberTeam],
+  );
+  const headedDepartment = useMemo(
+    () => departments.find((d) => d.head_id === member.id) ?? null,
+    [departments, member.id],
+  );
   const { data: stats, isLoading: statsLoading } = useMemberStats(member.id);
   // The suspension flow is destructive enough (kicks the member out
   // of every workspace request) that we route it through a confirm
@@ -272,7 +294,6 @@ export function MemberDetailDialog({
                 onChange={(e) => setTeamRole(e.target.value as TeamRole)}
                 className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
               >
-                <option value="HEAD">HEAD</option>
                 <option value="MANAGER">MANAGER</option>
                 <option value="LEAD">LEAD</option>
                 <option value="MEMBER">MEMBER</option>
@@ -281,6 +302,25 @@ export function MemberDetailDialog({
               <span className="text-sm text-slate-800">{member.team_role ?? '—'}</span>
             )}
           </Field>
+          {/* Read-only Department — inferred from the member's team
+              and shown here so the user sees the full org-chart slot
+              they sit in. Editing the department itself happens in
+              /departments. */}
+          <Field label="Department">
+            <span className="text-sm text-slate-800">
+              {teamDepartment ? teamDepartment.name : '—'}
+            </span>
+          </Field>
+          {/* Department Head badge — surfaced when this member is
+              ``departments.head_id`` of any department. Distinct from
+              the per-team rank above so leadership is unambiguous. */}
+          {headedDepartment ? (
+            <Field label="Department role">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                Head of {headedDepartment.name}
+              </span>
+            </Field>
+          ) : null}
           {isAdmin ? (
             <div className="mt-2 flex justify-end">
               <button

@@ -354,7 +354,7 @@ export interface MeProfile {
   role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
   type: 'HUMAN' | 'AGENT';
   team_id: string | null;
-  team_role: 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER' | null;
+  team_role: TeamRole | null;
 }
 
 export interface MeStats {
@@ -463,7 +463,10 @@ export interface NotificationCount {
 // (which uses MEMBER too) and to read clearly in JWTs / audit log.
 export type MemberRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
 export type MemberKind = 'HUMAN' | 'AGENT';
-export type TeamRole = 'HEAD' | 'MANAGER' | 'LEAD' | 'MEMBER';
+// HEAD was removed in migration 0022 — Department Head is now an
+// attribute of a Department (``Department.head_id``), not a per-team
+// rank. The remaining TeamRole values are pure intra-team ranks.
+export type TeamRole = 'MANAGER' | 'LEAD' | 'MEMBER';
 
 export interface Member {
   id: string;
@@ -865,11 +868,23 @@ export interface ProjectHistory {
 
 // ---------- Departments ----------
 
+export interface DepartmentHead {
+  id: string;
+  name: string;
+  email: string | null;
+  type: MemberKind;
+}
+
 export interface Department {
   id: string;
   workspace_id: string;
   name: string;
   description: string | null;
+  /** Member id of the Department Head, or null when no head is set. */
+  head_id: string | null;
+  /** Denormalised head summary so the UI can render the name without a
+   *  follow-up /members/{id} call. Null when ``head_id`` is null. */
+  head: DepartmentHead | null;
   created_at: string;
   updated_at: string;
 }
@@ -877,11 +892,17 @@ export interface Department {
 export interface CreateDepartmentPayload {
   name: string;
   description?: string | null;
+  /** Optional Department Head. Must reference a member of the same
+   *  workspace; the api returns 422 otherwise. */
+  head_id?: string | null;
 }
 
 export interface UpdateDepartmentPayload {
   name?: string | null;
   description?: string | null;
+  /** Setting to null clears the head; omitting the field leaves it
+   *  unchanged. */
+  head_id?: string | null;
 }
 
 export const departmentsApi = {
