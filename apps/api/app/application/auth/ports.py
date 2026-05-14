@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
+from app.application.auth.oauth import OAuthIdentity
 from app.domain.entities import Credentials, Member, User, Workspace
 from app.domain.enums import OAuthProvider
 
@@ -67,3 +68,10 @@ class TokenService(Protocol):
 
     def decode_selection_token(self, token: str) -> UUID:
         """Verify a selection token and return the user_id sub."""
+
+    def issue_onboarding_token(self, identity: OAuthIdentity) -> tuple[str, int]:
+        """Short-lived token for the SSO onboarding flow. Carries the
+        OAuth identity but no DB ids — no User row exists yet."""
+
+    def decode_onboarding_token(self, token: str) -> OAuthIdentity:
+        """Verify an onboarding token and return the OAuth identity."""

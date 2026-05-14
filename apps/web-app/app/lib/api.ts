@@ -227,16 +227,31 @@ export interface WorkspaceOption {
 
 export interface LoginResponse {
   requires_selection: boolean;
+  /** True when the caller is a brand-new SSO user — no User row exists
+   *  yet. The FE must redirect to /onboarding/workspace and POST to
+   *  /auth/complete-oauth-onboarding once a workspace name is chosen. */
+  requires_onboarding: boolean;
   access_token: string | null;
   token_type: string;
   expires_in: number | null;
   selection_token: string | null;
   workspaces: WorkspaceOption[] | null;
+  /** Short-lived JWT carrying the OAuth identity. Issued only when
+   *  ``requires_onboarding`` is true. */
+  onboarding_token: string | null;
+  /** Server-suggested placeholder for the workspace-name prompt.
+   *  Mirrors the old auto-naming template; the user can override. */
+  suggested_workspace_name: string | null;
 }
 
 export interface SelectWorkspacePayload {
   selection_token: string;
   workspace_id: string;
+}
+
+export interface CompleteOAuthOnboardingPayload {
+  onboarding_token: string;
+  workspace_name: string;
 }
 
 export class ApiError extends Error {
@@ -335,6 +350,11 @@ export const authApi = {
     }),
   selectWorkspace: (payload: SelectWorkspacePayload) =>
     request<TokenResponse>(`${V1}/auth/select-workspace`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  completeOnboarding: (payload: CompleteOAuthOnboardingPayload) =>
+    request<TokenResponse>(`${V1}/auth/complete-oauth-onboarding`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

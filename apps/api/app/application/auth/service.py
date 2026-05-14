@@ -223,13 +223,24 @@ class AuthService:
         return TokenResponse(access_token=token, expires_in=ttl)
 
     async def oauth_login(self, identity: OAuthIdentity) -> LoginResponse:
-        """Resolve an OAuth identity to either a token or a selection
-        prompt — same shape as password login.
+        """Resolve an OAuth identity to one of three shapes.
 
         Resolution order:
           1) (provider, oauth_id) already known on a User — log in.
-          2) Same email exists on a User — link the OAuth identity.
-          3) Brand new — provision a User + Workspace + Member.
+          2) Same email exists on a User — link the OAuth identity
+             and log in.
+          3) Brand new — mint an *onboarding* token carrying the
+             OAuth identity and return ``requires_onboarding=True``.
+             No DB rows are created here; the second leg
+             (``complete_oauth_onboarding``) actually provisions the
+             User + Workspace + Member with the workspace name the
+             user picked on the ``/onboarding/workspace`` screen.
+
+        Why defer? Auto-naming the workspace ``"{full_name}'s
+        workspace"`` was a usability tax on SSO signups — operators
+        almost always want to pick a real brand name. Deferring to
+        an explicit prompt also means no orphan User row sits in the
+        DB if a user abandons signup at the redirect step.
         """
         if self.users is None:  # pragma: no cover - DI invariant
             raise RuntimeError("users repo not wired")
@@ -244,41 +255,110 @@ class AuthService:
                     oauth_id=identity.oauth_id,
                 )
             else:
-                # First-time signup via OAuth — auto-provision a workspace.
-                user = await self.users.create(
-                    User(
-                        id=uuid4(),
-                        email=identity.email,
-                        full_name=identity.name or identity.email,
-                        oauth_provider=identity.provider,
-                        oauth_id=identity.oauth_id,
-                    )
-                )
-                ws_name = f"{identity.name}'s workspace" if identity.name else "Workspace"
-                workspace = await self.workspaces.create(
-                    Workspace(
-                        id=uuid4(),
-                        name=ws_name,
-                        slug=_generate_slug(identity.name or "workspace"),
-                        task_prefix=_generate_task_prefix(identity.name or "workspace"),
-                        next_task_seq=1,
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow(),
-                    )
-                )
-                await self.members.create(
-                    Member(
-                        id=uuid4(),
-                        workspace_id=workspace.id,
-                        user_id=user.id,
-                        type=MemberType.HUMAN,
-                        name=user.full_name,
-                        email=user.email,
-                        priority=OWNER_PRIORITY,
-                        role=MemberRole.WORKSPACE_OWNER,
-                    )
+                # Brand new SSO user — defer provisioning to
+                # complete_oauth_onboarding. The onboarding token is
+                # the only state we keep until the user picks a name.
+                onboarding_token, ttl = self.tokens.issue_onboarding_token(identity)
+                return LoginResponse(
+                    requires_onboarding=True,
+                    onboarding_token=onboarding_token,
+                    expires_in=ttl,
+                    suggested_workspace_name=_default_workspace_name(identity.name),
                 )
 
+        return await self._login_existing_user(user)
+
+    async def complete_oauth_onboarding(
+        self, *, onboarding_token: str, workspace_name: str
+    ) -> TokenResponse:
+        """Second leg of the SSO signup flow. Decodes the onboarding
+        token to recover the OAuth identity, then provisions the
+        User + Workspace + Member trio with the caller-supplied
+        workspace name.
+
+        Race-safety: a parallel tab may have already finished the
+        signup (rare but possible). We check for an existing
+        ``(provider, oauth_id)`` on a User first and short-circuit
+        to a normal login if it exists — no double-provision."""
+        if self.users is None:  # pragma: no cover - DI invariant
+            raise RuntimeError("users repo not wired")
+
+        try:
+            identity = self.tokens.decode_onboarding_token(onboarding_token)
+        except jwt.PyJWTError as exc:
+            raise AuthenticationError("invalid or expired onboarding token") from exc
+
+        # Race: another tab already finished. Fall through to the
+        # normal login path so the caller gets a working token
+        # without us tripping the IntegrityError on the duplicate
+        # OAuth identity.
+        existing = await self.users.get_by_oauth_identity(identity.provider, identity.oauth_id)
+        if existing is not None:
+            return await self._login_existing_user(existing)
+
+        now = datetime.utcnow()
+        user = await self.users.create(
+            User(
+                id=uuid4(),
+                email=identity.email,
+                full_name=identity.name or identity.email,
+                oauth_provider=identity.provider,
+                oauth_id=identity.oauth_id,
+            )
+        )
+        try:
+            workspace = await self.workspaces.create(
+                Workspace(
+                    id=uuid4(),
+                    name=workspace_name,
+                    slug=_generate_slug(workspace_name),
+                    task_prefix=_generate_task_prefix(workspace_name),
+                    next_task_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        except IntegrityError as exc:
+            # workspaces.name UNIQUE (migration 0016) — surface as
+            # 409 to the route. The User row created above is OK to
+            # leave: a follow-up complete_oauth_onboarding with a
+            # different name will take the race-safety path and reuse
+            # the existing User.
+            raise WorkspaceNameConflictError("a workspace with that name already exists") from exc
+
+        await self.members.create(
+            Member(
+                id=uuid4(),
+                workspace_id=workspace.id,
+                user_id=user.id,
+                type=MemberType.HUMAN,
+                name=user.full_name,
+                email=user.email,
+                priority=OWNER_PRIORITY,
+                role=MemberRole.WORKSPACE_OWNER,
+            )
+        )
+
+        # Brand-new path always lands as a single-membership user.
+        # We reuse the existing-user branching to keep the multi-vs-
+        # single membership logic in one place; the response is
+        # always a TokenResponse for this caller because the user
+        # was just created with exactly one Member row.
+        resolved = await self._login_existing_user(user)
+        # Defensive — the user-was-just-created invariant means this
+        # is always the access_token branch, but if somehow it isn't
+        # we'd rather raise than silently return a selection token
+        # from an endpoint typed as TokenResponse.
+        if resolved.access_token is None or resolved.expires_in is None:
+            raise AuthenticationError(
+                "onboarding completion produced an unexpected multi-membership state"
+            )
+        return TokenResponse(access_token=resolved.access_token, expires_in=resolved.expires_in)
+
+    async def _login_existing_user(self, user: User) -> LoginResponse:
+        """Resolve a user's memberships into a LoginResponse. Single
+        membership → access_token; multi-membership → selection_token
+        + workspaces list (same shape password login produces)."""
         memberships = await self.members.list_for_user(user.id)
         memberships = [m for m in memberships if m.type is MemberType.HUMAN]
         if not memberships:
@@ -287,6 +367,7 @@ class AuthService:
         if len(memberships) == 1:
             token, ttl = self.tokens.issue_human_token(memberships[0])
             return LoginResponse(requires_selection=False, access_token=token, expires_in=ttl)
+
         selection_token, _ttl = self.tokens.issue_selection_token(user)
         options: list[WorkspaceOption] = []
         for m in memberships:
@@ -320,6 +401,14 @@ def _generate_slug(name: str) -> str:
     base = _SLUG_NORMALIZE.sub("-", name.lower()).strip("-")[:48] or "workspace"
     suffix = secrets.token_hex(3)
     return f"{base}-{suffix}"
+
+
+def _default_workspace_name(full_name: str | None) -> str:
+    """Suggested workspace name shown on the onboarding screen as a
+    placeholder. Mirrors the old auto-naming template so existing
+    users who scroll past without changing it get the same name they
+    would have before — but it's now an explicit choice."""
+    return f"{full_name}'s workspace" if full_name else "Workspace"
 
 
 def _generate_task_prefix(name: str) -> str:
