@@ -42,6 +42,22 @@ class SqlAlchemyWorkspaceRepository:
         await self._session.refresh(row)
         return _to_entity(row)
 
+    async def rename(self, workspace_id: UUID, *, name: str, slug: str) -> Workspace:
+        """Update name + slug atomically. The session flushes inside
+        the call, so the service catches IntegrityError from the
+        UNIQUE constraint on ``workspaces.name`` (or, in pathological
+        cases, on ``workspaces.slug``) and surfaces a clean 409."""
+        from app.domain.exceptions import WorkspaceNotFoundError
+
+        row = await self._session.get(WorkspaceModel, workspace_id)
+        if row is None:
+            raise WorkspaceNotFoundError("workspace not found")
+        row.name = name
+        row.slug = slug
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _to_entity(row)
+
     async def allocate_next_task_seq(self, workspace_id: UUID) -> tuple[int, str]:
         """Atomically reserve the next per-workspace task seq.
 

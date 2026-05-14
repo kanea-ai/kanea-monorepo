@@ -19,6 +19,12 @@ class WorkspaceNameConflictError(DomainError):
     workspaces.name."""
 
 
+class WorkspaceNotFoundError(DomainError):
+    """Raised when a workspace id doesn't resolve, or when the path
+    workspace_id doesn't match the principal's JWT — returned as 404
+    in both cases so existence of OTHER workspaces isn't leaked."""
+
+
 class InvalidMemberTypeError(DomainError):
     """Raised when an operation receives a member of the wrong type."""
 

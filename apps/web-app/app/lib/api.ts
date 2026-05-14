@@ -1036,6 +1036,29 @@ export const auditApi = {
   },
 };
 
+// ---------- Workspaces ----------
+
+export interface Workspace {
+  id: string;
+  name: string;
+  slug: string;
+  task_prefix: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RenameWorkspacePayload {
+  name: string;
+}
+
+export const workspacesApi = {
+  rename: (id: string, payload: RenameWorkspacePayload) =>
+    request<Workspace>(`${V1}/workspaces/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+};
+
 // Paginated Blocks page. Distinct from ``tasksApi.list({blockedOnly})``
 // which still returns the unpaginated array used by the AppShell
 // sidebar badge and the Dashboard panel.

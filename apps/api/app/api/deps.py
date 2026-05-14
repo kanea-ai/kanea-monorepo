@@ -57,6 +57,8 @@ from app.application.tenants.ports import (
     WorkspaceReadRepository,
 )
 from app.application.tenants.service import InviteService
+from app.application.workspaces.ports import WorkspaceWriteRepository
+from app.application.workspaces.service import WorkspaceService
 from app.core.config import Settings, settings
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
@@ -124,6 +126,20 @@ def get_user_repository(session: SessionDep) -> UserRepository:
 
 def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
     return SqlAlchemyWorkspaceRepository(session)
+
+
+def get_workspace_write_repository(session: SessionDep) -> WorkspaceWriteRepository:
+    # Same SQLAlchemy class — different protocol surface (rename).
+    return SqlAlchemyWorkspaceRepository(session)
+
+
+def get_workspace_service(
+    workspaces: Annotated[WorkspaceWriteRepository, Depends(get_workspace_write_repository)],
+) -> WorkspaceService:
+    return WorkspaceService(workspaces=workspaces)
+
+
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
 def get_auth_service(
