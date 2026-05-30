@@ -10,13 +10,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.deps import AdminWorkspaceServiceDep, SuperadminDep
+from app.api.deps import AdminUserServiceDep, AdminWorkspaceServiceDep, SuperadminDep
 from app.application.admin.schemas import (
     AdminWorkspaceRow,
     SuspendWorkspaceRequest,
 )
+from app.application.admin.users_schemas import (
+    AdminUserDetail,
+    AdminUserRow,
+    BanUserRequest,
+    ForcePasswordResetResponse,
+)
 from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
-from app.domain.exceptions import WorkspaceNotFoundError
+from app.domain.exceptions import (
+    ForbiddenError,
+    InvalidMemberTypeError,
+    WorkspaceNotFoundError,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -82,4 +92,96 @@ async def set_workspace_suspended(
     try:
         return await service.set_suspended(workspace_id, payload)
     except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Global user management.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/users",
+    response_model=Page[AdminUserRow],
+    status_code=status.HTTP_200_OK,
+)
+async def list_users(
+    _superadmin: SuperadminDep,
+    service: AdminUserServiceDep,
+    name: Annotated[str | None, Query(max_length=254)] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[AdminUserRow]:
+    """Cross-tenant user listing. ``name`` does a case-insensitive
+    substring match against email OR full_name. Each row carries the
+    user's workspace count so the grid surfaces "this account touches
+    N tenants" without a follow-up call."""
+    return await service.list_users(name=name, skip=skip, limit=limit)
+
+
+@router.get(
+    "/users/{user_id}",
+    response_model=AdminUserDetail,
+    status_code=status.HTTP_200_OK,
+)
+async def get_user_detail(
+    user_id: UUID,
+    _superadmin: SuperadminDep,
+    service: AdminUserServiceDep,
+) -> AdminUserDetail:
+    """Full back-office profile: identity + every workspace the user
+    is a member of with their role + per-membership suspension flag.
+    Surfaces the platform-level flags too (``is_superadmin``,
+    ``is_banned``, ``sessions_invalidated_at``)."""
+    try:
+        return await service.get_user_detail(user_id)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/users/{user_id}/ban",
+    response_model=AdminUserDetail,
+    status_code=status.HTTP_200_OK,
+)
+async def set_user_banned(
+    user_id: UUID,
+    payload: BanUserRequest,
+    superadmin: SuperadminDep,
+    service: AdminUserServiceDep,
+) -> AdminUserDetail:
+    """Set or clear ``users.is_banned``. While True every workspace
+    route 403s with ``account banned`` (see ``get_current_principal``).
+
+    Guards:
+    - Cannot ban yourself (would lock you out of the back-office).
+    - Cannot ban another superadmin via this surface — revoke them
+      first via the CLI ``scripts.make_superadmin --revoke``.
+    """
+    try:
+        return await service.set_banned(user_id, payload, principal_user_id=superadmin.id)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.post(
+    "/users/{user_id}/force-password-reset",
+    response_model=ForcePasswordResetResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def force_user_password_reset(
+    user_id: UUID,
+    superadmin: SuperadminDep,
+    service: AdminUserServiceDep,
+) -> ForcePasswordResetResponse:
+    """Invalidate every outstanding JWT for the user AND randomise
+    their password hash so they can't log in until they run the
+    account-recovery flow. No real email is sent in this stage; the
+    simulated payload is in the response body AND logged at INFO so
+    the operator can confirm what would have been delivered."""
+    try:
+        return await service.force_password_reset(user_id, principal_user_id=superadmin.id)
+    except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

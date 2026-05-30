@@ -10,9 +10,10 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAdminHealth } from '../lib/queries';
 import { useAuth } from '../lib/auth';
 
-const NAV: { href: '/' | '/workspaces'; label: string }[] = [
+const NAV: { href: '/' | '/workspaces' | '/users'; label: string }[] = [
   { href: '/', label: 'Dashboard' },
   { href: '/workspaces', label: 'Workspaces' },
+  { href: '/users', label: 'Users' },
 ];
 
 export function AdminShell({ children }: { children: React.ReactNode }) {

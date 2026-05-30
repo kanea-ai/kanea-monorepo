@@ -34,6 +34,11 @@ class Principal:
     priority: int
     scope: str
     role: MemberRole = MemberRole.WORKSPACE_USER
+    # JWT issued-at (unix seconds). Used by the auth gate to refuse
+    # tokens minted before a force-password-reset stamp (stateless
+    # session invalidation). Optional so older Principal call sites
+    # don't have to wire it.
+    iat: int | None = None
 
 
 class DelegateTaskRequest(BaseModel):

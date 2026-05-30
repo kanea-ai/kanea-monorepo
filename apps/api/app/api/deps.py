@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.admin.ports import AdminWorkspaceRepository
 from app.application.admin.service import AdminWorkspaceService
+from app.application.admin.users_ports import AdminUserRepository
+from app.application.admin.users_service import AdminUserService
 from app.application.agents.ports import AgentMemberRepository
 from app.application.agents.service import AgentService
 from app.application.audit.ports import AuditLogRepository
@@ -65,6 +67,7 @@ from app.core.config import Settings, settings
 from app.domain.entities import User
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
+from app.infrastructure.repositories.admin_user import SqlAlchemyAdminUserRepository
 from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
@@ -446,6 +449,11 @@ def _decode_principal(
         member_type = MemberType(str(payload["type"]))
         priority = int(str(payload["priority"]))
         scope = str(payload["scope"])
+        # `iat` is required by the JWT decoder (see ``options={"require"
+        # : ["exp","iat","sub"]}`` in JwtTokenService.decode), so this
+        # read is total — but cast defensively for older tokens that
+        # somehow landed without one.
+        iat = int(payload["iat"]) if "iat" in payload else None
         # `role` was added in migration 0004. Tokens minted before the
         # claim existed default to USER — least-privileged so they
         # can't perform OWNER/ADMIN actions until they re-auth.
@@ -471,6 +479,7 @@ def _decode_principal(
         priority=priority,
         scope=scope,
         role=role,
+        iat=iat,
     )
 
 
@@ -478,27 +487,29 @@ async def get_current_principal(
     principal: Annotated[Principal, Depends(_decode_principal)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> Principal:
-    """Decode the JWT AND enforce two suspension locks:
-    (a) per-membership ``members.is_suspended`` and
-    (b) workspace-wide ``workspaces.suspended_at`` (set from the
-        back-office by a superadmin).
+    """Decode the JWT AND enforce four locks, in order:
 
-    A suspended member can still hold a valid (non-expired) JWT — the
-    gates sit here, in front of every workspace-scoped route, so the
-    moment an admin flips either flag the next request bounces with
-    403. The underlying User row is untouched, so the human can still
-    log in and use any *other* (active) workspace they belong to.
+    1. Per-membership ``members.is_suspended`` → 403.
+    2. Workspace-wide ``workspaces.suspended_at`` → 403 (back-office
+       soft-suspension from a superadmin).
+    3. Platform-wide ``users.is_banned`` → 403 (back-office ToS
+       ban). Agents have no ``user_id`` and are unaffected here.
+    4. Stateless session-kill: JWT ``iat`` < ``users.sessions_invalidated_at``
+       → 401. Set by the back-office force-password-reset flow so
+       outstanding tokens become useless the instant the operator
+       acts.
 
     Tokens with the ``select`` scope (the short-lived
-    multi-workspace-picker token) are not workspace-bound — they don't
-    target a specific member or workspace yet, so both checks are
-    skipped. Workspace binding happens on the subsequent
-    ``select_workspace`` call, which re-issues a fresh JWT and will
-    refuse to mint one for a suspended workspace.
+    multi-workspace-picker token) skip all four checks — they're not
+    workspace-bound and don't represent an active session yet. The
+    next call (``/auth/select-workspace``) re-runs the gates with a
+    fresh JWT.
 
-    A 401 is returned (not 403) when the member row no longer exists
-    so a freshly deleted member can't keep using their old token.
+    A 401 is returned (not 403) when the underlying member or user
+    row no longer exists so a freshly deleted identity can't keep
+    using their old token.
     """
     if principal.scope == "select":
         return principal
@@ -527,6 +538,33 @@ async def get_current_principal(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="workspace suspended",
         )
+
+    # Platform-level checks against the global User. Agents (no
+    # user_id) skip — they can't be banned through this surface; the
+    # admin-panel acts on humans only.
+    if member.user_id is not None:
+        user = await users.get_by_id(member.user_id)
+        if user is None:  # pragma: no cover - FK guarantee
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if user.is_banned:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="account banned",
+            )
+        if (
+            user.sessions_invalidated_at is not None
+            and principal.iat is not None
+            and principal.iat < int(user.sessions_invalidated_at.timestamp())
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="session invalidated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     return principal
 
 
@@ -610,6 +648,20 @@ def get_admin_workspace_service(
 
 
 AdminWorkspaceServiceDep = Annotated[AdminWorkspaceService, Depends(get_admin_workspace_service)]
+
+
+def get_admin_user_repository(session: SessionDep) -> AdminUserRepository:
+    return SqlAlchemyAdminUserRepository(session)
+
+
+def get_admin_user_service(
+    users: Annotated[AdminUserRepository, Depends(get_admin_user_repository)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+) -> AdminUserService:
+    return AdminUserService(users=users, hasher=hasher)
+
+
+AdminUserServiceDep = Annotated[AdminUserService, Depends(get_admin_user_service)]
 
 
 # Variant that skips the suspension check. Reserved for the few

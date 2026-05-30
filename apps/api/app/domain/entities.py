@@ -42,6 +42,13 @@ class User:
     # Set out-of-band via ``scripts.make_superadmin``; no API path
     # flips this column.
     is_superadmin: bool = False
+    # Platform-wide ban for ToS violations. Flipped from the back-
+    # office; ``get_current_principal`` returns 403 while True.
+    is_banned: bool = False
+    # Stateless session-kill. JWTs with ``iat`` older than this stamp
+    # are rejected with 401, so admin force-password-reset takes effect
+    # immediately without an external revocation list.
+    sessions_invalidated_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

@@ -116,6 +116,24 @@ class UserModel(TimestampMixin, Base):
         server_default=text("false"),
         default=False,
     )
+    # Platform-wide ban for ToS violations. While True every
+    # authenticated request bounces with 403 — the gate sits inside
+    # ``get_current_principal`` so the flip is instant. Set by the
+    # back-office (``POST /api/v1/admin/users/{id}/ban``).
+    is_banned: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+    )
+    # Stateless session-kill switch. When the back-office forces a
+    # password reset we stamp this column with ``now()``; the auth dep
+    # rejects any JWT whose ``iat`` is older than this value. Existing
+    # tokens are invalidated immediately without needing a blacklist.
+    sessions_invalidated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class WorkspaceModel(TimestampMixin, Base):

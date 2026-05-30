@@ -34,6 +34,51 @@ export interface SuspendWorkspacePayload {
   is_suspended: boolean;
 }
 
+// ---------- users ----------
+
+export type WorkspaceRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
+
+export interface AdminUserRow {
+  id: string;
+  email: string;
+  full_name: string;
+  is_superadmin: boolean;
+  is_banned: boolean;
+  sessions_invalidated_at: string | null;
+  created_at: string;
+  workspace_count: number;
+}
+
+export interface AdminUserMembership {
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+  member_id: string;
+  role: WorkspaceRole;
+  is_suspended: boolean;
+}
+
+export interface AdminUserDetail {
+  id: string;
+  email: string;
+  full_name: string;
+  is_superadmin: boolean;
+  is_banned: boolean;
+  sessions_invalidated_at: string | null;
+  created_at: string;
+  memberships: AdminUserMembership[];
+}
+
+export interface BanUserPayload {
+  is_banned: boolean;
+}
+
+export interface ForcePasswordResetResponse {
+  user_id: string;
+  sessions_invalidated_at: string;
+  simulated_email: string;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;
@@ -162,5 +207,23 @@ export const adminApi = {
     request<AdminWorkspaceRow>(`${V1}/admin/workspaces/${workspaceId}/suspend`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    }),
+  listUsers: (opts: { name?: string; skip?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.name) params.set('name', opts.name);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<AdminUserRow>>(`${V1}/admin/users${qs ? `?${qs}` : ''}`);
+  },
+  getUser: (userId: string) => request<AdminUserDetail>(`${V1}/admin/users/${userId}`),
+  setUserBanned: (userId: string, payload: BanUserPayload) =>
+    request<AdminUserDetail>(`${V1}/admin/users/${userId}/ban`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  forceUserPasswordReset: (userId: string) =>
+    request<ForcePasswordResetResponse>(`${V1}/admin/users/${userId}/force-password-reset`, {
+      method: 'POST',
     }),
 };
