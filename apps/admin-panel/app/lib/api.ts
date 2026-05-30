@@ -3,7 +3,15 @@
 // `/api/v1/admin/*` endpoints — there is no reason for the admin app
 // to call workspace-scoped routes directly.
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+// In prod the admin-panel is served from admin.kanea.ai and the LB url-map
+// routes /api/* on that host to be-api — so an empty default means every
+// fetch goes same-origin and lands at the right backend without any env
+// plumbing. Local dev overrides this via .env.development
+// (NEXT_PUBLIC_API_BASE_URL=http://localhost:8000). NEXT_PUBLIC_* values
+// are baked into the client bundle at `next build` time, not picked up
+// from Cloud Run runtime env — keeping the default empty avoids that
+// trap for the prod build entirely.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 const V1 = '/api/v1';
 
 export const TOKEN_STORAGE_KEY = 'kanea.admin.bearer';
