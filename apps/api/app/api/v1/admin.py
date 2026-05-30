@@ -10,7 +10,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.deps import AdminUserServiceDep, AdminWorkspaceServiceDep, SuperadminDep
+from app.api.deps import (
+    AdminMetricsServiceDep,
+    AdminUserServiceDep,
+    AdminWorkspaceServiceDep,
+    SuperadminDep,
+)
+from app.application.admin.metrics_schemas import PlatformMetricsResponse
 from app.application.admin.schemas import (
     AdminWorkspaceRow,
     SuspendWorkspaceRequest,
@@ -39,6 +45,26 @@ async def admin_health(superadmin: SuperadminDep) -> dict[str, str]:
     superadmin's email so the caller can confirm which identity
     passed the gate."""
     return {"status": "ok", "email": superadmin.email}
+
+
+@router.get(
+    "/metrics",
+    response_model=PlatformMetricsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_platform_metrics(
+    _superadmin: SuperadminDep,
+    service: AdminMetricsServiceDep,
+) -> PlatformMetricsResponse:
+    """Top-of-dashboard pulse of the platform: total active
+    workspaces, total registered users, total tokens consumed
+    platform-wide, and the recent-signups list (last 7 days, capped
+    at 50).
+
+    Two SQL calls — three counters via correlated subqueries in one
+    SELECT plus a small ``users`` scan for the signups list. Drives
+    the ``apps/admin-panel`` landing page."""
+    return await service.get_summary()
 
 
 @router.get(

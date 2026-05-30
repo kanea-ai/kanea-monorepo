@@ -9,6 +9,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.admin.metrics_ports import AdminMetricsRepository
+from app.application.admin.metrics_service import AdminMetricsService
 from app.application.admin.ports import AdminWorkspaceRepository
 from app.application.admin.service import AdminWorkspaceService
 from app.application.admin.users_ports import AdminUserRepository
@@ -67,6 +69,7 @@ from app.core.config import Settings, settings
 from app.domain.entities import User
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
+from app.infrastructure.repositories.admin_metrics import SqlAlchemyAdminMetricsRepository
 from app.infrastructure.repositories.admin_user import SqlAlchemyAdminUserRepository
 from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
@@ -662,6 +665,19 @@ def get_admin_user_service(
 
 
 AdminUserServiceDep = Annotated[AdminUserService, Depends(get_admin_user_service)]
+
+
+def get_admin_metrics_repository(session: SessionDep) -> AdminMetricsRepository:
+    return SqlAlchemyAdminMetricsRepository(session)
+
+
+def get_admin_metrics_service(
+    metrics: Annotated[AdminMetricsRepository, Depends(get_admin_metrics_repository)],
+) -> AdminMetricsService:
+    return AdminMetricsService(metrics=metrics)
+
+
+AdminMetricsServiceDep = Annotated[AdminMetricsService, Depends(get_admin_metrics_service)]
 
 
 # Variant that skips the suspension check. Reserved for the few

@@ -79,6 +79,22 @@ export interface ForcePasswordResetResponse {
   simulated_email: string;
 }
 
+// ---------- metrics ----------
+
+export interface RecentSignup {
+  id: string;
+  email: string;
+  full_name: string;
+  created_at: string;
+}
+
+export interface PlatformMetrics {
+  total_active_workspaces: number;
+  total_registered_users: number;
+  total_tokens_used: number;
+  recent_signups: RecentSignup[];
+}
+
 export interface LoginPayload {
   email: string;
   password: string;
@@ -226,4 +242,5 @@ export const adminApi = {
     request<ForcePasswordResetResponse>(`${V1}/admin/users/${userId}/force-password-reset`, {
       method: 'POST',
     }),
+  metrics: () => request<PlatformMetrics>(`${V1}/admin/metrics`),
 };

@@ -10,6 +10,7 @@ import {
   type BanUserPayload,
   type ForcePasswordResetResponse,
   type Page,
+  type PlatformMetrics,
   type SuspendWorkspacePayload,
 } from './api';
 
@@ -22,6 +23,7 @@ export const adminKeys = {
     ['admin', 'users', opts] as const satisfies QueryKey,
   usersAll: ['admin', 'users'] as const satisfies QueryKey,
   user: (id: string) => ['admin', 'user', id] as const satisfies QueryKey,
+  metrics: ['admin', 'metrics'] as const satisfies QueryKey,
 };
 
 export function useAdminHealth() {
@@ -87,6 +89,19 @@ export function useSetUserBanned() {
       qc.invalidateQueries({ queryKey: adminKeys.usersAll });
       qc.invalidateQueries({ queryKey: adminKeys.user(data.id) });
     },
+  });
+}
+
+export function useAdminMetrics() {
+  return useQuery<PlatformMetrics>({
+    queryKey: adminKeys.metrics,
+    queryFn: () => adminApi.metrics(),
+    // Dashboard surfaces "now-ish" numbers; refresh on focus so the
+    // page reads correct after a switch back from another tab.
+    refetchOnWindowFocus: true,
+    // Auto-refresh every 60s while the page is in the foreground —
+    // long enough not to hammer the api, short enough to feel live.
+    refetchInterval: 60_000,
   });
 }
 
