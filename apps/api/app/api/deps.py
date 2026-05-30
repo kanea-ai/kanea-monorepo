@@ -13,6 +13,8 @@ from app.application.admin.metrics_ports import AdminMetricsRepository
 from app.application.admin.metrics_service import AdminMetricsService
 from app.application.admin.ports import AdminWorkspaceRepository
 from app.application.admin.service import AdminWorkspaceService
+from app.application.admin.tenant_ports import AdminTenantRepository
+from app.application.admin.tenant_service import AdminTenantService
 from app.application.admin.users_ports import AdminUserRepository
 from app.application.admin.users_service import AdminUserService
 from app.application.agents.ports import AgentMemberRepository
@@ -70,6 +72,7 @@ from app.domain.entities import User
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
 from app.infrastructure.repositories.admin_metrics import SqlAlchemyAdminMetricsRepository
+from app.infrastructure.repositories.admin_tenant import SqlAlchemyAdminTenantRepository
 from app.infrastructure.repositories.admin_user import SqlAlchemyAdminUserRepository
 from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
@@ -678,6 +681,27 @@ def get_admin_metrics_service(
 
 
 AdminMetricsServiceDep = Annotated[AdminMetricsService, Depends(get_admin_metrics_service)]
+
+
+def get_admin_tenant_repository(session: SessionDep) -> AdminTenantRepository:
+    return SqlAlchemyAdminTenantRepository(session)
+
+
+def get_admin_tenant_service(
+    tenant: Annotated[AdminTenantRepository, Depends(get_admin_tenant_repository)],
+    workspaces: Annotated[AdminWorkspaceRepository, Depends(get_admin_workspace_repository)],
+    departments: Annotated[DepartmentService, Depends(get_department_service)],
+    invites: Annotated[InviteService, Depends(get_invite_service)],
+) -> AdminTenantService:
+    return AdminTenantService(
+        tenant=tenant,
+        workspaces=workspaces,
+        departments=departments,
+        invites=invites,
+    )
+
+
+AdminTenantServiceDep = Annotated[AdminTenantService, Depends(get_admin_tenant_service)]
 
 
 # Variant that skips the suspension check. Reserved for the few

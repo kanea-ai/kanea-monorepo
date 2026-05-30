@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 
 import { AdminShell } from '../components/AdminShell';
@@ -162,7 +163,19 @@ function WorkspaceRow({
   const isSuspended = workspace.suspended_at !== null;
   return (
     <tr className={isSuspended ? 'bg-red-50/40' : undefined}>
-      <td className="truncate px-4 py-2 font-medium text-slate-900">{workspace.name}</td>
+      <td className="truncate px-4 py-2 font-medium text-slate-900">
+        <Link
+          // App Router doesn't accept the ``{pathname:'/workspaces/[id]',
+          // query:{id}}`` object shape — the literal brackets land in
+          // the rendered href and Next throws. Interpolate the id into
+          // the template instead; ``typedRoutes`` infers the route from
+          // the string literal.
+          href={`/workspaces/${workspace.id}`}
+          className="hover:text-rose-700 hover:underline"
+        >
+          {workspace.name}
+        </Link>
+      </td>
       <td className="truncate px-4 py-2 font-mono text-[11px] text-slate-500">{workspace.slug}</td>
       <td className="px-4 py-2 text-right tabular-nums">{workspace.metrics.total_users}</td>
       <td className="px-4 py-2 text-right tabular-nums">{workspace.metrics.total_tasks}</td>

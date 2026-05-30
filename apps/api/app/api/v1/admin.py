@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import (
     AdminMetricsServiceDep,
+    AdminTenantServiceDep,
     AdminUserServiceDep,
     AdminWorkspaceServiceDep,
     SuperadminDep,
@@ -21,6 +22,12 @@ from app.application.admin.schemas import (
     AdminWorkspaceRow,
     SuspendWorkspaceRequest,
 )
+from app.application.admin.tenant_schemas import (
+    AdminWorkspaceDetail,
+    AdminWorkspaceUserRow,
+    PatchWorkspaceUserRequest,
+)
+from app.application.admin.tenant_service import WorkspaceUserDualScopeError
 from app.application.admin.users_schemas import (
     AdminUserDetail,
     AdminUserRow,
@@ -31,6 +38,8 @@ from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.domain.exceptions import (
     ForbiddenError,
     InvalidMemberTypeError,
+    MemberAlreadyDepartmentHeadError,
+    MemberIsDepartmentHeadError,
     WorkspaceNotFoundError,
 )
 
@@ -118,6 +127,101 @@ async def set_workspace_suspended(
     try:
         return await service.set_suspended(workspace_id, payload)
     except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Tenant drill-down (Round 3 / Task 5).
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/workspaces/{workspace_id}",
+    response_model=AdminWorkspaceDetail,
+    status_code=status.HTTP_200_OK,
+)
+async def get_workspace_detail(
+    workspace_id: UUID,
+    _superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+) -> AdminWorkspaceDetail:
+    """Granular stats for a single workspace: identity + suspension
+    status + counts (users / teams / departments / projects / tasks /
+    tokens) + per-status task breakdown. One SQL pass — see
+    ``SqlAlchemyAdminTenantRepository.get_workspace_detail``."""
+    try:
+        return await service.get_workspace_detail(workspace_id)
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/users",
+    response_model=Page[AdminWorkspaceUserRow],
+    status_code=status.HTTP_200_OK,
+)
+async def list_workspace_users(
+    workspace_id: UUID,
+    _superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+    name: Annotated[str | None, Query(max_length=200)] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[AdminWorkspaceUserRow]:
+    """Per-workspace user list with the full hierarchy slot: workspace
+    role, team + team_role, team's department, and (mutually exclusive)
+    the department they're the head of, if any."""
+    try:
+        return await service.list_workspace_users(workspace_id, name=name, skip=skip, limit=limit)
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/users/{user_id}",
+    response_model=AdminWorkspaceUserRow,
+    status_code=status.HTTP_200_OK,
+)
+async def patch_workspace_user(
+    workspace_id: UUID,
+    user_id: UUID,
+    payload: PatchWorkspaceUserRequest,
+    superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+) -> AdminWorkspaceUserRow:
+    """Superadmin intervention on a tenant user. Send any subset of
+    ``team_id``, ``team_role``, ``department_id``.
+
+    Round-2 hierarchy constraints are preserved verbatim because the
+    orchestrator routes writes through the same ``DepartmentService``
+    + ``InviteService`` workspace OWNERs use:
+
+    - Setting ``department_id`` promotes the user to Department Head;
+      their ``team_id`` / ``team_role`` are cleared to NULL.
+    - Setting ``team_id`` while the user is currently a Department
+      Head transparently demotes them from headship first, then
+      assigns the team.
+    - Assigning ``MANAGER`` / ``LEAD`` on a team that already has one
+      demotes the sitting holder to MEMBER in the same transaction.
+    - Sending both ``team_id`` (non-null) AND ``department_id``
+      (non-null) is rejected with 400.
+    """
+    try:
+        return await service.patch_workspace_user(
+            workspace_id,
+            user_id,
+            payload,
+            superadmin_user_id=superadmin.id,
+        )
+    except WorkspaceUserDualScopeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except MemberIsDepartmentHeadError as exc:  # pragma: no cover - orchestrator clears first
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MemberAlreadyDepartmentHeadError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 

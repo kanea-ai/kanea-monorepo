@@ -95,6 +95,59 @@ export interface PlatformMetrics {
   recent_signups: RecentSignup[];
 }
 
+// ---------- tenant drill-down ----------
+
+export interface WorkspaceStatusBreakdown {
+  pending: number;
+  in_progress: number;
+  in_review: number;
+  done: number;
+  cancelled: number;
+  blocked: number;
+}
+
+export interface AdminWorkspaceDetail {
+  id: string;
+  name: string;
+  slug: string;
+  task_prefix: string;
+  suspended_at: string | null;
+  created_at: string;
+  updated_at: string;
+  total_users: number;
+  total_tasks: number;
+  total_tokens_used: number;
+  total_teams: number;
+  total_departments: number;
+  total_projects: number;
+  status_breakdown: WorkspaceStatusBreakdown;
+}
+
+export type TeamRoleValue = 'MANAGER' | 'LEAD' | 'MEMBER';
+
+export interface AdminWorkspaceUserRow {
+  member_id: string;
+  user_id: string;
+  email: string | null;
+  full_name: string;
+  type: 'HUMAN' | 'AGENT';
+  role: WorkspaceRole;
+  is_suspended: boolean;
+  team_id: string | null;
+  team_name: string | null;
+  team_role: TeamRoleValue | null;
+  team_department_id: string | null;
+  team_department_name: string | null;
+  headed_department_id: string | null;
+  headed_department_name: string | null;
+}
+
+export interface PatchWorkspaceUserPayload {
+  team_id?: string | null;
+  team_role?: TeamRoleValue | null;
+  department_id?: string | null;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;
@@ -243,4 +296,24 @@ export const adminApi = {
       method: 'POST',
     }),
   metrics: () => request<PlatformMetrics>(`${V1}/admin/metrics`),
+  getWorkspaceDetail: (workspaceId: string) =>
+    request<AdminWorkspaceDetail>(`${V1}/admin/workspaces/${workspaceId}`),
+  listWorkspaceUsers: (
+    workspaceId: string,
+    opts: { name?: string; skip?: number; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.name) params.set('name', opts.name);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<AdminWorkspaceUserRow>>(
+      `${V1}/admin/workspaces/${workspaceId}/users${qs ? `?${qs}` : ''}`,
+    );
+  },
+  patchWorkspaceUser: (workspaceId: string, userId: string, payload: PatchWorkspaceUserPayload) =>
+    request<AdminWorkspaceUserRow>(`${V1}/admin/workspaces/${workspaceId}/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 };

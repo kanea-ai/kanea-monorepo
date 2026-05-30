@@ -6,10 +6,13 @@ import {
   adminApi,
   type AdminUserDetail,
   type AdminUserRow,
+  type AdminWorkspaceDetail,
   type AdminWorkspaceRow,
+  type AdminWorkspaceUserRow,
   type BanUserPayload,
   type ForcePasswordResetResponse,
   type Page,
+  type PatchWorkspaceUserPayload,
   type PlatformMetrics,
   type SuspendWorkspacePayload,
 } from './api';
@@ -19,6 +22,11 @@ export const adminKeys = {
   workspaces: (opts: { name?: string; sort?: string; skip?: number; limit?: number }) =>
     ['admin', 'workspaces', opts] as const satisfies QueryKey,
   workspacesAll: ['admin', 'workspaces'] as const satisfies QueryKey,
+  workspaceDetail: (id: string) => ['admin', 'workspace', id] as const satisfies QueryKey,
+  workspaceUsers: (id: string, opts: { name?: string; skip?: number; limit?: number }) =>
+    ['admin', 'workspace', id, 'users', opts] as const satisfies QueryKey,
+  workspaceUsersAll: (id: string) =>
+    ['admin', 'workspace', id, 'users'] as const satisfies QueryKey,
   users: (opts: { name?: string; skip?: number; limit?: number }) =>
     ['admin', 'users', opts] as const satisfies QueryKey,
   usersAll: ['admin', 'users'] as const satisfies QueryKey,
@@ -88,6 +96,42 @@ export function useSetUserBanned() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: adminKeys.usersAll });
       qc.invalidateQueries({ queryKey: adminKeys.user(data.id) });
+    },
+  });
+}
+
+export function useWorkspaceDetail(workspaceId: string | null) {
+  return useQuery<AdminWorkspaceDetail>({
+    queryKey: adminKeys.workspaceDetail(workspaceId ?? ''),
+    queryFn: () => adminApi.getWorkspaceDetail(workspaceId as string),
+    enabled: !!workspaceId,
+  });
+}
+
+export function useWorkspaceUsers(
+  workspaceId: string | null,
+  opts: { name?: string; skip?: number; limit?: number },
+) {
+  return useQuery<Page<AdminWorkspaceUserRow>>({
+    queryKey: adminKeys.workspaceUsers(workspaceId ?? '', opts),
+    queryFn: () => adminApi.listWorkspaceUsers(workspaceId as string, opts),
+    enabled: !!workspaceId,
+  });
+}
+
+export function usePatchWorkspaceUser(workspaceId: string) {
+  const qc = useQueryClient();
+  return useMutation<
+    AdminWorkspaceUserRow,
+    Error,
+    { userId: string; payload: PatchWorkspaceUserPayload }
+  >({
+    mutationFn: ({ userId, payload }) => adminApi.patchWorkspaceUser(workspaceId, userId, payload),
+    onSuccess: () => {
+      // The detail stats can shift (e.g. team counts) and the users
+      // family is definitely stale — bust both.
+      qc.invalidateQueries({ queryKey: adminKeys.workspaceDetail(workspaceId) });
+      qc.invalidateQueries({ queryKey: adminKeys.workspaceUsersAll(workspaceId) });
     },
   });
 }
