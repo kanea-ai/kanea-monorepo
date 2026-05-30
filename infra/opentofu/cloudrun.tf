@@ -165,8 +165,8 @@ resource "google_cloud_run_v2_service" "svc" {
 }
 
 # Allow public invocation through the load balancer for the three public-facing
-# services. admin-panel is intentionally excluded — it stays private and will
-# get a scoped invoker grant when access requirements are decided.
+# services. admin-panel is intentionally excluded — it sits behind IAP at the
+# LB edge (see ``iap.tf``) plus the in-app Superadmin gate.
 locals {
   public_services = ["web-app", "www", "api"]
 }
@@ -183,4 +183,42 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   # binding still works because the override is project-scoped — once prod
   # has applied it, both envs benefit.
   depends_on = [google_org_policy_policy.allowed_policy_member_domains]
+}
+
+# Admin-panel invoker. Scoped to the IAP Service Agent — the only
+# identity that should ever invoke this service. The agent is the
+# principal IAP uses to call backends on a signed-in user's behalf
+# after the LB-edge gate passes; granting it ``roles/run.invoker``
+# (and no one else) means a request that somehow bypasses both IAP
+# and the ingress check still gets rejected at Cloud Run's IAM.
+#
+# Defence-in-depth: ingress=internal-LB-only + IAP at the LB +
+# IAM-scoped invoker. Each layer is independently sufficient to
+# refuse a request; all three have to fail for the back-office to
+# leak. Earlier revisions of this file used ``allUsers`` here
+# (relying on the first two layers); we tightened to the IAP SA
+# after the agent's first request to the backend surfaced "The IAP
+# service account is not provisioned" — which forced the agent's
+# explicit existence into the runbook anyway.
+#
+# The IAP Service Agent must exist before this binding can be
+# written: ``gcloud beta services identity create --service=
+# iap.googleapis.com --project=<id>``. It is a one-shot per
+# project (not Tofu-tracked).
+resource "google_cloud_run_v2_service_iam_member" "admin_panel_invoker" {
+  count = local.is_prod ? 1 : 0
+
+  name     = google_cloud_run_v2_service.svc["admin-panel"].name
+  location = google_cloud_run_v2_service.svc["admin-panel"].location
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-iap.iam.gserviceaccount.com"
+
+  depends_on = [
+    google_org_policy_policy.allowed_policy_member_domains,
+    # IAP must be on the backend service before we open the invoker
+    # binding — order matters here because between the binding and
+    # IAP enable, the back-office would be reachable unauthenticated
+    # if an LB rule already existed.
+    google_iap_web_backend_service_iam_member.admin_panel_accessor,
+  ]
 }

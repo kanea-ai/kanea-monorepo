@@ -37,6 +37,26 @@ resource "google_compute_backend_service" "svc" {
     enable      = true
     sample_rate = 1.0
   }
+
+  # IAP only fires on the admin-panel backend, and only in prod (no
+  # IAP brand exists in staging; staging back-office access stays
+  # behind the existing Cloud-Armor IP allowlist). The dynamic block
+  # is a no-op for every other backend. Presence of the block enables
+  # IAP on this backend (google provider v5.x — no separate `enabled`
+  # field; the v6 schema adds one but we're not there yet).
+  #
+  # OAuth client credentials are owned outside Tofu (see iap.tf for
+  # why — External-brand projects can't mint IAP clients via API).
+  # Tofu just reads them from Secret Manager and bakes them into the
+  # backend service config; no runtime Secret Manager access needed
+  # from IAP itself.
+  dynamic "iap" {
+    for_each = (each.key == "admin-panel" && local.is_prod) ? [1] : []
+    content {
+      oauth2_client_id     = data.google_secret_manager_secret_version.iap_admin_client_id[0].secret_data
+      oauth2_client_secret = data.google_secret_manager_secret_version.iap_admin_client_secret[0].secret_data
+    }
+  }
 }
 
 resource "google_compute_url_map" "main" {
@@ -78,6 +98,33 @@ resource "google_compute_url_map" "main" {
       service = google_compute_backend_service.svc["api"].id
     }
   }
+
+  # Back-office subdomain → admin-panel. Same /api/* carve-out so
+  # the Next.js app's API client at `${origin}/api/v1/...` works
+  # without cross-origin requests. The backend service for
+  # admin-panel has IAP enabled (see ``loadbalancer.tf`` above and
+  # ``iap.tf``) so the only way past this rule is a Google sign-in
+  # for a member of ``var.admin_iap_member``. The /api routes here
+  # inherit IAP indirectly — they go to the api backend, which is
+  # NOT IAP-gated, but IAP at the edge protects the cookie/session
+  # the back-office uses to talk to it. The api itself stays gated
+  # by SuperadminDep on /admin/* and the standard JWT auth on
+  # everything else, so even if the IAP cookie ever leaks the API
+  # is no more exposed than it is via app.kanea.ai.
+  host_rule {
+    hosts        = ["admin.${var.domain}"]
+    path_matcher = "admin"
+  }
+
+  path_matcher {
+    name            = "admin"
+    default_service = google_compute_backend_service.svc["admin-panel"].id
+
+    path_rule {
+      paths   = ["/api", "/api/*"]
+      service = google_compute_backend_service.svc["api"].id
+    }
+  }
 }
 
 # Original cert covers the marketing surface (apex + www). Untouched by
@@ -102,13 +149,32 @@ resource "google_compute_managed_ssl_certificate" "app" {
   }
 }
 
+# Back-office subdomain cert. Same reasoning as ``app`` above —
+# adding ``admin.${var.domain}`` as a SAN to either existing cert
+# would force a destroy+create that would interrupt prod TLS. Cert
+# provisioning requires the DNS A record for ``admin.${var.domain}``
+# to point at ``google_compute_global_address.lb`` first; without
+# that the managed cert sits in ``PROVISIONING`` indefinitely.
+resource "google_compute_managed_ssl_certificate" "admin" {
+  count = local.is_prod ? 1 : 0
+
+  name = "kanea-managed-cert-admin${local.name_suffix}"
+
+  managed {
+    domains = ["admin.${var.domain}"]
+  }
+}
+
 resource "google_compute_target_https_proxy" "main" {
   name    = "kanea-https-proxy${local.name_suffix}"
   url_map = google_compute_url_map.main.id
-  ssl_certificates = [
-    google_compute_managed_ssl_certificate.main.id,
-    google_compute_managed_ssl_certificate.app.id,
-  ]
+  ssl_certificates = concat(
+    [
+      google_compute_managed_ssl_certificate.main.id,
+      google_compute_managed_ssl_certificate.app.id,
+    ],
+    local.is_prod ? [google_compute_managed_ssl_certificate.admin[0].id] : [],
+  )
 }
 
 resource "google_compute_global_address" "lb" {
