@@ -77,6 +77,18 @@ variable "staging_allow_ip" {
   default     = "203.0.113.42/32"
 }
 
+variable "admin_iap_member" {
+  type        = string
+  description = "IAM member granted roles/iap.httpsResourceAccessor on the admin-panel backend. Use a Workspace group (`group:engineering@kanea.ai`) so membership changes don't require Tofu applies. The IAP edge gate runs BEFORE the request reaches Cloud Run, so this is the primary access boundary for the back-office; the in-app Superadmin JWT is the second layer."
+  default     = "group:engineering@kanea.ai"
+}
+
+variable "admin_iap_support_email" {
+  type        = string
+  description = "Support email shown on the IAP OAuth consent screen. Must be a Workspace group or a user the apply identity owns."
+  default     = "engineering@kanea.ai"
+}
+
 # Bootstrap placeholder. Cloud Run requires an image to create the service so
 # the LB can attach a serverless NEG; CD overwrites these with the real images
 # pushed to Artifact Registry. Combined with ignore_changes on the image

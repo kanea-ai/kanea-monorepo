@@ -165,8 +165,8 @@ resource "google_cloud_run_v2_service" "svc" {
 }
 
 # Allow public invocation through the load balancer for the three public-facing
-# services. admin-panel is intentionally excluded — it stays private and will
-# get a scoped invoker grant when access requirements are decided.
+# services. admin-panel is intentionally excluded — it sits behind IAP at the
+# LB edge (see ``iap.tf``) plus the in-app Superadmin gate.
 locals {
   public_services = ["web-app", "www", "api"]
 }
@@ -183,4 +183,35 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   # binding still works because the override is project-scoped — once prod
   # has applied it, both envs benefit.
   depends_on = [google_org_policy_policy.allowed_policy_member_domains]
+}
+
+# Admin-panel invoker. ``allUsers`` looks scary but is the correct
+# grant here BECAUSE:
+#   - Cloud Run ``ingress = INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER``
+#     refuses every request that doesn't come through our LB.
+#   - The LB drops every request that doesn't carry an IAP-issued
+#     token from the admin-panel backend service (see ``iap.tf``).
+# So the effective access surface is "members of `admin_iap_member`,
+# via the LB, holding a fresh Google sign-in cookie" — not "the
+# public internet". The pattern matches Google's IAP-with-Cloud-Run
+# reference design; the `allUsers` binding is the LB's identity from
+# Cloud Run's POV. Kept as a dedicated resource (not folded into
+# ``public_services``) so the next reader sees the explicit IAP
+# dependency rather than discovering it via grep.
+resource "google_cloud_run_v2_service_iam_member" "admin_panel_invoker" {
+  count = local.is_prod ? 1 : 0
+
+  name     = google_cloud_run_v2_service.svc["admin-panel"].name
+  location = google_cloud_run_v2_service.svc["admin-panel"].location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+
+  depends_on = [
+    google_org_policy_policy.allowed_policy_member_domains,
+    # IAP must be on the backend service before we open the invoker
+    # binding — order matters here because between the binding and
+    # IAP enable, the back-office would be reachable unauthenticated
+    # if an LB rule already existed.
+    google_iap_web_backend_service_iam_member.admin_panel_accessor,
+  ]
 }
