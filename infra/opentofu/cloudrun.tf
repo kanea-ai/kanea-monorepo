@@ -185,26 +185,33 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   depends_on = [google_org_policy_policy.allowed_policy_member_domains]
 }
 
-# Admin-panel invoker. ``allUsers`` looks scary but is the correct
-# grant here BECAUSE:
-#   - Cloud Run ``ingress = INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER``
-#     refuses every request that doesn't come through our LB.
-#   - The LB drops every request that doesn't carry an IAP-issued
-#     token from the admin-panel backend service (see ``iap.tf``).
-# So the effective access surface is "members of `admin_iap_member`,
-# via the LB, holding a fresh Google sign-in cookie" — not "the
-# public internet". The pattern matches Google's IAP-with-Cloud-Run
-# reference design; the `allUsers` binding is the LB's identity from
-# Cloud Run's POV. Kept as a dedicated resource (not folded into
-# ``public_services``) so the next reader sees the explicit IAP
-# dependency rather than discovering it via grep.
+# Admin-panel invoker. Scoped to the IAP Service Agent — the only
+# identity that should ever invoke this service. The agent is the
+# principal IAP uses to call backends on a signed-in user's behalf
+# after the LB-edge gate passes; granting it ``roles/run.invoker``
+# (and no one else) means a request that somehow bypasses both IAP
+# and the ingress check still gets rejected at Cloud Run's IAM.
+#
+# Defence-in-depth: ingress=internal-LB-only + IAP at the LB +
+# IAM-scoped invoker. Each layer is independently sufficient to
+# refuse a request; all three have to fail for the back-office to
+# leak. Earlier revisions of this file used ``allUsers`` here
+# (relying on the first two layers); we tightened to the IAP SA
+# after the agent's first request to the backend surfaced "The IAP
+# service account is not provisioned" — which forced the agent's
+# explicit existence into the runbook anyway.
+#
+# The IAP Service Agent must exist before this binding can be
+# written: ``gcloud beta services identity create --service=
+# iap.googleapis.com --project=<id>``. It is a one-shot per
+# project (not Tofu-tracked).
 resource "google_cloud_run_v2_service_iam_member" "admin_panel_invoker" {
   count = local.is_prod ? 1 : 0
 
   name     = google_cloud_run_v2_service.svc["admin-panel"].name
   location = google_cloud_run_v2_service.svc["admin-panel"].location
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-iap.iam.gserviceaccount.com"
 
   depends_on = [
     google_org_policy_policy.allowed_policy_member_domains,

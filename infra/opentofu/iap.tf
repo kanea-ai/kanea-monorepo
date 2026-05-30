@@ -50,6 +50,15 @@
 #      so the new value gets baked into the backend service on the
 #      next apply).
 
+# Project number — used to construct the IAP Service Agent email
+# below (``service-{number}@gcp-sa-iap.iam.gserviceaccount.com``).
+# The agent is provisioned out-of-band via
+# ``gcloud beta services identity create --service=iap.googleapis.com``
+# the first time IAP is enabled on a project; without it, IAP-proxied
+# requests fail at the LB with "The IAP service account is not
+# provisioned" even when every binding is in place.
+data "google_project" "current" {}
+
 data "google_secret_manager_secret_version" "iap_admin_client_id" {
   count   = local.is_prod ? 1 : 0
   project = var.project_id
