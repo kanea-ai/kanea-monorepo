@@ -5,9 +5,18 @@ from __future__ import annotations
 # dependency). Workspace OWNERs cannot reach these routes — the
 # ``users.is_superadmin`` flag is platform-level, separate from any
 # workspace role.
-from fastapi import APIRouter, status
+from typing import Annotated
+from uuid import UUID
 
-from app.api.deps import SuperadminDep
+from fastapi import APIRouter, HTTPException, Query, status
+
+from app.api.deps import AdminWorkspaceServiceDep, SuperadminDep
+from app.application.admin.schemas import (
+    AdminWorkspaceRow,
+    SuspendWorkspaceRequest,
+)
+from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
+from app.domain.exceptions import WorkspaceNotFoundError
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -20,3 +29,57 @@ async def admin_health(superadmin: SuperadminDep) -> dict[str, str]:
     superadmin's email so the caller can confirm which identity
     passed the gate."""
     return {"status": "ok", "email": superadmin.email}
+
+
+@router.get(
+    "/workspaces",
+    response_model=Page[AdminWorkspaceRow],
+    status_code=status.HTTP_200_OK,
+)
+async def list_workspaces(
+    _superadmin: SuperadminDep,
+    service: AdminWorkspaceServiceDep,
+    name: Annotated[str | None, Query(max_length=200)] = None,
+    sort: Annotated[str, Query()] = "created_at_desc",
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[AdminWorkspaceRow]:
+    """Cross-tenant workspace listing for the back-office grid.
+
+    Filters: ``name`` does a case-insensitive substring match against
+    name OR slug. ``sort`` accepts ``created_at_desc`` (default),
+    ``created_at_asc``, ``name_asc``, ``name_desc``,
+    ``suspended_at_desc``. Unknown sort keys fall back to
+    ``created_at_desc`` rather than 400-ing the operator's typo.
+
+    Each row carries aggregated metrics (``total_users``,
+    ``total_tasks``, ``total_tokens_used``) computed in the same SQL
+    pass as the listing — no N+1."""
+    return await service.list_workspaces(name=name, sort=sort, skip=skip, limit=limit)
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/suspend",
+    response_model=AdminWorkspaceRow,
+    status_code=status.HTTP_200_OK,
+)
+async def set_workspace_suspended(
+    workspace_id: UUID,
+    payload: SuspendWorkspaceRequest,
+    _superadmin: SuperadminDep,
+    service: AdminWorkspaceServiceDep,
+) -> AdminWorkspaceRow:
+    """Soft-suspend or restore a workspace.
+
+    ``is_suspended=true`` sets ``workspaces.suspended_at`` to now;
+    every workspace-scoped JWT for that workspace immediately bounces
+    with 403 (see ``get_current_principal``). ``is_suspended=false``
+    clears the column. Idempotent on both sides — re-suspending or
+    re-restoring keeps the original timestamp.
+
+    Soft suspension by design: no rows are deleted, so the workspace
+    can be restored at any time without backup juggling."""
+    try:
+        return await service.set_suspended(workspace_id, payload)
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -126,6 +126,15 @@ class WorkspaceModel(TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     task_prefix: Mapped[str] = mapped_column(String(8), nullable=False, default="TASK")
     next_task_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Soft-suspension stamp. NULL = active; non-NULL = the moment a
+    # superadmin suspended the workspace via /api/v1/admin/workspaces/
+    # {id}/suspend. ``get_current_principal`` rejects every workspace-
+    # scoped request with 403 while this is set. Soft-delete shape
+    # rather than a hard delete so no data is ever lost on an
+    # accidental click.
+    suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     teams: Mapped[list[TeamModel]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"

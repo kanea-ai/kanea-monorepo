@@ -59,6 +59,11 @@ class Workspace:
     next_task_seq: int
     created_at: datetime
     updated_at: datetime
+    # Soft suspension: NULL = active; non-NULL is the moment a
+    # superadmin flipped the workspace into the suspended state.
+    # ``get_current_principal`` rejects every workspace-scoped request
+    # with 403 while this is set.
+    suspended_at: datetime | None = None
 
 
 @dataclass(slots=True)

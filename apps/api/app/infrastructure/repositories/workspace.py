@@ -16,6 +16,7 @@ def _to_entity(row: WorkspaceModel) -> Workspace:
         slug=row.slug,
         task_prefix=row.task_prefix,
         next_task_seq=row.next_task_seq,
+        suspended_at=row.suspended_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

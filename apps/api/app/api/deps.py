@@ -9,6 +9,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.admin.ports import AdminWorkspaceRepository
+from app.application.admin.service import AdminWorkspaceService
 from app.application.agents.ports import AgentMemberRepository
 from app.application.agents.service import AgentService
 from app.application.audit.ports import AuditLogRepository
@@ -63,6 +65,7 @@ from app.core.config import Settings, settings
 from app.domain.entities import User
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
+from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
@@ -474,21 +477,25 @@ def _decode_principal(
 async def get_current_principal(
     principal: Annotated[Principal, Depends(_decode_principal)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
 ) -> Principal:
-    """Decode the JWT AND enforce the workspace-scoped suspension lock.
+    """Decode the JWT AND enforce two suspension locks:
+    (a) per-membership ``members.is_suspended`` and
+    (b) workspace-wide ``workspaces.suspended_at`` (set from the
+        back-office by a superadmin).
 
     A suspended member can still hold a valid (non-expired) JWT — the
-    gate sits here, in front of every workspace-scoped route, so the
-    moment an admin flips ``is_suspended`` on the member row the next
-    request bounces with 403. The underlying User row is untouched, so
-    the human can still log in and use any *other* workspace they
-    belong to: the lock is per-membership, not per-user.
+    gates sit here, in front of every workspace-scoped route, so the
+    moment an admin flips either flag the next request bounces with
+    403. The underlying User row is untouched, so the human can still
+    log in and use any *other* (active) workspace they belong to.
 
     Tokens with the ``select`` scope (the short-lived
     multi-workspace-picker token) are not workspace-bound — they don't
-    target a specific member, so this check is skipped. Workspace
-    binding happens on the subsequent ``select_workspace`` call, which
-    re-issues a fresh JWT.
+    target a specific member or workspace yet, so both checks are
+    skipped. Workspace binding happens on the subsequent
+    ``select_workspace`` call, which re-issues a fresh JWT and will
+    refuse to mint one for a suspended workspace.
 
     A 401 is returned (not 403) when the member row no longer exists
     so a freshly deleted member can't keep using their old token.
@@ -507,6 +514,18 @@ async def get_current_principal(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="your access to this workspace has been suspended",
+        )
+    workspace = await workspaces.get_by_id(principal.workspace_id)
+    if workspace is None:  # pragma: no cover - FK guarantee
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if workspace.suspended_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="workspace suspended",
         )
     return principal
 
@@ -578,6 +597,19 @@ async def get_current_superadmin(
 
 
 SuperadminDep = Annotated[User, Depends(get_current_superadmin)]
+
+
+def get_admin_workspace_repository(session: SessionDep) -> AdminWorkspaceRepository:
+    return SqlAlchemyAdminWorkspaceRepository(session)
+
+
+def get_admin_workspace_service(
+    workspaces: Annotated[AdminWorkspaceRepository, Depends(get_admin_workspace_repository)],
+) -> AdminWorkspaceService:
+    return AdminWorkspaceService(workspaces=workspaces)
+
+
+AdminWorkspaceServiceDep = Annotated[AdminWorkspaceService, Depends(get_admin_workspace_service)]
 
 
 # Variant that skips the suspension check. Reserved for the few
