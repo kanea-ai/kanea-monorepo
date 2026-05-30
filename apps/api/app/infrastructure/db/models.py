@@ -106,6 +106,16 @@ class UserModel(TimestampMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[OAuthProvider | None] = mapped_column(oauth_provider_enum, nullable=True)
     oauth_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Platform-level "God-Mode" flag for the internal back-office
+    # (apps/admin-panel). Gated by ``get_current_superadmin``. There is
+    # NO API path that can flip this column — elevation happens
+    # out-of-band via ``scripts.make_superadmin``.
+    is_superadmin: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+    )
 
 
 class WorkspaceModel(TimestampMixin, Base):

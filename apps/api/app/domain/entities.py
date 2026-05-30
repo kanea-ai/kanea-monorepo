@@ -38,6 +38,10 @@ class User:
     password_hash: str | None = None
     oauth_provider: OAuthProvider | None = None
     oauth_id: str | None = None
+    # Platform-level God-Mode flag — gates ``/api/v1/admin/*``.
+    # Set out-of-band via ``scripts.make_superadmin``; no API path
+    # flips this column.
+    is_superadmin: bool = False
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
