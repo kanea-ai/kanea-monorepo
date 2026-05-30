@@ -96,6 +96,24 @@ moved {
   to   = google_project_iam_member.deployer_run_admin[0]
 }
 
+# Manage IAP IAM policies on backend services (read + write). Required
+# because the deployer's apply reconciles
+# ``google_iap_web_backend_service_iam_member.admin_panel_accessor`` —
+# without ``iap.webBackendServices.{get,set}IamPolicy`` (bundled in
+# ``roles/iap.admin``) every plan 403s on the IAM refresh, even when
+# the resource itself is a no-op. Bound at the project level rather
+# than per-backend so future IAP-gated services don't need a separate
+# grant. ``roles/iap.admin`` is broader than strictly needed (it also
+# covers IAP settings) but it's the smallest predefined role with the
+# IAM-on-IAP-backends permission set; tightening further would require
+# a custom role.
+resource "google_project_iam_member" "deployer_iap_admin" {
+  count   = local.is_prod ? 1 : 0
+  project = var.project_id
+  role    = "roles/iap.admin"
+  member  = "serviceAccount:${google_service_account.github_deployer[0].email}"
+}
+
 # Allow the deployer to actAs the per-env runtime SAs. Lives in EACH env's
 # state because it binds to env-specific SAs (run-api / run-api-staging).
 # Member is the shared deployer SA (referenced by hardcoded email so this
