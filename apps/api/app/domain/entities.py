@@ -38,6 +38,17 @@ class User:
     password_hash: str | None = None
     oauth_provider: OAuthProvider | None = None
     oauth_id: str | None = None
+    # Platform-level God-Mode flag — gates ``/api/v1/admin/*``.
+    # Set out-of-band via ``scripts.make_superadmin``; no API path
+    # flips this column.
+    is_superadmin: bool = False
+    # Platform-wide ban for ToS violations. Flipped from the back-
+    # office; ``get_current_principal`` returns 403 while True.
+    is_banned: bool = False
+    # Stateless session-kill. JWTs with ``iat`` older than this stamp
+    # are rejected with 401, so admin force-password-reset takes effect
+    # immediately without an external revocation list.
+    sessions_invalidated_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -55,6 +66,11 @@ class Workspace:
     next_task_seq: int
     created_at: datetime
     updated_at: datetime
+    # Soft suspension: NULL = active; non-NULL is the moment a
+    # superadmin flipped the workspace into the suspended state.
+    # ``get_current_principal`` rejects every workspace-scoped request
+    # with 403 while this is set.
+    suspended_at: datetime | None = None
 
 
 @dataclass(slots=True)

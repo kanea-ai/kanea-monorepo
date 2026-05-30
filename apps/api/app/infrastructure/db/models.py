@@ -106,6 +106,34 @@ class UserModel(TimestampMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[OAuthProvider | None] = mapped_column(oauth_provider_enum, nullable=True)
     oauth_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Platform-level "God-Mode" flag for the internal back-office
+    # (apps/admin-panel). Gated by ``get_current_superadmin``. There is
+    # NO API path that can flip this column — elevation happens
+    # out-of-band via ``scripts.make_superadmin``.
+    is_superadmin: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+    )
+    # Platform-wide ban for ToS violations. While True every
+    # authenticated request bounces with 403 — the gate sits inside
+    # ``get_current_principal`` so the flip is instant. Set by the
+    # back-office (``POST /api/v1/admin/users/{id}/ban``).
+    is_banned: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        default=False,
+    )
+    # Stateless session-kill switch. When the back-office forces a
+    # password reset we stamp this column with ``now()``; the auth dep
+    # rejects any JWT whose ``iat`` is older than this value. Existing
+    # tokens are invalidated immediately without needing a blacklist.
+    sessions_invalidated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
 
 class WorkspaceModel(TimestampMixin, Base):
@@ -116,6 +144,15 @@ class WorkspaceModel(TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     task_prefix: Mapped[str] = mapped_column(String(8), nullable=False, default="TASK")
     next_task_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Soft-suspension stamp. NULL = active; non-NULL = the moment a
+    # superadmin suspended the workspace via /api/v1/admin/workspaces/
+    # {id}/suspend. ``get_current_principal`` rejects every workspace-
+    # scoped request with 403 while this is set. Soft-delete shape
+    # rather than a hard delete so no data is ever lost on an
+    # accidental click.
+    suspended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     teams: Mapped[list[TeamModel]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"

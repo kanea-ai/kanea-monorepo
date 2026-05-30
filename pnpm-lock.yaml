@@ -62,6 +62,9 @@ importers:
 
   apps/admin-panel:
     dependencies:
+      '@tanstack/react-query':
+        specifier: 5.59.20
+        version: 5.59.20(react@18.3.1)
       next:
         specifier: 14.2.15
         version: 14.2.15(@babel/core@7.29.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0)

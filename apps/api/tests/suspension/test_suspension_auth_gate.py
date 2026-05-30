@@ -27,11 +27,26 @@ from app.api.deps import (
     get_current_principal,
     get_member_repository,
     get_team_service,
+    get_workspace_repository,
 )
 from app.core.config import settings
-from app.domain.entities import Member
+from app.domain.entities import Member, Workspace
 from app.domain.enums import MemberRole, MemberType
 from app.main import app
+
+
+def _workspace(workspace_id: UUID, *, suspended_at=None) -> Workspace:
+    now = datetime.now(UTC)
+    return Workspace(
+        id=workspace_id,
+        name="X",
+        slug="x",
+        task_prefix="X",
+        next_task_seq=1,
+        created_at=now,
+        updated_at=now,
+        suspended_at=suspended_at,
+    )
 
 
 def _bearer(*, member_id: UUID, workspace_id: UUID, scope: str = "human") -> dict[str, str]:
@@ -75,10 +90,20 @@ def members_repo() -> AsyncMock:
 
 
 @pytest.fixture
-def client(members_repo: AsyncMock) -> Iterator[TestClient]:
-    """Stub the member repo (used by the suspension gate) and the team
-    service so the route resolves quickly. The team listing route is a
-    convenient probe — it sits behind PrincipalDep so the gate runs.
+def workspaces_repo() -> AsyncMock:
+    """Default to an active workspace; tests for the workspace-suspension
+    gate override ``get_by_id`` to return a suspended row."""
+    r = AsyncMock()
+    r.get_by_id.return_value = None  # tests set this per case
+    return r
+
+
+@pytest.fixture
+def client(members_repo: AsyncMock, workspaces_repo: AsyncMock) -> Iterator[TestClient]:
+    """Stub the member + workspace repos (used by the suspension gates)
+    and the team service so the route resolves quickly. The team
+    listing route is a convenient probe — it sits behind PrincipalDep
+    so both gates run.
 
     Removes the autouse ``_bypass_suspension_gate_by_default`` override
     so the real ``get_current_principal`` path runs, which is the whole
@@ -86,6 +111,7 @@ def client(members_repo: AsyncMock) -> Iterator[TestClient]:
     """
     app.dependency_overrides.pop(get_current_principal, None)
     app.dependency_overrides[get_member_repository] = lambda: members_repo
+    app.dependency_overrides[get_workspace_repository] = lambda: workspaces_repo
     team_service_mock = AsyncMock()
     # /teams now returns Page[TeamResponse] — wrap the empty list so
     # the route's response_model validation passes.
@@ -122,19 +148,46 @@ def test_suspended_membership_gets_403_on_workspace_route(
 # ---------- active membership in a DIFFERENT workspace works ----------
 
 
-def test_unsuspended_membership_passes(client: TestClient, members_repo: AsyncMock) -> None:
+def test_unsuspended_membership_passes(
+    client: TestClient, members_repo: AsyncMock, workspaces_repo: AsyncMock
+) -> None:
     """A separate JWT for another workspace where the member is NOT
-    suspended must work — the suspension is per-membership, not
-    per-user. We model this by having the repo return a member whose
-    is_suspended=False."""
+    suspended AND the workspace is active must work — the suspension is
+    per-membership / per-workspace, not per-user."""
     member_id = uuid4()
     workspace_id = uuid4()
     members_repo.get_by_id.return_value = _member(member_id, workspace_id, suspended=False)
+    workspaces_repo.get_by_id.return_value = _workspace(workspace_id)
     response = client.get(
         "/api/v1/teams",
         headers=_bearer(member_id=member_id, workspace_id=workspace_id),
     )
     assert response.status_code == 200
+
+
+# ---------- 403 for workspace-wide suspension ----------
+
+
+def test_workspace_suspended_returns_403(
+    client: TestClient, members_repo: AsyncMock, workspaces_repo: AsyncMock
+) -> None:
+    """A superadmin flipped ``workspaces.suspended_at`` from the back-
+    office; every workspace-scoped JWT for that workspace bounces with
+    403, even for members who themselves are not personally suspended.
+    The detail string distinguishes this from a per-member suspension
+    so the UI can render the right copy."""
+    member_id = uuid4()
+    workspace_id = uuid4()
+    members_repo.get_by_id.return_value = _member(member_id, workspace_id, suspended=False)
+    workspaces_repo.get_by_id.return_value = _workspace(
+        workspace_id, suspended_at=datetime.now(UTC)
+    )
+    response = client.get(
+        "/api/v1/teams",
+        headers=_bearer(member_id=member_id, workspace_id=workspace_id),
+    )
+    assert response.status_code == 403
+    assert "workspace suspended" in response.json()["detail"].lower()
 
 
 # ---------- cross-tenant membership rejected ----------

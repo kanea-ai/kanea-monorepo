@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.admin import router as admin_router
 from app.api.v1.agents import router as agents_router
 from app.api.v1.audit import router as audit_router
 from app.api.v1.auth import router as auth_router
@@ -53,6 +54,8 @@ app.include_router(blocks_router, prefix=API_V1_PREFIX)
 app.include_router(requests_router, prefix=API_V1_PREFIX)
 app.include_router(me_router, prefix=API_V1_PREFIX)
 app.include_router(workspaces_router, prefix=API_V1_PREFIX)
+# Back-office (apps/admin-panel) — every route gated by SuperadminDep.
+app.include_router(admin_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/health", tags=["health"])

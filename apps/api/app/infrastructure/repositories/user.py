@@ -18,6 +18,9 @@ def _to_entity(row: UserModel) -> User:
         password_hash=row.password_hash,
         oauth_provider=row.oauth_provider,
         oauth_id=row.oauth_id,
+        is_superadmin=row.is_superadmin,
+        is_banned=row.is_banned,
+        sessions_invalidated_at=row.sessions_invalidated_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

@@ -9,6 +9,14 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.admin.metrics_ports import AdminMetricsRepository
+from app.application.admin.metrics_service import AdminMetricsService
+from app.application.admin.ports import AdminWorkspaceRepository
+from app.application.admin.service import AdminWorkspaceService
+from app.application.admin.tenant_ports import AdminTenantRepository
+from app.application.admin.tenant_service import AdminTenantService
+from app.application.admin.users_ports import AdminUserRepository
+from app.application.admin.users_service import AdminUserService
 from app.application.agents.ports import AgentMemberRepository
 from app.application.agents.service import AgentService
 from app.application.audit.ports import AuditLogRepository
@@ -60,8 +68,13 @@ from app.application.tenants.service import InviteService
 from app.application.workspaces.ports import WorkspaceWriteRepository
 from app.application.workspaces.service import WorkspaceService
 from app.core.config import Settings, settings
+from app.domain.entities import User
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
+from app.infrastructure.repositories.admin_metrics import SqlAlchemyAdminMetricsRepository
+from app.infrastructure.repositories.admin_tenant import SqlAlchemyAdminTenantRepository
+from app.infrastructure.repositories.admin_user import SqlAlchemyAdminUserRepository
+from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
@@ -442,6 +455,11 @@ def _decode_principal(
         member_type = MemberType(str(payload["type"]))
         priority = int(str(payload["priority"]))
         scope = str(payload["scope"])
+        # `iat` is required by the JWT decoder (see ``options={"require"
+        # : ["exp","iat","sub"]}`` in JwtTokenService.decode), so this
+        # read is total — but cast defensively for older tokens that
+        # somehow landed without one.
+        iat = int(payload["iat"]) if "iat" in payload else None
         # `role` was added in migration 0004. Tokens minted before the
         # claim existed default to USER — least-privileged so they
         # can't perform OWNER/ADMIN actions until they re-auth.
@@ -467,30 +485,37 @@ def _decode_principal(
         priority=priority,
         scope=scope,
         role=role,
+        iat=iat,
     )
 
 
 async def get_current_principal(
     principal: Annotated[Principal, Depends(_decode_principal)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> Principal:
-    """Decode the JWT AND enforce the workspace-scoped suspension lock.
+    """Decode the JWT AND enforce four locks, in order:
 
-    A suspended member can still hold a valid (non-expired) JWT — the
-    gate sits here, in front of every workspace-scoped route, so the
-    moment an admin flips ``is_suspended`` on the member row the next
-    request bounces with 403. The underlying User row is untouched, so
-    the human can still log in and use any *other* workspace they
-    belong to: the lock is per-membership, not per-user.
+    1. Per-membership ``members.is_suspended`` → 403.
+    2. Workspace-wide ``workspaces.suspended_at`` → 403 (back-office
+       soft-suspension from a superadmin).
+    3. Platform-wide ``users.is_banned`` → 403 (back-office ToS
+       ban). Agents have no ``user_id`` and are unaffected here.
+    4. Stateless session-kill: JWT ``iat`` < ``users.sessions_invalidated_at``
+       → 401. Set by the back-office force-password-reset flow so
+       outstanding tokens become useless the instant the operator
+       acts.
 
     Tokens with the ``select`` scope (the short-lived
-    multi-workspace-picker token) are not workspace-bound — they don't
-    target a specific member, so this check is skipped. Workspace
-    binding happens on the subsequent ``select_workspace`` call, which
-    re-issues a fresh JWT.
+    multi-workspace-picker token) skip all four checks — they're not
+    workspace-bound and don't represent an active session yet. The
+    next call (``/auth/select-workspace``) re-runs the gates with a
+    fresh JWT.
 
-    A 401 is returned (not 403) when the member row no longer exists
-    so a freshly deleted member can't keep using their old token.
+    A 401 is returned (not 403) when the underlying member or user
+    row no longer exists so a freshly deleted identity can't keep
+    using their old token.
     """
     if principal.scope == "select":
         return principal
@@ -507,10 +532,176 @@ async def get_current_principal(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="your access to this workspace has been suspended",
         )
+    workspace = await workspaces.get_by_id(principal.workspace_id)
+    if workspace is None:  # pragma: no cover - FK guarantee
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if workspace.suspended_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="workspace suspended",
+        )
+
+    # Platform-level checks against the global User. Agents (no
+    # user_id) skip — they can't be banned through this surface; the
+    # admin-panel acts on humans only.
+    if member.user_id is not None:
+        user = await users.get_by_id(member.user_id)
+        if user is None:  # pragma: no cover - FK guarantee
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if user.is_banned:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="account banned",
+            )
+        if (
+            user.sessions_invalidated_at is not None
+            and principal.iat is not None
+            and principal.iat < int(user.sessions_invalidated_at.timestamp())
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="session invalidated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     return principal
 
 
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
+
+
+# ---------------------------------------------------------------------------
+# Superadmin (platform back-office) gate.
+# ---------------------------------------------------------------------------
+# Distinct from PrincipalDep: this one resolves the underlying global
+# ``User`` row and refuses the request unless ``users.is_superadmin``
+# is True. The flag is set out-of-band via the ``make_superadmin``
+# CLI script — no API path elevates a user, by design.
+
+
+async def get_current_superadmin(
+    principal: Annotated[Principal, Depends(_decode_principal)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> User:
+    """Gate the ``/api/v1/admin/*`` surface.
+
+    Decodes the JWT (workspace-scoped is fine — a superadmin can call
+    these endpoints regardless of which workspace they're currently in),
+    resolves the principal's underlying global User, and rejects unless
+    ``is_superadmin == True``.
+
+    Failure modes:
+    - 401 Unauthorized: bearer missing / malformed / member row gone /
+      user row gone. In every "I can't even identify you" case we
+      collapse to 401 so the back-office surface never leaks "yes
+      that user exists" via a status-code distinction.
+    - 403 Forbidden: identity resolved fine but the user lacks the
+      platform-level flag. This is what a workspace OWNER hits — the
+      OWNER role is workspace-scoped; platform power is a different
+      axis.
+
+    Returns the resolved ``User`` so callers don't have to re-load it.
+    """
+    member = await members.get_by_id(principal.member_id)
+    if member is None or member.workspace_id != principal.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if member.user_id is None:
+        # AGENT members have no User row → no platform identity to
+        # match against. They can never be superadmins.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = await users.get_by_id(member.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="superadmin privilege required",
+        )
+    return user
+
+
+SuperadminDep = Annotated[User, Depends(get_current_superadmin)]
+
+
+def get_admin_workspace_repository(session: SessionDep) -> AdminWorkspaceRepository:
+    return SqlAlchemyAdminWorkspaceRepository(session)
+
+
+def get_admin_workspace_service(
+    workspaces: Annotated[AdminWorkspaceRepository, Depends(get_admin_workspace_repository)],
+) -> AdminWorkspaceService:
+    return AdminWorkspaceService(workspaces=workspaces)
+
+
+AdminWorkspaceServiceDep = Annotated[AdminWorkspaceService, Depends(get_admin_workspace_service)]
+
+
+def get_admin_user_repository(session: SessionDep) -> AdminUserRepository:
+    return SqlAlchemyAdminUserRepository(session)
+
+
+def get_admin_user_service(
+    users: Annotated[AdminUserRepository, Depends(get_admin_user_repository)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+) -> AdminUserService:
+    return AdminUserService(users=users, hasher=hasher)
+
+
+AdminUserServiceDep = Annotated[AdminUserService, Depends(get_admin_user_service)]
+
+
+def get_admin_metrics_repository(session: SessionDep) -> AdminMetricsRepository:
+    return SqlAlchemyAdminMetricsRepository(session)
+
+
+def get_admin_metrics_service(
+    metrics: Annotated[AdminMetricsRepository, Depends(get_admin_metrics_repository)],
+) -> AdminMetricsService:
+    return AdminMetricsService(metrics=metrics)
+
+
+AdminMetricsServiceDep = Annotated[AdminMetricsService, Depends(get_admin_metrics_service)]
+
+
+def get_admin_tenant_repository(session: SessionDep) -> AdminTenantRepository:
+    return SqlAlchemyAdminTenantRepository(session)
+
+
+def get_admin_tenant_service(
+    tenant: Annotated[AdminTenantRepository, Depends(get_admin_tenant_repository)],
+    workspaces: Annotated[AdminWorkspaceRepository, Depends(get_admin_workspace_repository)],
+    departments: Annotated[DepartmentService, Depends(get_department_service)],
+    invites: Annotated[InviteService, Depends(get_invite_service)],
+) -> AdminTenantService:
+    return AdminTenantService(
+        tenant=tenant,
+        workspaces=workspaces,
+        departments=departments,
+        invites=invites,
+    )
+
+
+AdminTenantServiceDep = Annotated[AdminTenantService, Depends(get_admin_tenant_service)]
 
 
 # Variant that skips the suspension check. Reserved for the few
