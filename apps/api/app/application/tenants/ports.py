@@ -54,6 +54,13 @@ class TenantMemberRepository(Protocol):
         team_role: TeamRole | None,
     ) -> Member: ...
 
+    async def get_for_team_role(self, team_id: UUID, team_role: TeamRole) -> Member | None:
+        """The at-most-one member currently holding ``team_role`` on
+        ``team_id``. Used by the set-member-team flow to demote the
+        sitting MANAGER/LEAD before promoting the new one — the team-
+        leadership constraint is "exactly one MANAGER and one LEAD"."""
+        ...
+
     async def set_suspended(self, member_id: UUID, *, is_suspended: bool) -> Member: ...
 
     # Phase 5 batch 2 follow-up: per-member stats panel in the directory

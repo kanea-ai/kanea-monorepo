@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.domain.entities import Invite, Member
+from app.domain.entities import Department, Invite, Member
 from app.domain.enums import MemberRole, MemberType, TeamRole
 
 
@@ -57,6 +57,19 @@ class InviteAcceptRequest(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class MemberDepartmentSummary(BaseModel):
+    """Compact summary of the department a member's team belongs to.
+    Resolved at response-time from team.department_id so the UI can
+    render the full hierarchy (User -> Team -> Department) without a
+    follow-up call. Null for members not on a team, or whose team is
+    not filed under a department."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+
+
 class MemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,9 +83,13 @@ class MemberResponse(BaseModel):
     team_id: UUID | None
     team_role: TeamRole | None
     is_suspended: bool
+    # Resolved from team.department_id. Default None so call sites that
+    # don't need (or can't afford) the lookup — e.g. the directory
+    # list — can construct a response without paying for it.
+    department: MemberDepartmentSummary | None = None
 
     @classmethod
-    def from_entity(cls, member: Member) -> MemberResponse:
+    def from_entity(cls, member: Member, *, department: Department | None = None) -> MemberResponse:
         return cls(
             id=member.id,
             workspace_id=member.workspace_id,
@@ -84,6 +101,11 @@ class MemberResponse(BaseModel):
             team_id=member.team_id,
             team_role=member.team_role,
             is_suspended=member.is_suspended,
+            department=(
+                MemberDepartmentSummary(id=department.id, name=department.name)
+                if department is not None
+                else None
+            ),
         )
 
 

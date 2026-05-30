@@ -12,15 +12,25 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type Member, type MemberRole, type TeamRole } from '../lib/api';
+import { disabledEditTooltip, nearestEditors } from '../lib/permissions';
 import {
   useAdminSetMemberPassword,
+  useDepartments,
   useMemberStats,
+  useMembers,
   useSetMemberSuspension,
   useSetMemberTeam,
   useTeams,
   useUpdateMemberProfile,
 } from '../lib/queries';
 import { ConfirmDialog } from './ConfirmDialog';
+import { EditToolbar } from './EditToolbar';
+import { HeadOverseesTeamsGrid } from './HeadOverseesTeamsGrid';
+import {
+  findSittingRoleHolder,
+  RoleReplacementConfirm,
+  type RoleReplacementContext,
+} from './RoleReplacementConfirm';
 
 const ROLE_PILL: Record<MemberRole, string> = {
   WORKSPACE_OWNER: 'bg-indigo-100 text-indigo-800',
@@ -44,11 +54,41 @@ export function MemberDetailDialog({
   const setSuspension = useSetMemberSuspension();
   const { data: teamsPage } = useTeams();
   const teams = teamsPage?.items ?? [];
+  // Departments are needed in two places: (a) to infer the member's
+  // department from their team, and (b) to flag whether they're a
+  // Department Head (departments.head_id === member.id). Both reads
+  // share a single fetch — TanStack Query dedupes the call.
+  const { data: departmentsPage } = useDepartments();
+  const departments = departmentsPage?.items ?? [];
+  const memberTeam = useMemo(
+    () => teams.find((t) => t.id === member.team_id) ?? null,
+    [teams, member.team_id],
+  );
+  const teamDepartment = useMemo(
+    () =>
+      memberTeam?.department_id
+        ? (departments.find((d) => d.id === memberTeam.department_id) ?? null)
+        : null,
+    [departments, memberTeam],
+  );
+  const headedDepartment = useMemo(
+    () => departments.find((d) => d.head_id === member.id) ?? null,
+    [departments, member.id],
+  );
   const { data: stats, isLoading: statsLoading } = useMemberStats(member.id);
+  // Members cache feeds the smart tooltip's "ask the Manager (Name)"
+  // line — same humans-only fetch the directory page uses.
+  const { data: membersPage } = useMembers({ humansOnly: true });
+  const allMembers = membersPage?.items ?? [];
   // The suspension flow is destructive enough (kicks the member out
   // of every workspace request) that we route it through a confirm
   // dialog. Revoking is one click — no second prompt.
   const [confirmSuspend, setConfirmSuspend] = useState(false);
+  // Two independent edit toggles — profile (name/role/priority) and
+  // team (team_id + team_role). Each has its own dirty / save state
+  // so a typo on the team selector doesn't reset the profile fields.
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editingTeam, setEditingTeam] = useState(false);
 
   const [name, setName] = useState(member.name);
   const [role, setRole] = useState<MemberRole>(member.role);
@@ -64,6 +104,8 @@ export function MemberDetailDialog({
     setPriority(member.priority);
     setTeamId(member.team_id ?? '');
     setTeamRole(member.team_role ?? 'MEMBER');
+    setEditingProfile(false);
+    setEditingTeam(false);
     setError(null);
   }, [member.id, member.name, member.role, member.priority, member.team_id, member.team_role]);
 
@@ -85,6 +127,10 @@ export function MemberDetailDialog({
 
   const onSaveProfile = async () => {
     setError(null);
+    if (!profileDirty) {
+      setEditingProfile(false);
+      return;
+    }
     try {
       await update.mutateAsync({
         memberId: member.id,
@@ -94,13 +140,28 @@ export function MemberDetailDialog({
           priority: priority !== member.priority ? priority : undefined,
         },
       });
-      onClose();
+      setEditingProfile(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to save');
     }
   };
 
-  const onSaveTeam = async () => {
+  const onCancelProfile = () => {
+    setName(member.name);
+    setRole(member.role);
+    setPriority(member.priority);
+    setError(null);
+    setEditingProfile(false);
+  };
+
+  // Save flow with the single-MANAGER / single-LEAD intercept. If the
+  // admin is putting this member in the MANAGER (or LEAD) slot on a
+  // team that's already occupied by someone else, we route through a
+  // confirm modal first so they see who they're displacing. The
+  // actual PATCH only fires from ``commitTeamSave`` below.
+  const [pendingReplace, setPendingReplace] = useState<RoleReplacementContext | null>(null);
+
+  const commitTeamSave = async () => {
     setError(null);
     try {
       await setTeam.mutateAsync({
@@ -110,13 +171,65 @@ export function MemberDetailDialog({
           team_role: teamId === '' ? null : teamRole,
         },
       });
+      setEditingTeam(false);
+      setPendingReplace(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to update team');
     }
   };
 
+  const onSaveTeam = async () => {
+    setError(null);
+    if (!teamFieldDirty) {
+      setEditingTeam(false);
+      return;
+    }
+    if (teamId !== '' && (teamRole === 'MANAGER' || teamRole === 'LEAD')) {
+      const sitting = findSittingRoleHolder(allMembers, teamId, teamRole, member.id);
+      if (sitting !== null) {
+        const teamName = teams.find((t) => t.id === teamId)?.name ?? 'this team';
+        setPendingReplace({
+          teamName,
+          role: teamRole,
+          sittingHolder: sitting,
+          newHolderName: member.name,
+        });
+        return;
+      }
+    }
+    await commitTeamSave();
+  };
+
+  const onCancelTeam = () => {
+    setTeamId(member.team_id ?? '');
+    setTeamRole(member.team_role ?? 'MEMBER');
+    setError(null);
+    setEditingTeam(false);
+  };
+
   const isHuman = member.type === 'HUMAN';
   const pending = update.isPending || setTeam.isPending || setSuspension.isPending;
+
+  // Smart-tooltip context for the disabled-state Edit buttons. Targets
+  // the closest authorised editor of THIS member's slot (Team Manager
+  // + Department Head); falls back to "ask a workspace admin" when
+  // neither is set. Same data the Departments view uses.
+  const editTooltip = disabledEditTooltip(
+    nearestEditors({
+      teamId: member.team_id,
+      departmentId: teamDepartment?.id ?? null,
+      members: allMembers,
+      departments,
+      teams,
+    }),
+  );
+
+  // Two independent Edit gates. Both currently track ``isAdmin``;
+  // splitting them keeps room to widen one side later (e.g. allow a
+  // member to self-edit their team while keeping role / priority
+  // admin-only) without re-touching the JSX.
+  const profileEditBlocked = !isAdmin;
+  const teamEditBlocked = !isAdmin;
 
   const onSuspend = async () => {
     setError(null);
@@ -168,12 +281,25 @@ export function MemberDetailDialog({
           <TypePill type={member.type} />
         </div>
 
-        {/* Profile card — name / role / priority. Editable by workspace
-            owners + admins. Backend enforces the last-OWNER demotion
-            guard; we surface its 403 inline below. */}
+        {/* Profile card — name / role / priority. Read-only by default;
+            EditToolbar swaps in the form when admin clicks Edit.
+            Backend enforces the last-OWNER demotion guard; we surface
+            its 403 inline below. */}
         <Section title="Profile & permissions">
+          <EditToolbar
+            editing={editingProfile}
+            canEdit={!profileEditBlocked}
+            disabledReason={editTooltip}
+            onEdit={() => setEditingProfile(true)}
+            onCancel={onCancelProfile}
+            onSave={onSaveProfile}
+            dirty={profileDirty}
+            saving={update.isPending}
+            saveLabel="Save profile"
+            className="mb-3"
+          />
           <Field label="Display name">
-            {isAdmin ? (
+            {editingProfile ? (
               <input
                 type="text"
                 value={name}
@@ -186,7 +312,7 @@ export function MemberDetailDialog({
             )}
           </Field>
           <Field label="Workspace role">
-            {isAdmin ? (
+            {editingProfile ? (
               <div>
                 {/* Workspace role is the system-power axis and applies
                     to humans AND agents — agents need access power
@@ -212,7 +338,7 @@ export function MemberDetailDialog({
             )}
           </Field>
           <Field label="Priority">
-            {isAdmin ? (
+            {editingProfile ? (
               <input
                 type="number"
                 min={1}
@@ -227,73 +353,101 @@ export function MemberDetailDialog({
               </span>
             )}
           </Field>
-          {isAdmin ? (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={onSaveProfile}
-                disabled={!profileDirty || pending}
-                className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {update.isPending ? 'Saving…' : 'Save profile'}
-              </button>
-            </div>
-          ) : null}
         </Section>
 
-        {/* Team assignment. Admins (workspace owner/admin) can move a
-            member between teams or unassign them. Read-only otherwise. */}
-        <Section title="Team">
-          <Field label="Team">
-            {isAdmin ? (
-              <select
-                value={teamId}
-                onChange={(e) => setTeamId(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-              >
-                <option value="">— No team —</option>
-                {teams.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span className="text-sm text-slate-800">
-                {member.team_id ? (teams.find((t) => t.id === member.team_id)?.name ?? '—') : '—'}
+        {/* Hierarchy. Two mutually exclusive shapes:
+            - Department Head: hide the team selector entirely — a Head
+              sits above team-level leadership and shouldn't double as
+              a per-team MANAGER/LEAD. List the teams in their dept
+              instead so admins still see what they oversee.
+            - Otherwise: the existing Department (inferred) / Team /
+              Team Role view. Admins can edit Team / Team Role here. */}
+        {headedDepartment ? (
+          <Section title="Department">
+            <Field label="Department">
+              <span className="text-sm text-slate-800">{headedDepartment.name}</span>
+            </Field>
+            <Field label="Department role">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                Head
               </span>
-            )}
-          </Field>
-          <Field label="Team role">
-            {isAdmin ? (
-              <select
-                value={teamRole}
-                disabled={teamId === ''}
-                onChange={(e) => setTeamRole(e.target.value as TeamRole)}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-              >
-                <option value="HEAD">HEAD</option>
-                <option value="MANAGER">MANAGER</option>
-                <option value="LEAD">LEAD</option>
-                <option value="MEMBER">MEMBER</option>
-              </select>
-            ) : (
-              <span className="text-sm text-slate-800">{member.team_role ?? '—'}</span>
-            )}
-          </Field>
-          {isAdmin ? (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={onSaveTeam}
-                disabled={!teamFieldDirty || pending}
-                className="rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {setTeam.isPending ? 'Saving…' : 'Save team'}
-              </button>
+            </Field>
+            <div className="mt-3">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Teams overseen
+                <span className="ml-1.5 font-normal normal-case text-slate-500">
+                  ({teams.filter((t) => t.department_id === headedDepartment.id).length})
+                </span>
+              </p>
+              <HeadOverseesTeamsGrid
+                teams={teams.filter((t) => t.department_id === headedDepartment.id)}
+              />
             </div>
-          ) : null}
-        </Section>
+            <p className="mt-2 text-[10px] italic text-slate-500">
+              A Department Head doesn&apos;t belong to a single team. Remove the head from{' '}
+              <span className="font-mono">/departments</span> to re-enable team assignment.
+            </p>
+          </Section>
+        ) : (
+          <Section title="Team">
+            <EditToolbar
+              editing={editingTeam}
+              canEdit={!teamEditBlocked}
+              disabledReason={editTooltip}
+              onEdit={() => setEditingTeam(true)}
+              onCancel={onCancelTeam}
+              onSave={onSaveTeam}
+              dirty={teamFieldDirty}
+              saving={setTeam.isPending}
+              saveLabel="Save team"
+              className="mb-3"
+            />
+            {/* Read-only Department — inferred from the member's team
+                so the user sees the full org-chart slot they sit in.
+                Editing the department itself happens in /departments. */}
+            <Field label="Department">
+              <span className="text-sm text-slate-800">
+                {teamDepartment ? teamDepartment.name : '—'}
+              </span>
+            </Field>
+            <Field label="Team">
+              {editingTeam ? (
+                <select
+                  value={teamId}
+                  onChange={(e) => setTeamId(e.target.value)}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+                >
+                  <option value="">— No team —</option>
+                  {teams.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-sm text-slate-800">
+                  {member.team_id ? (teams.find((t) => t.id === member.team_id)?.name ?? '—') : '—'}
+                </span>
+              )}
+            </Field>
+            <Field label="Team role">
+              {editingTeam ? (
+                <select
+                  value={teamRole}
+                  disabled={teamId === ''}
+                  onChange={(e) => setTeamRole(e.target.value as TeamRole)}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
+                >
+                  <option value="MANAGER">MANAGER</option>
+                  <option value="LEAD">LEAD</option>
+                  <option value="MEMBER">MEMBER</option>
+                </select>
+              ) : (
+                <span className="text-sm text-slate-800">{member.team_role ?? '—'}</span>
+              )}
+            </Field>
+          </Section>
+        )}
 
         {/* Stats — same surface for humans and agents. */}
         <Section title="Activity">
@@ -412,6 +566,13 @@ export function MemberDetailDialog({
             await onSuspend();
             setConfirmSuspend(false);
           }}
+        />
+
+        <RoleReplacementConfirm
+          context={pendingReplace}
+          pending={setTeam.isPending}
+          onCancel={() => setPendingReplace(null)}
+          onConfirm={commitTeamSave}
         />
       </div>
     </div>

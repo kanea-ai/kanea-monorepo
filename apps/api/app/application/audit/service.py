@@ -9,6 +9,7 @@ from app.application.audit.schemas import AuditLogResponse
 from app.application.auth.ports import MemberRepository
 from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
+from app.application.teams.ports import TeamRepository
 from app.domain.entities import AuditLog, Member
 from app.domain.enums import AuditAction, AuditResourceType, MemberRole, TeamRole
 
@@ -28,12 +29,19 @@ class AuditLogService:
       priority-aware visibility rule documented on
       ``AuditResourceType``. Owner sees everything; Priority-2 Admin
       sees DEPARTMENT/TEAM/MEMBER; Priority-3 Admin sees TEAM rows
-      and only for teams where they're HEAD or MANAGER. Anything
-      below the admin role sees nothing (the route returns 403).
+      for teams they MANAGE on, plus every team in any department
+      they HEAD. Anything below the admin role sees nothing (the
+      route returns 403).
     """
 
     audit_logs: AuditLogRepository
     members: MemberRepository
+    # Required for the Priority-3 Admin reach computation — we walk
+    # ``members.team_id`` (MANAGER on their own team) AND
+    # ``departments.head_id`` (head of department → every team in it).
+    # Optional so legacy unit-test constructors that don't exercise
+    # the read path stay valid.
+    teams: TeamRepository | None = None
 
     async def record(
         self,
@@ -109,7 +117,9 @@ class AuditLogService:
         - Owner                          → all rows.
         - Admin, priority ≤ 2            → DEPARTMENT/TEAM/MEMBER.
         - Admin, priority ≤ 3            → TEAM rows for teams the
-                                           principal HEADs or MANAGERs.
+                                           principal manages, plus all
+                                           teams in departments they
+                                           head.
         - everyone else                  → nothing (the route guards
                                            with WorkspaceAdminDep, but
                                            the service-level rule is
@@ -129,11 +139,8 @@ class AuditLogService:
                     team_resource_ids=None,
                 )
             if principal.priority <= 3:
-                # Resolve the principal's overseen teams from their
-                # current membership row. They oversee a team when
-                # they hold HEAD or MANAGER on it.
                 self_member = await self.members.get_by_id(principal.member_id)
-                team_ids = _overseen_team_ids(self_member)
+                team_ids = await self._overseen_team_ids(self_member)
                 # If they oversee no teams, they see no audit rows —
                 # but we still return a non-None list (empty) so the
                 # repo applies the team_id IN (...) clause and returns
@@ -143,6 +150,23 @@ class AuditLogService:
                     team_resource_ids=team_ids,
                 )
         return _NONE_SCOPE
+
+    async def _overseen_team_ids(self, member: Member | None) -> list[UUID]:
+        """A Priority-3 Admin's audit reach is the union of:
+          - the team they MANAGE (team-level oversight), and
+          - every team in any department they HEAD (department-level
+            oversight, broader).
+        LEAD / MEMBER team_roles confer no audit reach — those are
+        work-execution ranks, not management ones."""
+        if member is None:
+            return []
+        overseen: set[UUID] = set()
+        if member.team_id is not None and member.team_role is TeamRole.MANAGER:
+            overseen.add(member.team_id)
+        if self.teams is not None:
+            for team_id in await self.teams.list_team_ids_for_department_head(member.id):
+                overseen.add(team_id)
+        return list(overseen)
 
 
 @dataclass(slots=True, frozen=True)
@@ -158,14 +182,3 @@ class _Scope:
 # Sentinel for "principal sees nothing at all" — distinct from "narrow
 # to empty list" so the repo never gets called.
 _NONE_SCOPE = _Scope(resource_types=[], team_resource_ids=None)
-
-
-def _overseen_team_ids(member: Member | None) -> list[UUID]:
-    """A Priority-3 Admin's audit reach is limited to the teams they
-    HEAD or MANAGER. A LEAD or MEMBER role wouldn't grant it — those
-    are work-execution roles, not management ones."""
-    if member is None or member.team_id is None or member.team_role is None:
-        return []
-    if member.team_role in (TeamRole.HEAD, TeamRole.MANAGER):
-        return [member.team_id]
-    return []

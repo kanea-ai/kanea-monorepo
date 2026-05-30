@@ -79,7 +79,11 @@ def invites_repo() -> AsyncMock:
 
 @pytest.fixture
 def members_repo() -> AsyncMock:
-    return AsyncMock()
+    r = AsyncMock()
+    # No sitting MANAGER/LEAD by default — the demotion path is opt-in
+    # for tests that exercise the single-rank constraint.
+    r.get_for_team_role.return_value = None
+    return r
 
 
 @pytest.fixture
@@ -278,14 +282,27 @@ def test_post_teams_accepts_admin(client: TestClient, team_service_mock: AsyncMo
 
 
 def test_set_member_team_route_rejects_member_role(client: TestClient) -> None:
-    """The PATCH endpoint sits behind WorkspaceAdminDep — a non-admin
-    JWT is rejected before reaching the service."""
-    response = client.patch(
-        f"/api/v1/tenants/members/{uuid4()}/team",
-        json={"team_id": str(uuid4()), "team_role": "LEAD"},
-        headers=_bearer("WORKSPACE_USER"),
+    """The PATCH endpoint is now open to any authenticated principal so
+    Department Heads can hit it (RBAC inheritance). The service still
+    refuses a plain WORKSPACE_USER who heads no department —
+    ForbiddenError → 403 at the route."""
+    from app.api.deps import get_invite_service
+    from app.domain.exceptions import ForbiddenError as _Forbidden
+
+    invite_service_mock = AsyncMock()
+    invite_service_mock.set_member_team.side_effect = _Forbidden(
+        "workspace owner or admin role required"
     )
-    assert response.status_code == 403
+    app.dependency_overrides[get_invite_service] = lambda: invite_service_mock
+    try:
+        response = client.patch(
+            f"/api/v1/tenants/members/{uuid4()}/team",
+            json={"team_id": str(uuid4()), "team_role": "LEAD"},
+            headers=_bearer("WORKSPACE_USER"),
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_invite_service, None)
 
 
 def test_set_member_team_route_404s_for_unknown_member(client: TestClient) -> None:

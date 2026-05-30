@@ -13,9 +13,11 @@ from app.application.departments.schemas import (
 )
 from app.application.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.domain.exceptions import (
+    DepartmentHeadNotInWorkspaceError,
     DepartmentNameConflictError,
     DepartmentNotFoundError,
     ForbiddenError,
+    MemberAlreadyDepartmentHeadError,
 )
 
 router = APIRouter(prefix="/departments", tags=["departments"])
@@ -53,6 +55,12 @@ async def create_department(
         return await service.create(payload, admin)
     except DepartmentNameConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DepartmentHeadNotInWorkspaceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except MemberAlreadyDepartmentHeadError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
@@ -89,6 +97,12 @@ async def update_department(
     except DepartmentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DepartmentNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DepartmentHeadNotInWorkspaceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except MemberAlreadyDepartmentHeadError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

@@ -64,12 +64,22 @@ class Department:
     A Department holds zero-or-more Teams (the join is on
     teams.department_id, SET NULL on delete). Departments don't grant
     permissions on their own — they're an organisational tag for the
-    UI's directory and team views."""
+    UI's directory and team views.
+
+    ``head_id`` (added in migration 0022) optionally designates a
+    member as the Department Head. The Head sits above team-level
+    leadership (MANAGER/LEAD) in the audit-visibility and request-
+    fulfilment predicates: a department head can fulfil cross-team
+    requests anchored to any team in their department. ON DELETE SET
+    NULL on the FK keeps the Department row alive when the head is
+    removed from the workspace.
+    """
 
     id: UUID
     workspace_id: UUID
     name: str
     description: str | None = None
+    head_id: UUID | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 

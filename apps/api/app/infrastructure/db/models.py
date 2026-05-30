@@ -132,6 +132,16 @@ class DepartmentModel(TimestampMixin, Base):
     __tablename__ = "departments"
     __table_args__ = (
         UniqueConstraint("workspace_id", "name", name="uq_departments_workspace_id_name"),
+        # Partial unique index: a member can head at most ONE
+        # department. Migration 0023 adds the same shape; this
+        # declaration is for ``Base.metadata.create_all`` used by
+        # integration tests so the test schema matches prod.
+        Index(
+            "uq_departments_head_id_not_null",
+            "head_id",
+            unique=True,
+            postgresql_where=text("head_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -143,8 +153,17 @@ class DepartmentModel(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional Department Head — see migration 0022 (added) and 0023
+    # (uniqueness). SET NULL on member delete so the Department row
+    # outlives its head.
+    head_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     teams: Mapped[list[TeamModel]] = relationship(back_populates="department")
+    head: Mapped[MemberModel | None] = relationship(foreign_keys=[head_id])
 
 
 class TeamModel(TimestampMixin, Base):

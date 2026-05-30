@@ -53,17 +53,43 @@ class WorkspaceOption(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    """Branched response. Single-workspace users get an `access_token`
-    immediately; multi-workspace users get a `selection_token` and a
-    list of `workspaces` to pick from. `requires_selection` makes the
-    branch easy to switch on client-side."""
+    """Branched response. Three shapes share this envelope:
 
-    requires_selection: bool
+    1. Single-workspace user → ``access_token`` is set, both flags
+       false.
+    2. Multi-workspace user → ``requires_selection=True`` with a
+       ``selection_token`` and the ``workspaces`` list.
+    3. Brand-new SSO user → ``requires_onboarding=True`` with an
+       ``onboarding_token`` and a ``suggested_workspace_name``
+       preview; the caller exchanges that token at
+       ``/auth/complete-oauth-onboarding`` once the user has picked
+       a workspace name.
+
+    Both flags are mutually exclusive; the FE switches on them in
+    that order (onboarding wins over selection, both win over the
+    happy path)."""
+
+    requires_selection: bool = False
+    requires_onboarding: bool = False
     access_token: str | None = None
     token_type: str = "bearer"
     expires_in: int | None = None
     selection_token: str | None = None
     workspaces: list[WorkspaceOption] | None = None
+    onboarding_token: str | None = None
+    suggested_workspace_name: str | None = None
+
+
+class CompleteOAuthOnboardingRequest(BaseModel):
+    """Second leg of the SSO signup flow. The caller holds an
+    onboarding token minted by ``/auth/oauth/{provider}/callback``
+    and supplies the workspace name the user chose on the
+    ``/onboarding/workspace`` screen."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    onboarding_token: str = Field(min_length=1)
+    workspace_name: str = Field(min_length=1, max_length=120)
 
 
 class SelectWorkspaceRequest(BaseModel):

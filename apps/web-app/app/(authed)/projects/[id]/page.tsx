@@ -2,10 +2,13 @@
 
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ConfirmDialog } from '../../../components/ConfirmDialog';
+import { EditToolbar } from '../../../components/EditToolbar';
 import { ApiError, type Task } from '../../../lib/api';
+import { useCurrentPrincipal } from '../../../lib/auth';
+import { canEditProject } from '../../../lib/permissions';
 import {
   useDeleteProject,
   useProject,
@@ -21,11 +24,14 @@ export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
+  const principal = useCurrentPrincipal();
+  const canEdit = canEditProject(principal);
   const { data: project, isLoading, isError, error } = useProject(id);
   const { data: tasks } = useProjectTasks(id);
   const update = useUpdateProject(id);
   const remove = useDeleteProject();
 
+  const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -37,6 +43,7 @@ export default function ProjectDetailPage() {
     if (project) {
       setName(project.name);
       setDescription(project.description ?? '');
+      setEditing(false);
     }
   }, [project]);
 
@@ -48,22 +55,38 @@ export default function ProjectDetailPage() {
   }
   if (!project) return null;
 
-  const onSave = async (e: FormEvent) => {
-    e.preventDefault();
+  const trimmedDesc = description.trim();
+  const newDesc = trimmedDesc === '' ? null : trimmedDesc;
+  const nameChanged = name !== project.name && name.trim() !== '';
+  const descChanged = newDesc !== project.description;
+  const dirty = nameChanged || descChanged;
+
+  const onSave = async () => {
     setEditError(null);
+    if (!dirty) {
+      setEditing(false);
+      return;
+    }
     try {
-      const trimmed = description.trim();
       const payload: { name?: string; description?: string | null } = {};
-      if (name !== project.name) payload.name = name;
-      const newDesc = trimmed === '' ? null : trimmed;
-      if (newDesc !== project.description) payload.description = newDesc;
-      if (Object.keys(payload).length === 0) return;
+      if (nameChanged) payload.name = name;
+      if (descChanged) payload.description = newDesc;
       await update.mutateAsync(payload);
       setSavedAt(Date.now());
+      setEditing(false);
     } catch (err) {
       setEditError(err instanceof ApiError ? err.detail : 'Failed to save');
     }
   };
+
+  const onCancelEdit = () => {
+    setName(project.name);
+    setDescription(project.description ?? '');
+    setEditError(null);
+    setEditing(false);
+  };
+
+  const editTooltip = 'You do not have permission to edit this. Please ask a workspace admin.';
 
   const onToggleArchive = async () => {
     setEditError(null);
@@ -118,60 +141,85 @@ export default function ProjectDetailPage() {
       </header>
 
       <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-slate-100 px-4 py-3">
+        <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-900">Profile</h2>
-        </header>
-        <form className="space-y-3 px-4 py-4" onSubmit={onSave}>
-          <div>
-            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600">
-              Name
-            </label>
-            <input
-              type="text"
-              value={name}
-              maxLength={200}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600">
-              Description
-            </label>
-            <textarea
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What does success look like for this project?"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-          <div className="flex items-center justify-end gap-3">
-            {editError ? (
-              <p role="alert" className="mr-auto text-xs text-red-600">
-                {editError}
-              </p>
-            ) : null}
-            {savedAt && !update.isPending && !editError ? (
-              <span className="mr-auto text-xs text-emerald-700">Saved</span>
-            ) : null}
+          {/* Read-only by default. Edit toggles in the form below;
+              Archive/Restore stays as a separate action (a status flip
+              isn't a profile edit). */}
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onToggleArchive}
-              disabled={update.isPending}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              disabled={update.isPending || !canEdit}
+              title={canEdit ? undefined : editTooltip}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {project.status === 'ACTIVE' ? 'Archive' : 'Restore'}
             </button>
-            <button
-              type="submit"
-              disabled={update.isPending}
-              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {update.isPending ? 'Saving…' : 'Save changes'}
-            </button>
+            <EditToolbar
+              editing={editing}
+              canEdit={canEdit}
+              disabledReason={editTooltip}
+              onEdit={() => setEditing(true)}
+              onCancel={onCancelEdit}
+              onSave={onSave}
+              dirty={dirty}
+              saving={update.isPending}
+              saveLabel="Save changes"
+            />
           </div>
-        </form>
+        </header>
+        <div className="space-y-3 px-4 py-4">
+          {editing ? (
+            <>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  maxLength={200}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-600">
+                  Description
+                </label>
+                <textarea
+                  rows={3}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="What does success look like for this project?"
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            </>
+          ) : (
+            <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+              <dt className="text-slate-500">Name</dt>
+              <dd className="text-sm text-slate-800">{project.name}</dd>
+              <dt className="text-slate-500">Description</dt>
+              <dd className="text-sm text-slate-800">
+                {project.description ? (
+                  project.description
+                ) : (
+                  <span className="italic text-slate-500">No description.</span>
+                )}
+              </dd>
+            </dl>
+          )}
+          {editError ? (
+            <p role="alert" className="text-xs text-red-600">
+              {editError}
+            </p>
+          ) : null}
+          {savedAt && !update.isPending && !editError && !editing ? (
+            <p className="text-xs text-emerald-700">Saved</p>
+          ) : null}
+        </div>
       </section>
 
       <ProjectTasksList tasks={tasks ?? []} />
@@ -188,7 +236,9 @@ export default function ProjectDetailPage() {
           <button
             type="button"
             onClick={() => setConfirmOpen(true)}
-            className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+            disabled={!canEdit}
+            title={canEdit ? undefined : editTooltip}
+            className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Delete project
           </button>

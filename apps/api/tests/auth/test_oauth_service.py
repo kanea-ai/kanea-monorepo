@@ -20,7 +20,7 @@ import pytest
 from app.application.auth.oauth import OAuthIdentity
 from app.application.auth.service import AuthService
 from app.domain.entities import User, Workspace
-from app.domain.enums import MemberType, OAuthProvider
+from app.domain.enums import OAuthProvider
 from tests.auth.factories import make_human
 
 
@@ -150,26 +150,93 @@ async def test_oauth_login_links_to_existing_email(
     )
 
 
-# Path 3: brand-new → provision.
+# Path 3: brand-new → onboarding (deferred provisioning, was auto-provision pre-Task-3).
+#
+# As of Task 3, a brand-new OAuth user is NOT auto-provisioned. The
+# service mints an onboarding token carrying the OAuth identity and
+# returns ``requires_onboarding=True``; the frontend prompts for a
+# workspace name and POSTs to ``/auth/complete-oauth-onboarding`` to
+# finish the signup. No DB rows are created in oauth_login for
+# brand-new users — that path moved to complete_oauth_onboarding.
 
 
-async def test_oauth_login_provisions_new_account(
+async def test_oauth_login_brand_new_returns_onboarding_token(
     service: AuthService,
     users: AsyncMock,
     workspaces: AsyncMock,
     members: AsyncMock,
     tokens: MagicMock,
 ) -> None:
+    tokens.issue_onboarding_token.return_value = ("onboarding.jwt", 600)
+    users.get_by_oauth_identity.return_value = None
+    users.get_by_email.return_value = None
+
+    response = await service.oauth_login(_identity())
+
+    # Onboarding branch: no token, no DB writes.
+    assert response.requires_onboarding is True
+    assert response.onboarding_token == "onboarding.jwt"
+    assert response.access_token is None
+    assert response.requires_selection is False
+    # The suggested name preview lets the FE prefill the prompt.
+    assert response.suggested_workspace_name == "Alice's workspace"
+
+    # No User / Workspace / Member created yet — that happens in
+    # complete_oauth_onboarding.
+    users.create.assert_not_called()
+    workspaces.create.assert_not_called()
+    members.create.assert_not_called()
+    # Onboarding token was issued with the OAuth identity payload.
+    tokens.issue_onboarding_token.assert_called_once()
+    issued_identity = tokens.issue_onboarding_token.call_args.args[0]
+    assert issued_identity.email == "alice@kanea.ai"
+    assert issued_identity.provider is OAuthProvider.GOOGLE
+
+
+async def test_oauth_login_brand_new_no_name_falls_back_to_workspace(
+    service: AuthService,
+    users: AsyncMock,
+    tokens: MagicMock,
+) -> None:
+    """When the OAuth identity has no display name, the suggested
+    workspace name falls back to a sensible default ('Workspace')
+    rather than including a None."""
+    tokens.issue_onboarding_token.return_value = ("onboarding.jwt", 600)
+    users.get_by_oauth_identity.return_value = None
+    users.get_by_email.return_value = None
+
+    response = await service.oauth_login(
+        _identity(name=None, email="anon@example.com")  # type: ignore[arg-type]
+    )
+    assert response.requires_onboarding is True
+    assert response.suggested_workspace_name == "Workspace"
+
+
+# complete_oauth_onboarding: the second leg of the brand-new path.
+
+
+async def test_complete_oauth_onboarding_creates_account(
+    service: AuthService,
+    users: AsyncMock,
+    workspaces: AsyncMock,
+    members: AsyncMock,
+    tokens: MagicMock,
+) -> None:
+    tokens.decode_onboarding_token.return_value = _identity()
     users.get_by_oauth_identity.return_value = None
     users.get_by_email.return_value = None
     users.create.side_effect = lambda u: u
     workspaces.create.side_effect = lambda ws: ws
     members.create.side_effect = lambda m: m
-    members.list_for_user.return_value = [make_human(email="alice@kanea.ai")]
+    new_member = make_human(email="alice@kanea.ai")
+    members.list_for_user.return_value = [new_member]
 
-    response = await service.oauth_login(_identity())
+    response = await service.complete_oauth_onboarding(
+        onboarding_token="onboarding.jwt",
+        workspace_name="Acme",
+    )
 
-    assert response.access_token == "human.jwt"
+    # Trio of writes happens here, NOT in oauth_login.
     users.create.assert_awaited_once()
     persisted_user: User = users.create.await_args.args[0]
     assert persisted_user.email == "alice@kanea.ai"
@@ -177,12 +244,80 @@ async def test_oauth_login_provisions_new_account(
 
     workspaces.create.assert_awaited_once()
     created_ws: Workspace = workspaces.create.await_args.args[0]
-    assert created_ws.name == "Alice's workspace"
+    # Critically: the workspace takes the USER-PROVIDED name, NOT the
+    # auto-generated "{full_name}'s workspace" template.
+    assert created_ws.name == "Acme"
 
     members.create.assert_awaited_once()
     created_member = members.create.await_args.args[0]
     assert created_member.user_id == persisted_user.id
-    assert created_member.type is MemberType.HUMAN
+
+    assert response.access_token == "human.jwt"
+
+
+async def test_complete_oauth_onboarding_invalid_token_raises(
+    service: AuthService,
+    tokens: MagicMock,
+    users: AsyncMock,
+) -> None:
+    """Expired / malformed / wrong-scope onboarding tokens surface as
+    AuthenticationError (mapped to 401 at the route)."""
+    import jwt as pyjwt
+
+    from app.domain.exceptions import AuthenticationError
+
+    tokens.decode_onboarding_token.side_effect = pyjwt.InvalidTokenError("expired")
+    with pytest.raises(AuthenticationError):
+        await service.complete_oauth_onboarding(onboarding_token="bad.jwt", workspace_name="Acme")
+    users.create.assert_not_called()
+
+
+async def test_complete_oauth_onboarding_name_conflict_raises(
+    service: AuthService,
+    users: AsyncMock,
+    workspaces: AsyncMock,
+    tokens: MagicMock,
+) -> None:
+    """Globally-unique workspaces.name: a taken name on the platform
+    surfaces as WorkspaceNameConflictError (mapped to 409)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.domain.exceptions import WorkspaceNameConflictError
+
+    tokens.decode_onboarding_token.return_value = _identity()
+    users.get_by_oauth_identity.return_value = None
+    users.get_by_email.return_value = None
+    users.create.side_effect = lambda u: u
+    workspaces.create.side_effect = IntegrityError("unique", params=None, orig=Exception())
+
+    with pytest.raises(WorkspaceNameConflictError):
+        await service.complete_oauth_onboarding(
+            onboarding_token="onboarding.jwt", workspace_name="Taken"
+        )
+
+
+async def test_complete_oauth_onboarding_already_signed_up_returns_token(
+    service: AuthService,
+    users: AsyncMock,
+    workspaces: AsyncMock,
+    members: AsyncMock,
+    tokens: MagicMock,
+) -> None:
+    """Race condition: between oauth_login (which minted the token)
+    and complete (which is being called now), the user finished
+    signup via a different tab. We don't double-provision — we just
+    log them in to their existing workspace."""
+    tokens.decode_onboarding_token.return_value = _identity()
+    existing_user = _user(oauth_provider=OAuthProvider.GOOGLE, oauth_id="google-sub-12345")
+    users.get_by_oauth_identity.return_value = existing_user
+    members.list_for_user.return_value = [make_human(email=existing_user.email)]
+
+    response = await service.complete_oauth_onboarding(
+        onboarding_token="onboarding.jwt", workspace_name="Whatever"
+    )
+    assert response.access_token == "human.jwt"
+    users.create.assert_not_called()
+    workspaces.create.assert_not_called()
 
 
 async def test_oauth_login_multi_workspace_returns_selection(

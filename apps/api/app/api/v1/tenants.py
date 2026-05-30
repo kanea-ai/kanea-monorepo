@@ -34,6 +34,7 @@ from app.domain.exceptions import (
     InviteAlreadyAcceptedError,
     InviteExpiredError,
     InviteNotFoundError,
+    MemberIsDepartmentHeadError,
 )
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
@@ -256,18 +257,25 @@ async def set_member_suspension(
 async def set_member_team(
     member_id: UUID,
     payload: SetMemberTeamRequest,
-    admin: WorkspaceAdminDep,
+    principal: PrincipalDep,
     service: InviteServiceDep,
 ) -> MemberResponse:
-    """Workspace admins assign a member to a Team and set their
-    intra-team role. Use team_id=null to unassign."""
+    """Assign a member to a Team and set their intra-team role.
+    Workspace OWNER/ADMIN can move anyone; a Department Head can move
+    members into the teams under their own department (implicit
+    MANAGER-level reach). The service rejects the assignment if the
+    target is itself a Department Head — heads sit above teams, so
+    they cannot simultaneously hold a per-team rank. Response embeds
+    the resolved Department so the UI renders the new hierarchy
+    without a follow-up call."""
     try:
-        member = await service.set_member_team(member_id, payload, admin)
+        return await service.set_member_team(member_id, payload, principal)
+    except MemberIsDepartmentHeadError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    return MemberResponse.from_entity(member)
 
 
 @router.post(

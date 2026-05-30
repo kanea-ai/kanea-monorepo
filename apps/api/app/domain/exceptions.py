@@ -19,6 +19,12 @@ class WorkspaceNameConflictError(DomainError):
     workspaces.name."""
 
 
+class WorkspaceNotFoundError(DomainError):
+    """Raised when a workspace id doesn't resolve, or when the path
+    workspace_id doesn't match the principal's JWT — returned as 404
+    in both cases so existence of OTHER workspaces isn't leaked."""
+
+
 class InvalidMemberTypeError(DomainError):
     """Raised when an operation receives a member of the wrong type."""
 
@@ -96,6 +102,32 @@ class DepartmentNotFoundError(DomainError):
 class DepartmentNameConflictError(DomainError):
     """Raised when create/update would violate the per-workspace
     department name uniqueness constraint."""
+
+
+class DepartmentHeadNotInWorkspaceError(DomainError):
+    """Raised when ``head_id`` on a department create/update does not
+    resolve to a member of the same workspace. Mapped to 422 by the
+    route — it's a request-body validation failure, not a missing
+    resource."""
+
+
+class MemberIsDepartmentHeadError(DomainError):
+    """Raised when an admin tries to assign a Team to a member who is
+    currently the head of some Department.
+
+    The hierarchy rule is "a Department Head sits above teams" — they
+    cannot simultaneously hold a Team rank (MANAGER / LEAD / MEMBER)
+    and a head role. To put this member on a team, the admin must
+    first remove them from the head_id of their department. Mapped to
+    409 at the route."""
+
+
+class MemberAlreadyDepartmentHeadError(DomainError):
+    """Raised when ``head_id`` on a department create/update would
+    cause a member to head more than one department. A member can be
+    the head of at most one Department (one-to-one constraint, also
+    enforced by a partial unique index on ``departments.head_id``).
+    Mapped to 409 at the route."""
 
 
 class MemberSuspendedError(DomainError):

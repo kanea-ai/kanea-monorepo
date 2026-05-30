@@ -5,15 +5,20 @@
 // AuthContext from the api's redirect query and bounces.
 //
 // Possible inputs (set by the api's /oauth/{provider}/callback):
-//   ?token=…                                     → single workspace
-//   ?selection_token=…&workspaces=<base64-json>  → multi workspace
-//   ?error=…                                     → provider denied / consent failed
+//   ?token=…                                       → single workspace
+//   ?selection_token=…&workspaces=<base64-json>    → multi workspace
+//   ?onboarding_token=…&suggested_workspace_name=… → brand-new SSO user,
+//                                                    needs to pick a
+//                                                    workspace name
+//   ?error=…                                       → provider denied
+//                                                    / consent failed
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
 import { type WorkspaceOption } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { ONBOARDING_KEY } from '../../onboarding/workspace/page';
 import { SELECTION_KEY } from '../../workspaces/page';
 
 export default function AuthCallbackPage() {
@@ -44,6 +49,29 @@ function CallbackHandler() {
       setTokenFromOAuth(token);
       router.replace('/');
       return;
+    }
+
+    const onboardingToken = params.get('onboarding_token');
+    if (onboardingToken) {
+      // Brand-new SSO user — hand off to /onboarding/workspace so the
+      // caller can pick a workspace name. The token isn't a usable
+      // access token; the onboarding page exchanges it for a real
+      // one via POST /auth/complete-oauth-onboarding.
+      const suggested = params.get('suggested_workspace_name') ?? '';
+      try {
+        window.sessionStorage.setItem(
+          ONBOARDING_KEY,
+          JSON.stringify({
+            onboarding_token: onboardingToken,
+            suggested_workspace_name: suggested,
+          }),
+        );
+        router.replace('/onboarding/workspace');
+        return;
+      } catch {
+        setError('storage_unavailable');
+        return;
+      }
     }
 
     const selectionToken = params.get('selection_token');

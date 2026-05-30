@@ -2,7 +2,7 @@
 
 Five role tiers, each producing a different repo call:
 - ADMIN/OWNER: no narrowing (workspace-wide).
-- HEAD/MANAGER on a team: project-set across the team's projects
+- MANAGER on a team: project-set across the team's projects
   PLUS the team itself.
 - LEAD on a team: team-only.
 - MEMBER on a team: self + team.
@@ -134,10 +134,13 @@ async def test_manager_sees_team_plus_projects(
     )
 
 
-async def test_head_treated_as_manager(
+async def test_manager_with_only_one_project(
     deps: tuple[MeService, AsyncMock, AsyncMock, AsyncMock, MagicMock, AsyncMock],
 ) -> None:
-    """HEAD is the team's top — same projects-scoped view as MANAGER."""
+    """A MANAGER on a team with a single project still gets the
+    project-scoped "Projects you oversee" view. (HEAD was removed
+    from TeamRole in migration 0022; the same scoping is now exclusive
+    to MANAGER.)"""
     svc, _u, members, workspaces, _h, tasks = deps
     p = _principal()
     team_id = uuid4()
@@ -145,7 +148,7 @@ async def test_head_treated_as_manager(
         member_id=p.member_id,
         workspace_id=p.workspace_id,
         team_id=team_id,
-        team_role=TeamRole.HEAD,
+        team_role=TeamRole.MANAGER,
     )
     workspaces.get_by_id.return_value = _workspace(p.workspace_id)
     tasks.list_project_ids_for_team.return_value = [uuid4()]

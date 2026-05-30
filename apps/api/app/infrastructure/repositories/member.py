@@ -66,6 +66,17 @@ class SqlAlchemyMemberRepository:
         row = await self._session.get(MemberModel, member_id)
         return _to_entity(row) if row is not None else None
 
+    async def list_by_ids(self, member_ids: list[UUID]) -> list[Member]:
+        """Bulk lookup. Used by surfaces that resolve a denormalised
+        ``member_id`` set into the member rows in one round-trip —
+        e.g. DepartmentService building head summaries for the
+        departments list."""
+        if not member_ids:
+            return []
+        stmt = select(MemberModel).where(MemberModel.id.in_(member_ids))
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
     async def create(self, member: Member) -> Member:
         row = MemberModel(
             id=member.id,
@@ -145,6 +156,18 @@ class SqlAlchemyMemberRepository:
         await self._session.flush()
         await self._session.refresh(row)
         return _to_entity(row)
+
+    async def get_for_team_role(self, team_id: UUID, team_role: TeamRole) -> Member | None:
+        """One-MANAGER / one-LEAD constraint helper. The partial unique
+        index on (team_id) WHERE team_role IN ('MANAGER', 'LEAD')
+        guarantees at most one row per (team, role); the service uses
+        this lookup to demote that holder before promoting a new one."""
+        stmt = select(MemberModel).where(
+            MemberModel.team_id == team_id,
+            MemberModel.team_role == team_role,
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _to_entity(row) if row is not None else None
 
     async def set_suspended(self, member_id: UUID, *, is_suspended: bool) -> Member:
         """Flip the workspace-scoped soft lock. Caller validates RBAC

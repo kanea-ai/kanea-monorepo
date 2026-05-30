@@ -701,8 +701,9 @@ class TaskService:
         return request
 
     async def _require_team_leadership_for_source(self, requester: Principal, source: Task) -> None:
-        """Fulfill / reject permission: workspace admin OR a HEAD /
-        MANAGER / LEAD on the source task's team."""
+        """Fulfill / reject permission: workspace admin OR a
+        MANAGER / LEAD on the source task's team OR the head of the
+        department the source team belongs to."""
         if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             return
         me = await self.members.get_by_id(requester.member_id)
@@ -711,13 +712,27 @@ class TaskService:
         if (
             source.team_id is not None
             and me.team_id == source.team_id
-            and me.team_role in (TeamRole.HEAD, TeamRole.MANAGER, TeamRole.LEAD)
+            and me.team_role in (TeamRole.MANAGER, TeamRole.LEAD)
+        ):
+            return
+        if source.team_id is not None and await self._is_department_head_of_team(
+            requester.member_id, source.team_id
         ):
             return
         raise TaskRequestForbiddenError(
-            "only the source team's leadership (HEAD / MANAGER / LEAD) "
-            "or a workspace admin can resolve this request"
+            "only the source team's leadership (MANAGER / LEAD), "
+            "its department head, or a workspace admin can resolve this request"
         )
+
+    async def _is_department_head_of_team(self, member_id: UUID, team_id: UUID) -> bool:
+        """Returns True if ``member_id`` is the head of the department
+        that ``team_id`` belongs to. Returns False (no error) when the
+        team has no department or the department has no head — those
+        are simply "not the head" cases."""
+        if self.team_lookup is None:  # pragma: no cover - DI invariant
+            return False
+        head_id = await self.team_lookup.get_department_head_for_team(team_id)
+        return head_id is not None and head_id == member_id
 
     async def _request_to_response(self, row: TaskRequest) -> TaskRequestResponse:
         requester_name: str | None = None
@@ -749,8 +764,9 @@ class TaskService:
     async def _enforce_cross_team_rule(self, requester: Principal, target_team_id: UUID) -> None:
         """Section 3: standard MEMBERs can't create tasks on a team
         they don't belong to. Workspace OWNER / ADMIN bypass; team
-        leadership (HEAD / MANAGER / LEAD) bypass — they're the
-        escalation path for the cross-team request workflow."""
+        leadership (MANAGER / LEAD) bypass — and the head of the
+        target team's department bypasses too, since a Department Head
+        sits above team-level leadership in the org chart."""
         # Workspace admins always get through.
         if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
             return
@@ -765,8 +781,12 @@ class TaskService:
         if me.team_id == target_team_id:
             return
 
-        # Leadership ranks can route work across teams.
-        if me.team_role in (TeamRole.HEAD, TeamRole.MANAGER, TeamRole.LEAD):
+        # Team-level leadership ranks can route work across teams.
+        if me.team_role in (TeamRole.MANAGER, TeamRole.LEAD):
+            return
+
+        # Department head of the target team's department also bypasses.
+        if await self._is_department_head_of_team(requester.member_id, target_team_id):
             return
 
         raise CrossTeamForbiddenError(
@@ -851,11 +871,17 @@ class TaskService:
             me is not None
             and task.team_id is not None
             and me.team_id == task.team_id
-            and me.team_role in (TeamRole.HEAD, TeamRole.MANAGER)
+            and me.team_role is TeamRole.MANAGER
+        ):
+            return
+        # Department head of the task's team's department also bypasses.
+        if task.team_id is not None and await self._is_department_head_of_team(
+            requester.member_id, task.team_id
         ):
             return
         raise CrossTeamForbiddenError(
-            "only workspace admins/owners or the task's team head/manager " "can change priority"
+            "only workspace admins/owners, the task's team manager, "
+            "or its department head can change priority"
         )
 
     async def set_blocked(

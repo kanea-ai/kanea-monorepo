@@ -78,6 +78,7 @@ def test_get_audit_log_service_wires_dependencies() -> None:
     service = get_audit_log_service(
         audit_logs=get_audit_log_repository(session),
         members=get_member_repository(session),
+        teams=get_team_repository(session),
     )
     assert isinstance(service, AuditLogService)
 
@@ -87,10 +88,12 @@ def test_get_department_service_wires_dependencies() -> None:
     audit_logs = get_audit_log_service(
         audit_logs=get_audit_log_repository(session),
         members=get_member_repository(session),
+        teams=get_team_repository(session),
     )
     service = get_department_service(
         departments=get_department_repository(session),
         audit_logs=audit_logs,
+        members=get_member_repository(session),
     )
     assert isinstance(service, DepartmentService)
 
@@ -103,6 +106,7 @@ def test_get_team_service_wires_dependencies() -> None:
     audit_logs = get_audit_log_service(
         audit_logs=get_audit_log_repository(session),
         members=get_member_repository(session),
+        teams=get_team_repository(session),
     )
     service = get_team_service(
         teams=get_team_repository(session),

@@ -196,17 +196,21 @@ class TeamRole(StrEnum):
     governs workspace-level permissions; TeamRole is per-team and
     scopes intra-team responsibilities.
 
-    HEAD    : top leader of the team. Orchestrates resources and sets
-              high-level goals across the team's projects.
     MANAGER : manages agents/employees within the team. Tracks KPIs,
               can reassign tasks within the team, and can modify agent
               contexts (model / priority / config).
     LEAD    : technical lead — executes work and can delegate to
               lower-priority members on the same team.
     MEMBER  : standard executor (Human or Agent).
+
+    Note: HEAD was removed from TeamRole in migration 0022. "Head" is
+    now an attribute of a Department (``departments.head_id``), not a
+    rank on a Team. The team-leadership predicate used by request
+    fulfilment / cross-team rules / priority changes is
+    ``team_role in (MANAGER, LEAD)`` OR the member is the head of the
+    team's department.
     """
 
-    HEAD = "HEAD"
     MANAGER = "MANAGER"
     LEAD = "LEAD"
     MEMBER = "MEMBER"

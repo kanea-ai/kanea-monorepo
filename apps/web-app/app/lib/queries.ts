@@ -15,6 +15,7 @@ import {
   tasksApi,
   teamsApi,
   tenantsApi,
+  workspacesApi,
   type AdminSetMemberPasswordPayload,
   type Agent,
   type AgentDetail,
@@ -73,6 +74,8 @@ import {
   type UpdateStatusPayload,
   type UpdateTaskLinksPayload,
   type UpdateTeamPayload,
+  type Workspace as WorkspaceRecord,
+  type RenameWorkspacePayload,
 } from './api';
 
 // Filters the kanban + dashboard pass to /tasks. The query cache key
@@ -388,6 +391,20 @@ export function useSwitchWorkspace() {
 export function useCreateMyWorkspace() {
   return useMutation<CreateMyWorkspaceResponse, Error, CreateMyWorkspacePayload>({
     mutationFn: (payload) => meApi.createWorkspace(payload),
+  });
+}
+
+export function useRenameWorkspace() {
+  const qc = useQueryClient();
+  return useMutation<WorkspaceRecord, Error, { id: string; payload: RenameWorkspacePayload }>({
+    mutationFn: ({ id, payload }) => workspacesApi.rename(id, payload),
+    onSuccess: () => {
+      // /me/workspaces sources the sidebar switcher name; /me sources
+      // the AppShell's workspace label. Invalidate both so the new
+      // name lands without a hard reload.
+      qc.invalidateQueries({ queryKey: myWorkspaceKeys.all });
+      qc.invalidateQueries({ queryKey: meKeys.profile });
+    },
   });
 }
 

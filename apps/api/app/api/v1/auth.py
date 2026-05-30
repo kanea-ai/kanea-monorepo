@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from app.api.deps import AuthServiceDep, RawPrincipalDep, get_oauth_client, get_settings
 from app.application.auth.schemas import (
     AgentTokenRequest,
+    CompleteOAuthOnboardingRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
@@ -26,6 +27,8 @@ from app.domain.exceptions import (
     EmailAlreadyExistsError,
     WorkspaceNameConflictError,
 )
+
+__all__ = ["router"]
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -219,11 +222,20 @@ async def oauth_callback(
 
     login_resp = await service.oauth_login(identity)
 
-    # Single-workspace OAuth users get the token straight away.
-    # Multi-workspace users get bounced with a selection token; the
-    # frontend renders the workspace picker and POSTs to /auth/select-
-    # workspace with that token + the chosen workspace_id.
-    if login_resp.requires_selection:
+    # Three shapes (priority order on the FE matches this):
+    # 1. requires_onboarding — brand-new SSO user, FE prompts for a
+    #    workspace name on /onboarding/workspace.
+    # 2. requires_selection  — multi-workspace user, FE shows the
+    #    picker on /workspaces.
+    # 3. happy path          — single-workspace user, FE stores the
+    #    token and lands them on /.
+    if login_resp.requires_onboarding:
+        response = _redirect_to_frontend(
+            settings,
+            onboarding_token=login_resp.onboarding_token,
+            suggested_workspace_name=login_resp.suggested_workspace_name,
+        )
+    elif login_resp.requires_selection:
         response = _redirect_to_frontend(
             settings,
             selection_token=login_resp.selection_token,
@@ -236,12 +248,47 @@ async def oauth_callback(
     return response
 
 
+@router.post(
+    "/complete-oauth-onboarding",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_oauth_onboarding(
+    payload: CompleteOAuthOnboardingRequest,
+    service: AuthServiceDep,
+) -> TokenResponse:
+    """Second leg of the SSO signup flow. Caller holds the
+    ``onboarding_token`` minted on the OAuth callback and supplies
+    the chosen workspace name. We provision the User + Workspace +
+    Member trio with that name and return a real access token.
+
+    Errors:
+      - 401: onboarding token is expired, malformed, or wrong-scope.
+      - 409: ``workspace_name`` is already taken on the platform.
+    """
+    try:
+        return await service.complete_oauth_onboarding(
+            onboarding_token=payload.onboarding_token,
+            workspace_name=payload.workspace_name.strip(),
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except WorkspaceNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 def _redirect_to_frontend(
     settings: Settings,
     *,
     token: str | None = None,
     selection_token: str | None = None,
     workspaces: list | None = None,
+    onboarding_token: str | None = None,
+    suggested_workspace_name: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
     params: dict[str, str] = {}
@@ -256,6 +303,10 @@ def _redirect_to_frontend(
         # tiny realistic counts (<10 workspaces).
         payload = json.dumps([w.model_dump(mode="json") for w in workspaces], separators=(",", ":"))
         params["workspaces"] = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+    if onboarding_token is not None:
+        params["onboarding_token"] = onboarding_token
+    if suggested_workspace_name is not None:
+        params["suggested_workspace_name"] = suggested_workspace_name
     if error is not None:
         params["error"] = error
     suffix = f"?{urlencode(params)}" if params else ""

@@ -57,6 +57,8 @@ from app.application.tenants.ports import (
     WorkspaceReadRepository,
 )
 from app.application.tenants.service import InviteService
+from app.application.workspaces.ports import WorkspaceWriteRepository
+from app.application.workspaces.service import WorkspaceService
 from app.core.config import Settings, settings
 from app.domain.enums import MemberRole, MemberType, OAuthProvider
 from app.infrastructure.db.session import get_session
@@ -124,6 +126,20 @@ def get_user_repository(session: SessionDep) -> UserRepository:
 
 def get_workspace_read_repository(session: SessionDep) -> WorkspaceReadRepository:
     return SqlAlchemyWorkspaceRepository(session)
+
+
+def get_workspace_write_repository(session: SessionDep) -> WorkspaceWriteRepository:
+    # Same SQLAlchemy class — different protocol surface (rename).
+    return SqlAlchemyWorkspaceRepository(session)
+
+
+def get_workspace_service(
+    workspaces: Annotated[WorkspaceWriteRepository, Depends(get_workspace_write_repository)],
+) -> WorkspaceService:
+    return WorkspaceService(workspaces=workspaces)
+
+
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
 def get_auth_service(
@@ -254,8 +270,9 @@ def get_audit_log_repository(session: SessionDep) -> AuditLogRepository:
 def get_audit_log_service(
     audit_logs: Annotated[AuditLogRepository, Depends(get_audit_log_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
+    teams: Annotated[TeamRepository, Depends(get_team_repository)],
 ) -> AuditLogService:
-    return AuditLogService(audit_logs=audit_logs, members=members)
+    return AuditLogService(audit_logs=audit_logs, members=members, teams=teams)
 
 
 AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
@@ -264,8 +281,9 @@ AuditLogServiceDep = Annotated[AuditLogService, Depends(get_audit_log_service)]
 def get_department_service(
     departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
     audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
+    members: Annotated[MemberRepository, Depends(get_member_repository)],
 ) -> DepartmentService:
-    return DepartmentService(departments=departments, audit_logs=audit_logs)
+    return DepartmentService(departments=departments, audit_logs=audit_logs, members=members)
 
 
 DepartmentServiceDep = Annotated[DepartmentService, Depends(get_department_service)]
@@ -303,6 +321,7 @@ def get_invite_service(
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
     users: Annotated[UserRepository, Depends(get_user_repository)],
     audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
+    departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -318,6 +337,7 @@ def get_invite_service(
         teams=teams,
         users=users,
         audit_logs=audit_logs,
+        departments=departments,
     )
 
 

@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_service
 from app.application.auth.schemas import LoginResponse, TokenResponse
-from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
+from app.domain.exceptions import (
+    AuthenticationError,
+    EmailAlreadyExistsError,
+    WorkspaceNameConflictError,
+)
 from app.main import app
 
 
@@ -158,4 +162,57 @@ def test_register_validation_error_returns_422(client: TestClient) -> None:
     # Password under min_length=8 must be rejected before the service is hit.
     bad = {**_VALID_REGISTER, "password": "short"}  # pragma: allowlist secret
     response = client.post("/api/v1/auth/register", json=bad)
+    assert response.status_code == 422
+
+
+# ---------- complete-oauth-onboarding ----------
+
+
+def test_complete_onboarding_returns_token(client: TestClient, auth_service: AsyncMock) -> None:
+    auth_service.complete_oauth_onboarding.return_value = TokenResponse(
+        access_token="real.jwt", expires_in=3600
+    )
+    response = client.post(
+        "/api/v1/auth/complete-oauth-onboarding",
+        json={"onboarding_token": "onboarding.jwt", "workspace_name": "Acme"},
+    )
+    assert response.status_code == 201
+    assert response.json()["access_token"] == "real.jwt"
+    auth_service.complete_oauth_onboarding.assert_awaited_once()
+
+
+def test_complete_onboarding_invalid_token_returns_401(
+    client: TestClient, auth_service: AsyncMock
+) -> None:
+    auth_service.complete_oauth_onboarding.side_effect = AuthenticationError(
+        "invalid or expired onboarding token"
+    )
+    response = client.post(
+        "/api/v1/auth/complete-oauth-onboarding",
+        json={"onboarding_token": "bad.jwt", "workspace_name": "Acme"},
+    )
+    assert response.status_code == 401
+    assert "expired" in response.json()["detail"]
+
+
+def test_complete_onboarding_name_conflict_returns_409(
+    client: TestClient, auth_service: AsyncMock
+) -> None:
+    auth_service.complete_oauth_onboarding.side_effect = WorkspaceNameConflictError(
+        "a workspace with that name already exists"
+    )
+    response = client.post(
+        "/api/v1/auth/complete-oauth-onboarding",
+        json={"onboarding_token": "onboarding.jwt", "workspace_name": "Taken"},
+    )
+    assert response.status_code == 409
+
+
+def test_complete_onboarding_validation_error_returns_422(client: TestClient) -> None:
+    """Empty workspace_name is rejected at the schema layer, never
+    reaches the service."""
+    response = client.post(
+        "/api/v1/auth/complete-oauth-onboarding",
+        json={"onboarding_token": "onboarding.jwt", "workspace_name": ""},
+    )
     assert response.status_code == 422

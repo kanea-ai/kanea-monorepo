@@ -12,6 +12,7 @@ from app.api.v1.requests import router as requests_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.teams import router as teams_router
 from app.api.v1.tenants import router as tenants_router
+from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 
 app = FastAPI(
@@ -51,6 +52,7 @@ app.include_router(audit_router, prefix=API_V1_PREFIX)
 app.include_router(blocks_router, prefix=API_V1_PREFIX)
 app.include_router(requests_router, prefix=API_V1_PREFIX)
 app.include_router(me_router, prefix=API_V1_PREFIX)
+app.include_router(workspaces_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/health", tags=["health"])

@@ -3,8 +3,9 @@
 The matrix:
 - Owner: every row in the workspace.
 - Admin priority ≤ 2: DEPARTMENT/TEAM/MEMBER rows.
-- Admin priority ≤ 3: TEAM rows for teams the principal HEADs or
-  MANAGERs.
+- Admin priority ≤ 3: TEAM rows for teams the principal MANAGES,
+  plus every team in any department they HEAD (head_id link on
+  ``departments``).
 - Anyone else: empty list.
 """
 
@@ -72,8 +73,18 @@ def members_repo() -> AsyncMock:
 
 
 @pytest.fixture
-def service(audit_repo: AsyncMock, members_repo: AsyncMock) -> AuditLogService:
-    return AuditLogService(audit_logs=audit_repo, members=members_repo)
+def teams_repo() -> AsyncMock:
+    repo = AsyncMock()
+    # Default: principal is not the head of any department.
+    repo.list_team_ids_for_department_head.return_value = []
+    return repo
+
+
+@pytest.fixture
+def service(
+    audit_repo: AsyncMock, members_repo: AsyncMock, teams_repo: AsyncMock
+) -> AuditLogService:
+    return AuditLogService(audit_logs=audit_repo, members=members_repo, teams=teams_repo)
 
 
 # ---------- visibility rules ----------
@@ -105,11 +116,12 @@ async def test_priority_2_admin_sees_department_team_member(
     assert kwargs["team_resource_ids"] is None
 
 
-async def test_priority_3_admin_sees_only_overseen_teams(
+async def test_priority_3_admin_manager_sees_own_team(
     service: AuditLogService, audit_repo: AsyncMock, members_repo: AsyncMock
 ) -> None:
-    """A P3 admin who is HEAD of one team should see TEAM rows
-    narrowed to that team."""
+    """A P3 admin who is MANAGER of one team should see TEAM rows
+    narrowed to that team. (HEAD was removed from TeamRole in
+    migration 0022; team-level oversight is now MANAGER alone.)"""
     workspace_id = uuid4()
     member_id = uuid4()
     team_id = uuid4()
@@ -120,7 +132,7 @@ async def test_priority_3_admin_sees_only_overseen_teams(
         workspace_id=workspace_id,
     )
     members_repo.get_by_id.return_value = _member(
-        workspace_id, member_id, team_id=team_id, team_role=TeamRole.HEAD
+        workspace_id, member_id, team_id=team_id, team_role=TeamRole.MANAGER
     )
     audit_repo.list_for_workspace.return_value = ([], 0)
 
@@ -128,6 +140,69 @@ async def test_priority_3_admin_sees_only_overseen_teams(
     kwargs = audit_repo.list_for_workspace.await_args.kwargs
     assert kwargs["resource_types"] == [AuditResourceType.TEAM]
     assert kwargs["team_resource_ids"] == [team_id]
+
+
+async def test_priority_3_admin_department_head_sees_all_dept_teams(
+    service: AuditLogService,
+    audit_repo: AsyncMock,
+    members_repo: AsyncMock,
+    teams_repo: AsyncMock,
+) -> None:
+    """A P3 admin who is the head of a department (departments.head_id
+    == member.id) should see TEAM rows for every team in that
+    department, even if they hold no team_role themselves."""
+    workspace_id = uuid4()
+    member_id = uuid4()
+    dept_team_a = uuid4()
+    dept_team_b = uuid4()
+    p = _principal(
+        role=MemberRole.WORKSPACE_ADMIN,
+        priority=3,
+        member_id=member_id,
+        workspace_id=workspace_id,
+    )
+    # No team_role on the principal — reach comes from being head of a
+    # department.
+    members_repo.get_by_id.return_value = _member(
+        workspace_id, member_id, team_id=None, team_role=None
+    )
+    teams_repo.list_team_ids_for_department_head.return_value = [dept_team_a, dept_team_b]
+    audit_repo.list_for_workspace.return_value = ([], 0)
+
+    await service.list_for_principal(p)
+    kwargs = audit_repo.list_for_workspace.await_args.kwargs
+    assert kwargs["resource_types"] == [AuditResourceType.TEAM]
+    assert set(kwargs["team_resource_ids"]) == {dept_team_a, dept_team_b}
+
+
+async def test_priority_3_admin_manager_and_department_head_union(
+    service: AuditLogService,
+    audit_repo: AsyncMock,
+    members_repo: AsyncMock,
+    teams_repo: AsyncMock,
+) -> None:
+    """When the principal is BOTH a MANAGER on their own team AND
+    head of a department, audit reach is the union of both team
+    sets."""
+    workspace_id = uuid4()
+    member_id = uuid4()
+    own_team = uuid4()
+    dept_team = uuid4()
+    p = _principal(
+        role=MemberRole.WORKSPACE_ADMIN,
+        priority=3,
+        member_id=member_id,
+        workspace_id=workspace_id,
+    )
+    members_repo.get_by_id.return_value = _member(
+        workspace_id, member_id, team_id=own_team, team_role=TeamRole.MANAGER
+    )
+    teams_repo.list_team_ids_for_department_head.return_value = [dept_team]
+    audit_repo.list_for_workspace.return_value = ([], 0)
+
+    await service.list_for_principal(p)
+    kwargs = audit_repo.list_for_workspace.await_args.kwargs
+    assert set(kwargs["team_resource_ids"]) == {own_team, dept_team}
 
 
 async def test_priority_3_admin_with_member_team_role_sees_nothing(

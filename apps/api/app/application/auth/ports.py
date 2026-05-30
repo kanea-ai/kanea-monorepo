@@ -3,17 +3,33 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
+from app.application.auth.oauth import OAuthIdentity
 from app.domain.entities import Credentials, Member, User, Workspace
-from app.domain.enums import OAuthProvider
+from app.domain.enums import OAuthProvider, TeamRole
 
 
 @runtime_checkable
 class MemberRepository(Protocol):
     async def get_by_email(self, email: str) -> Member | None: ...
     async def get_by_id(self, member_id: UUID) -> Member | None: ...
+    async def list_by_ids(self, member_ids: list[UUID]) -> list[Member]: ...
     async def create(self, member: Member) -> Member: ...
     async def heartbeat(self, member_id: UUID) -> None: ...
     async def list_for_user(self, user_id: UUID) -> list[Member]: ...
+    async def set_team(
+        self,
+        member_id: UUID,
+        *,
+        team_id: UUID | None,
+        team_role: TeamRole | None,
+    ) -> Member:
+        """Assign / unassign a member to a team.
+
+        Also used by ``DepartmentService`` to clear the team assignment
+        of a member who is being promoted to Department Head — a Head
+        sits above team-level leadership and shouldn't double-count as
+        a team MANAGER/LEAD/MEMBER."""
+        ...
 
 
 @runtime_checkable
@@ -66,3 +82,10 @@ class TokenService(Protocol):
 
     def decode_selection_token(self, token: str) -> UUID:
         """Verify a selection token and return the user_id sub."""
+
+    def issue_onboarding_token(self, identity: OAuthIdentity) -> tuple[str, int]:
+        """Short-lived token for the SSO onboarding flow. Carries the
+        OAuth identity but no DB ids — no User row exists yet."""
+
+    def decode_onboarding_token(self, token: str) -> OAuthIdentity:
+        """Verify an onboarding token and return the OAuth identity."""
