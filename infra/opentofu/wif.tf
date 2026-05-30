@@ -96,6 +96,19 @@ moved {
   to   = google_project_iam_member.deployer_run_admin[0]
 }
 
+# Manage IAP-related IAM (e.g. setIamPolicy on IAP web backend services).
+# Without this the deployer can't even *refresh* state for resources like
+# google_iap_web_backend_service_iam_member.admin_panel_accessor — the read
+# requires iap.webBackendServices.getIamPolicy, which Editor doesn't grant.
+# Project-scoped grant is the simplest option; tightening to resource-level
+# isn't worth it for a single backend service that prod controls end-to-end.
+resource "google_project_iam_member" "deployer_iap_admin" {
+  count   = local.is_prod ? 1 : 0
+  project = var.project_id
+  role    = "roles/iap.admin"
+  member  = "serviceAccount:${google_service_account.github_deployer[0].email}"
+}
+
 # Allow the deployer to actAs the per-env runtime SAs. Lives in EACH env's
 # state because it binds to env-specific SAs (run-api / run-api-staging).
 # Member is the shared deployer SA (referenced by hardcoded email so this
