@@ -15,7 +15,8 @@
 // read-only contact card (others) — same component the old /members
 // page used.
 
-import { useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 
 import { CreateAgentDialog } from '../../components/CreateAgentDialog';
 import { InviteMemberDialog } from '../../components/InviteMemberDialog';
@@ -23,7 +24,7 @@ import { MemberDetailDialog } from '../../components/MemberDetailDialog';
 import { Pagination } from '../../components/Pagination';
 import { ApiError, type Member, type MemberRole } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
-import { useMembers, useProjects, useTeams } from '../../lib/queries';
+import { useMember, useMembers, useProjects, useTeams } from '../../lib/queries';
 
 const PAGE_SIZE = 25;
 
@@ -78,6 +79,33 @@ export default function DirectoryPage() {
     limit: PAGE_SIZE,
   });
   const members = membersPage?.items ?? [];
+
+  // Deep link: ?member=<id> opens that member's dialog. Used by the
+  // cross-entity Link helpers (lib/links.ts) so a click on a Head /
+  // Manager / member name from any other page lands here with the
+  // detail dialog already open.
+  //
+  // Two-layer resolve: first the current page slice (the common case;
+  // members are sorted by priority so most clicks resolve here), then
+  // a targeted /tenants/members/{id} fetch as a fallback for members
+  // that sit on a different page or behind a filter. We strip the
+  // param after consuming it so reload doesn't keep re-opening.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const requestedMember = searchParams.get('member');
+  const inSlice = useMemo(
+    () => (requestedMember ? (members.find((m) => m.id === requestedMember) ?? null) : null),
+    [requestedMember, members],
+  );
+  const fallback = useMember(requestedMember && !inSlice ? requestedMember : '');
+  useEffect(() => {
+    if (!requestedMember) return;
+    const target = inSlice ?? fallback.data ?? null;
+    if (target) {
+      setOpenMember(target);
+      router.replace('/directory');
+    }
+  }, [requestedMember, inSlice, fallback.data, router]);
   const total = membersPage?.total ?? 0;
 
   const { data: teamsPage } = useTeams();

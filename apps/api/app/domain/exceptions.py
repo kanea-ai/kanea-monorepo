@@ -111,6 +111,17 @@ class DepartmentHeadNotInWorkspaceError(DomainError):
     resource."""
 
 
+class MemberIsDepartmentHeadError(DomainError):
+    """Raised when an admin tries to assign a Team to a member who is
+    currently the head of some Department.
+
+    The hierarchy rule is "a Department Head sits above teams" — they
+    cannot simultaneously hold a Team rank (MANAGER / LEAD / MEMBER)
+    and a head role. To put this member on a team, the admin must
+    first remove them from the head_id of their department. Mapped to
+    409 at the route."""
+
+
 class MemberAlreadyDepartmentHeadError(DomainError):
     """Raised when ``head_id`` on a department create/update would
     cause a member to head more than one department. A member can be

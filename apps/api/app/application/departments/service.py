@@ -97,6 +97,13 @@ class DepartmentService:
             raise DepartmentNameConflictError(
                 "a department with that name already exists in this workspace"
             ) from exc
+        # Hierarchy rule: a Department Head doesn't belong to a team.
+        # Clear their team_id / team_role in the same DB session so the
+        # member never simultaneously holds a team rank and the head
+        # role. Idempotent — re-clearing an already-null team is a
+        # no-op on the row.
+        if request.head_id is not None and self.members is not None:
+            await self.members.set_team(request.head_id, team_id=None, team_role=None)
         if self.audit_logs is not None:
             await self.audit_logs.record(
                 principal,
@@ -147,6 +154,12 @@ class DepartmentService:
             raise DepartmentNameConflictError(
                 "a department with that name already exists in this workspace"
             ) from exc
+        # Hierarchy rule: a Department Head doesn't belong to a team.
+        # When this PATCH sets head_id, clear that member's team in the
+        # same session. Skip for clear_head — that's a removal, not a
+        # promotion, and the (former) head's team is their own concern.
+        if request.head_id is not None and not clear_head and self.members is not None:
+            await self.members.set_team(request.head_id, team_id=None, team_role=None)
         # If the caller didn't touch head_id but the row still has one,
         # resolve it so the response carries the head summary too.
         if head_member is None and not clear_head and updated.head_id is not None:

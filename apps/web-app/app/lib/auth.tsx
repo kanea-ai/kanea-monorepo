@@ -138,6 +138,9 @@ export interface CurrentPrincipal {
   role: 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'WORKSPACE_USER';
   type: 'HUMAN' | 'AGENT';
   scope: string;
+  /** Workspace-wide rank (1 = owner, higher = lower). Drives the
+   *  priority-gated reach checks in lib/permissions.ts. */
+  priority: number;
 }
 
 /**
@@ -163,6 +166,10 @@ export function useCurrentPrincipal(): CurrentPrincipal | null {
         role: json.role ?? 'WORKSPACE_USER',
         type: json.type ?? 'HUMAN',
         scope: json.scope ?? 'human',
+        // The api refuses to mint a token without `priority` (added in
+        // migration 0006 / phase 6); defaulting to 100 here keeps the
+        // gates closed if a pre-priority token is ever surfaced.
+        priority: typeof json.priority === 'number' ? json.priority : 100,
       };
     } catch {
       return null;

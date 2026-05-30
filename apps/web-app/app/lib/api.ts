@@ -257,11 +257,68 @@ export interface CompleteOAuthOnboardingPayload {
 export class ApiError extends Error {
   constructor(
     public status: number,
+    /** Human-readable failure message. ALWAYS a string — even on
+     *  422 responses whose body is a Pydantic ``{detail: [{loc, msg,
+     *  type, input, ctx}, ...]}`` array. ``normalizeErrorDetail``
+     *  flattens that shape before construction so call sites can
+     *  freely ``setError(err.detail)`` into React state without
+     *  blowing up the render with "Objects are not valid as a React
+     *  child". */
     public detail: string,
   ) {
     super(detail);
     this.name = 'ApiError';
   }
+}
+
+/** Flatten any error body shape produced by FastAPI into a single
+ *  human-readable string. Three shapes survive in the wild:
+ *  - ``{detail: "string"}`` — handlers using ``HTTPException(detail=...)``.
+ *  - ``{detail: [{loc, msg, type, input, ctx}, ...]}`` — Pydantic
+ *    request-validation failures (422). The array can carry more
+ *    than one issue when multiple fields fail at once.
+ *  - ``{detail: {msg: ...}}`` — uncommon, but seen on custom 4xx
+ *    payloads. We extract ``msg`` for symmetry.
+ *  Anything else falls back to ``HTTP <status>`` so React always gets
+ *  a string to render. */
+export function normalizeErrorDetail(body: unknown, status: number): string {
+  if (typeof body === 'string') return body || `HTTP ${status}`;
+  if (body && typeof body === 'object') {
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === 'string' && detail.length > 0) return detail;
+    if (Array.isArray(detail)) {
+      const parts = detail
+        .map((item) => formatValidationItem(item))
+        .filter((p): p is string => Boolean(p));
+      if (parts.length > 0) return parts.join('; ');
+    }
+    if (detail && typeof detail === 'object') {
+      const msg = (detail as { msg?: unknown }).msg;
+      if (typeof msg === 'string' && msg.length > 0) return msg;
+    }
+  }
+  return `HTTP ${status}`;
+}
+
+function formatValidationItem(item: unknown): string | null {
+  if (typeof item === 'string') return item;
+  if (!item || typeof item !== 'object') return null;
+  const obj = item as { msg?: unknown; loc?: unknown };
+  const msg = typeof obj.msg === 'string' ? obj.msg : null;
+  if (!msg) return null;
+  // ``loc`` is conventionally ["body", "email"] / ["query", "limit"] /
+  // ["body", "items", 0, "name"]. Use the last non-source-tag segment
+  // as the field name so the user sees "email: ..." instead of just
+  // "value is not a valid email address".
+  const loc = Array.isArray(obj.loc) ? obj.loc : null;
+  const field =
+    loc && loc.length > 1
+      ? loc
+          .slice(1)
+          .filter((p) => typeof p === 'string' || typeof p === 'number')
+          .join('.')
+      : null;
+  return field ? `${field}: ${msg}` : msg;
 }
 
 // Global 401 handler. AuthProvider registers this on mount; api code
@@ -306,12 +363,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    const detail = await response
-      .json()
-      .then((b: { detail?: string }) => b.detail)
-      .catch(() => response.statusText);
+    const body = await response.json().catch(() => null);
+    const detail = normalizeErrorDetail(body, response.status);
     maybeUnauthorized(path, response.status);
-    throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    throw new ApiError(response.status, detail);
   }
   return response.json() as Promise<T>;
 }
@@ -328,12 +383,10 @@ async function requestVoid(path: string, init: RequestInit = {}): Promise<void> 
     },
   });
   if (!response.ok) {
-    const detail = await response
-      .json()
-      .then((b: { detail?: string }) => b.detail)
-      .catch(() => response.statusText);
+    const body = await response.json().catch(() => null);
+    const detail = normalizeErrorDetail(body, response.status);
     maybeUnauthorized(path, response.status);
-    throw new ApiError(response.status, detail || `HTTP ${response.status}`);
+    throw new ApiError(response.status, detail);
   }
 }
 
@@ -488,6 +541,17 @@ export type MemberKind = 'HUMAN' | 'AGENT';
 // rank. The remaining TeamRole values are pure intra-team ranks.
 export type TeamRole = 'MANAGER' | 'LEAD' | 'MEMBER';
 
+/** Compact summary of the Department a member's Team belongs to.
+ *  Returned by the api on PATCH /tenants/members/{id}/team (resolved
+ *  from team.department_id) so the UI can render User -> Team ->
+ *  Department without a follow-up call. Optional + nullable because
+ *  list / GET endpoints don't necessarily populate it; consumers
+ *  fall back to the (teams + departments) client cache when absent. */
+export interface MemberDepartmentSummary {
+  id: string;
+  name: string;
+}
+
 export interface Member {
   id: string;
   workspace_id: string;
@@ -505,6 +569,12 @@ export interface Member {
   // The user can still log in to OTHER workspaces where they're not
   // suspended.
   is_suspended: boolean;
+  /** Resolved server-side on writes that touch team_id (notably the
+   *  PATCH /team endpoint). Null when the member is unassigned or
+   *  their team is un-filed. May be absent on responses that don't
+   *  bother resolving it (list / GET) — consumers fall back to the
+   *  teams + departments cache. */
+  department?: MemberDepartmentSummary | null;
 }
 
 export interface SetMemberSuspensionPayload {

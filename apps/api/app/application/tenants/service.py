@@ -15,6 +15,7 @@ from app.application.auth.ports import (
     UserRepository,
 )
 from app.application.auth.schemas import TokenResponse
+from app.application.departments.ports import DepartmentRepository
 from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
 from app.application.teams.ports import TeamRepository
@@ -36,8 +37,8 @@ from app.application.tenants.schemas import (
     UpdateMemberProfileRequest,
     invite_create_response_from_entity,
 )
-from app.domain.entities import AgentStats, Invite, Member, User
-from app.domain.enums import AuditAction, AuditResourceType, MemberRole, MemberType
+from app.domain.entities import AgentStats, Department, Invite, Member, User
+from app.domain.enums import AuditAction, AuditResourceType, MemberRole, MemberType, TeamRole
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     ForbiddenError,
@@ -45,6 +46,7 @@ from app.domain.exceptions import (
     InviteAlreadyAcceptedError,
     InviteExpiredError,
     InviteNotFoundError,
+    MemberIsDepartmentHeadError,
 )
 
 INVITE_TTL_DAYS = 7
@@ -72,6 +74,10 @@ class InviteService:
     # Team repo for the team-assignment endpoint. Optional so existing
     # constructors / unit tests stay green.
     teams: TeamRepository | None = None
+    # Department repo so the set-member-team response can embed the
+    # resolved Department (User -> Team -> Department) without a
+    # follow-up call. Optional so legacy constructors stay green.
+    departments: DepartmentRepository | None = None
     # Phase 1: invite acceptance creates-or-links the global User row.
     # Optional so legacy constructors / unit tests stay valid; the
     # accept_invite path raises if it's missing.
@@ -431,21 +437,48 @@ class InviteService:
         member_id: UUID,
         request: SetMemberTeamRequest,
         principal: Principal,
-    ) -> Member:
+    ) -> MemberResponse:
         """Workspace admins assign a member to a Team and set their
         intra-team role. Validates: tenant isolation, team_id +
         team_role coherence (both set or both null), team belongs to
         the same workspace.
 
-        Route-level RBAC (WorkspaceAdminDep) is the primary guard;
-        this service-level check is the belt for direct callers."""
-        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
-            raise ForbiddenError("workspace owner or admin role required")
+        Single-MANAGER / single-LEAD constraint: assigning ``MANAGER``
+        or ``LEAD`` on a team that already has one demotes the sitting
+        holder to MEMBER in the same DB transaction (they keep their
+        team membership; only the rank changes). The DB carries a
+        partial unique index as the belt to this service-level brace.
 
+        Auto-department resolution: the response embeds the Department
+        the new team belongs to (via team.department_id), so the UI
+        renders the new hierarchy without a follow-up call.
+
+        RBAC inheritance: the caller must be a workspace OWNER / ADMIN
+        OR the Department Head of the team's department (heads inherit
+        MANAGER-level reach over every team in their dept). Explicit
+        unassigns (team_id=null) require admin role — clearing the
+        team of a member outside one's department isn't a head's
+        decision.
+
+        Strict isolation: if the target is currently the head of any
+        Department, refuse non-null team assignments. ``team_id=null``
+        is still allowed because that's the same clearing path
+        DepartmentService uses when first promoting the head."""
         if request.team_id is None and request.team_role is not None:
             raise InvalidMemberTypeError("team_role must be null when team_id is null")
         if request.team_id is not None and request.team_role is None:
             raise InvalidMemberTypeError("team_role is required when team_id is set")
+
+        # Early role gate. Workspace OWNER / ADMIN always pass. For
+        # non-admins we may still allow the call via dept-head
+        # inheritance — but only when there's a target team whose
+        # department we can inspect. Unassigns (team_id is None) and
+        # any DI shape that lacks ``departments`` short-circuit to
+        # ForbiddenError so we don't load anything else under a clearly
+        # disallowed call.
+        is_admin = principal.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN)
+        if not is_admin and (request.team_id is None or self.departments is None):
+            raise ForbiddenError("workspace owner or admin role required")
 
         target = await self.members.get_by_id(member_id)
         if target is None or target.workspace_id != principal.workspace_id:
@@ -453,10 +486,71 @@ class InviteService:
 
         # The team must belong to the same workspace; the FK alone
         # accepts cross-tenant ids so we add an explicit check.
+        team_entity = None
         if request.team_id is not None and self.teams is not None:
-            team = await self.teams.get_by_id(request.team_id)
-            if team is None or team.workspace_id != principal.workspace_id:
+            team_entity = await self.teams.get_by_id(request.team_id)
+            if team_entity is None or team_entity.workspace_id != principal.workspace_id:
                 raise InvalidMemberTypeError("team not found")
+
+        # Dept-head inheritance: non-admins must head the department
+        # the new team belongs to. The early gate above already
+        # filtered out the unassign and missing-departments-DI cases.
+        if not is_admin:
+            assert self.departments is not None  # narrowed by early gate
+            if team_entity is None or team_entity.department_id is None:
+                raise ForbiddenError(
+                    "you can only manage team membership for teams in your own department"
+                )
+            principal_dept = await self.departments.get_for_head(principal.member_id)
+            if principal_dept is None or principal_dept.id != team_entity.department_id:
+                raise ForbiddenError(
+                    "you can only manage team membership for teams in your own department"
+                )
+
+        # Strict isolation: a current Department Head cannot also be on
+        # a team. Block the assignment path; the explicit unassign
+        # (team_id=None) still passes — that's the same call shape used
+        # by DepartmentService when the head was promoted in the first
+        # place.
+        if request.team_id is not None and self.departments is not None:
+            target_head_dept = await self.departments.get_for_head(target.id)
+            if target_head_dept is not None:
+                raise MemberIsDepartmentHeadError(
+                    f"{target.name} is the head of department "
+                    f"'{target_head_dept.name}'; remove them from head_id "
+                    "before assigning a team"
+                )
+
+        # One-MANAGER / one-LEAD enforcement. Look up the sitting
+        # holder *before* we promote the target so we can demote them
+        # in the same session — the DB partial unique index would
+        # otherwise reject our second write.
+        if request.team_id is not None and request.team_role in (
+            TeamRole.MANAGER,
+            TeamRole.LEAD,
+        ):
+            sitting = await self.members.get_for_team_role(request.team_id, request.team_role)
+            if sitting is not None and sitting.id != target.id:
+                await self.members.set_team(
+                    sitting.id,
+                    team_id=request.team_id,
+                    team_role=TeamRole.MEMBER,
+                )
+                if self.audit_logs is not None:
+                    await self.audit_logs.record(
+                        principal,
+                        action=AuditAction.UPDATED,
+                        resource_type=AuditResourceType.MEMBER,
+                        resource_id=sitting.id,
+                        changes={
+                            "team_role": {
+                                "from": request.team_role.value,
+                                "to": TeamRole.MEMBER.value,
+                            },
+                            "member_name": sitting.name,
+                            "demoted_for_member_id": str(target.id),
+                        },
+                    )
 
         updated = await self.members.set_team(
             member_id,
@@ -496,7 +590,30 @@ class InviteService:
                         "member_name": updated.name,
                     },
                 )
-        return updated
+
+        department = await self._resolve_member_department(updated, team_entity=team_entity)
+        return MemberResponse.from_entity(updated, department=department)
+
+    async def _resolve_member_department(
+        self,
+        member: Member,
+        *,
+        team_entity=None,
+    ) -> Department | None:
+        """Walk member -> team -> department. Returns None when the
+        member is unassigned, the team is un-filed, or the dep wiring
+        is missing (legacy unit-test constructors). ``team_entity`` is
+        an optional pre-fetched Team to skip the lookup when the caller
+        already has it in hand."""
+        if member.team_id is None:
+            return None
+        if self.teams is None or self.departments is None:
+            return None
+        if team_entity is None:
+            team_entity = await self.teams.get_by_id(member.team_id)
+        if team_entity is None or team_entity.department_id is None:
+            return None
+        return await self.departments.get_by_id(team_entity.department_id)
 
     async def set_member_suspension(
         self,
@@ -615,8 +732,9 @@ class InviteService:
 
     async def _require_org_scope_match(self, principal: Principal, target: Member) -> None:
         """Admin scope check: principal and target must share a team
-        OR a department. Owners are excluded from this rule (their
-        own scope is the whole workspace) and target OWNERs are off-
+        OR a department, OR the principal is the head of the target's
+        department. Owners are excluded from this rule (their own
+        scope is the whole workspace) and target OWNERs are off-
         limits to admins regardless of co-location."""
         if target.role is MemberRole.WORKSPACE_OWNER:
             raise ForbiddenError("only an owner can reset another owner's password")
@@ -630,26 +748,43 @@ class InviteService:
             return
 
         # Same department — needs the team rows to read department_id.
-        # If we don't have a teams repo wired (legacy DI), the only
-        # reachable path is same-team; fall through to the deny.
+        # Also: dept-head inheritance — the principal heads the
+        # department the target's team belongs to.
         if self.teams is None:
             raise ForbiddenError(
                 "you can only reset the password of a member in your team or department"
             )
-        if principal_member.team_id is None or target.team_id is None:
+        if target.team_id is None:
+            raise ForbiddenError(
+                "you can only reset the password of a member in your team or department"
+            )
+        target_team = await self.teams.get_by_id(target.team_id)
+        if target_team is None or target_team.department_id is None:
             raise ForbiddenError(
                 "you can only reset the password of a member in your team or department"
             )
 
-        principal_team = await self.teams.get_by_id(principal_member.team_id)
-        target_team = await self.teams.get_by_id(target.team_id)
-        if (
-            principal_team is not None
-            and target_team is not None
-            and principal_team.department_id is not None
-            and principal_team.department_id == target_team.department_id
-        ):
-            return
+        # Co-located department via the principal's own team (legacy
+        # path) — both members on different teams under the same
+        # department.
+        if principal_member.team_id is not None:
+            principal_team = await self.teams.get_by_id(principal_member.team_id)
+            if (
+                principal_team is not None
+                and principal_team.department_id == target_team.department_id
+            ):
+                return
+
+        # Dept-head inheritance. A Head sits above team-level leadership
+        # and has implicit MANAGER reach over every team in their dept;
+        # password reset for those team members is in-scope.
+        if self.departments is not None:
+            principal_head_dept = await self.departments.get_for_head(principal.member_id)
+            if (
+                principal_head_dept is not None
+                and principal_head_dept.id == target_team.department_id
+            ):
+                return
 
         raise ForbiddenError(
             "you can only reset the password of a member in your team or department"

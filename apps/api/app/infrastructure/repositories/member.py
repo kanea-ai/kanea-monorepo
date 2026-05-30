@@ -157,6 +157,18 @@ class SqlAlchemyMemberRepository:
         await self._session.refresh(row)
         return _to_entity(row)
 
+    async def get_for_team_role(self, team_id: UUID, team_role: TeamRole) -> Member | None:
+        """One-MANAGER / one-LEAD constraint helper. The partial unique
+        index on (team_id) WHERE team_role IN ('MANAGER', 'LEAD')
+        guarantees at most one row per (team, role); the service uses
+        this lookup to demote that holder before promoting a new one."""
+        stmt = select(MemberModel).where(
+            MemberModel.team_id == team_id,
+            MemberModel.team_role == team_role,
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _to_entity(row) if row is not None else None
+
     async def set_suspended(self, member_id: UUID, *, is_suspended: bool) -> Member:
         """Flip the workspace-scoped soft lock. Caller validates RBAC
         and the last-owner invariant before invoking."""

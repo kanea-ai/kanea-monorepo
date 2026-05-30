@@ -7,11 +7,19 @@
 // numbers are consistent across the app — assigned excludes DONE/
 // CANCELLED, completed counts only DONE.
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
+import { HeadOverseesTeamsGrid } from '../../components/HeadOverseesTeamsGrid';
 import { ApiError, type TeamRole } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { useChangePassword, useMe, useMeStats, useTeams, useUpdateMe } from '../../lib/queries';
+import {
+  useChangePassword,
+  useDepartments,
+  useMe,
+  useMeStats,
+  useTeams,
+  useUpdateMe,
+} from '../../lib/queries';
 
 export default function ProfilePage() {
   const { data: me, isLoading: meLoading, isError: meError, error: meErr } = useMe();
@@ -46,7 +54,7 @@ export default function ProfilePage() {
 
       <PasswordSection hasPassword={me.has_password} />
 
-      <TeamSection teamId={me.team_id} teamRole={me.team_role} />
+      <HierarchySection memberId={me.member_id} teamId={me.team_id} teamRole={me.team_role} />
 
       <StatsSection
         assigned={stats?.assigned_count}
@@ -61,29 +69,95 @@ export default function ProfilePage() {
   );
 }
 
-function TeamSection({ teamId, teamRole }: { teamId: string | null; teamRole: TeamRole | null }) {
-  // Read-only — only admins (via Directory → Member dialog) can
-  // change a member's team. The team list comes from the same
-  // `useTeams` cache the rest of the app uses, so the lookup is
-  // free (already loaded via Departments / Teams / dialogs).
+function HierarchySection({
+  memberId,
+  teamId,
+  teamRole,
+}: {
+  memberId: string;
+  teamId: string | null;
+  teamRole: TeamRole | null;
+}) {
+  // Three mutually exclusive shapes drive this section:
+  //   1. Department Head — departments.head_id === memberId. We hide
+  //      Team / Team Role entirely (Heads sit above team-level
+  //      leadership per the hierarchy rule) and instead list the
+  //      teams under that department.
+  //   2. On a team — show inferred Department + Team + Team Role.
+  //   3. Unassigned — neither head nor team.
+  // The teams + departments caches are already warm from the rest of
+  // the app, so this is a cheap client-side fold.
   const { data: teamsPage } = useTeams();
+  const { data: departmentsPage } = useDepartments();
   const teams = teamsPage?.items ?? [];
-  const teamName = teamId ? (teams.find((t) => t.id === teamId)?.name ?? '—') : null;
+  const departments = departmentsPage?.items ?? [];
 
-  return (
-    <Section title="Team" subtitle="Workspace admins manage team membership from the Directory.">
-      {teamId == null ? (
+  const headedDepartment = useMemo(
+    () => departments.find((d) => d.head_id === memberId) ?? null,
+    [departments, memberId],
+  );
+  const team = useMemo(
+    () => (teamId ? (teams.find((t) => t.id === teamId) ?? null) : null),
+    [teams, teamId],
+  );
+  const teamDepartment = useMemo(
+    () =>
+      team?.department_id ? (departments.find((d) => d.id === team.department_id) ?? null) : null,
+    [departments, team],
+  );
+
+  if (headedDepartment) {
+    const teamsInDept = teams.filter((t) => t.department_id === headedDepartment.id);
+    return (
+      <Section
+        title="Department"
+        subtitle="You lead this department. Heads don't sit on a single team."
+      >
+        <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+          <dt className="text-slate-500">Department</dt>
+          <dd className="text-slate-700">{headedDepartment.name}</dd>
+          <dt className="text-slate-500">Department role</dt>
+          <dd>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+              Head
+            </span>
+          </dd>
+        </dl>
+        <div className="mt-4">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            Teams you oversee
+            <span className="ml-1.5 font-normal normal-case text-slate-500">
+              ({teamsInDept.length})
+            </span>
+          </p>
+          <HeadOverseesTeamsGrid teams={teamsInDept} />
+        </div>
+      </Section>
+    );
+  }
+
+  if (teamId == null) {
+    return (
+      <Section title="Team" subtitle="Workspace admins manage team membership from the Directory.">
         <p className="text-sm text-slate-500">
           You&apos;re not assigned to a team yet. An admin can place you on one from the Directory.
         </p>
-      ) : (
-        <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
-          <dt className="text-slate-500">Team</dt>
-          <dd className="text-slate-700">{teamName}</dd>
-          <dt className="text-slate-500">Role on team</dt>
-          <dd className="text-slate-700">{teamRole ?? '—'}</dd>
-        </dl>
-      )}
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="Team" subtitle="Workspace admins manage team membership from the Directory.">
+      <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+        <dt className="text-slate-500">Department</dt>
+        <dd className="text-slate-700">
+          {teamDepartment?.name ?? <span className="italic text-slate-500">Unfiled</span>}
+        </dd>
+        <dt className="text-slate-500">Team</dt>
+        <dd className="text-slate-700">{team?.name ?? '—'}</dd>
+        <dt className="text-slate-500">Role on team</dt>
+        <dd className="text-slate-700">{teamRole ?? '—'}</dd>
+      </dl>
     </Section>
   );
 }

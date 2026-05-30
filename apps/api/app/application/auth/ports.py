@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.application.auth.oauth import OAuthIdentity
 from app.domain.entities import Credentials, Member, User, Workspace
-from app.domain.enums import OAuthProvider
+from app.domain.enums import OAuthProvider, TeamRole
 
 
 @runtime_checkable
@@ -16,6 +16,20 @@ class MemberRepository(Protocol):
     async def create(self, member: Member) -> Member: ...
     async def heartbeat(self, member_id: UUID) -> None: ...
     async def list_for_user(self, user_id: UUID) -> list[Member]: ...
+    async def set_team(
+        self,
+        member_id: UUID,
+        *,
+        team_id: UUID | None,
+        team_role: TeamRole | None,
+    ) -> Member:
+        """Assign / unassign a member to a team.
+
+        Also used by ``DepartmentService`` to clear the team assignment
+        of a member who is being promoted to Department Head — a Head
+        sits above team-level leadership and shouldn't double-count as
+        a team MANAGER/LEAD/MEMBER."""
+        ...
 
 
 @runtime_checkable

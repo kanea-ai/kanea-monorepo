@@ -321,6 +321,7 @@ def get_invite_service(
     teams: Annotated[TeamRepository, Depends(get_team_repository)],
     users: Annotated[UserRepository, Depends(get_user_repository)],
     audit_logs: Annotated[AuditLogService, Depends(get_audit_log_service)],
+    departments: Annotated[DepartmentRepository, Depends(get_department_repository)],
 ) -> InviteService:
     return InviteService(
         invites=invites,
@@ -336,6 +337,7 @@ def get_invite_service(
         teams=teams,
         users=users,
         audit_logs=audit_logs,
+        departments=departments,
     )
 
 

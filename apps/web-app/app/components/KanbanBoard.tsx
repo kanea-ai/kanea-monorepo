@@ -242,10 +242,23 @@ export function KanbanBoard() {
         </div>
       )}
       <DragDropContext onDragStart={onDragStart} onDragUpdate={onDragUpdate} onDragEnd={onDragEnd}>
-        {/* Columns flex-wise rather than equal-grid. Active columns
-            stretch; collapsed ones shrink to a 12-rem rail so they
-            stay usable. Below md they scroll horizontally. */}
-        <div className="flex h-full snap-x snap-mandatory items-start gap-3 overflow-x-auto p-3 sm:p-4 md:snap-none md:overflow-visible md:p-6">
+        {/* Fit-to-screen accordion. No horizontal scroll, no rigid
+            pixel widths on the columns — expanded columns are pure
+            ``flex-1`` and so split the available width evenly. As the
+            user expands or collapses columns the others fluidly
+            squeeze / grow within the same row. Collapsed columns are
+            a narrow rail just wide enough for the rotated title +
+            chevron + count badge.
+
+            Notes:
+            - ``w-full`` (no ``overflow-x-auto``) is the contract: the
+              row must never push past its parent. Cards inside use
+              ``min-w-0`` + ``truncate`` so they degrade gracefully
+              when a column gets very narrow.
+            - ``min-h-0`` on the row lets it shrink to its parent's
+              height so the (per-column) vertical scroll lives inside
+              the parent's ``overflow-auto`` wrapper. */}
+        <div className="flex h-full min-h-0 w-full items-start gap-3 p-3 sm:p-4 md:p-6">
           {COLUMNS.map((col) => (
             <Column
               key={col.id}
@@ -432,8 +445,20 @@ function Column({
   isActiveDropTarget: boolean;
   setOuterRef: (el: HTMLElement | null) => void;
 }) {
-  // Collapsed columns are a 5-rem rail (80px). Wider than the
-  // original 48px so a dragged card has more area to land on.
+  // Fit-to-screen accordion layout:
+  //
+  //   - Collapsed columns hold a fixed 3-rem rail (48px). ``shrink-0``
+  //     keeps them from being absorbed by the ``flex-1`` neighbours.
+  //   - Expanded columns are pure ``flex-1 min-w-[150px]``. They have
+  //     no fixed width; instead they split the parent row's remaining
+  //     space evenly. Expand a fourth column and the existing three
+  //     squeeze from 33% → 25% each. ``min-w-[150px]`` is the floor
+  //     so cards stay readable down to 13" laptop widths.
+  //
+  // No horizontal scroll, no off-screen columns — the cost is that
+  // very narrow viewports (under ~800px content area) will clip the
+  // rightmost column. That's an intentional trade — see the comment
+  // on the row wrapper for the design rationale.
   //
   // The active-drop-target highlight is driven by the parent's
   // custom hit-test (KanbanBoard.activeColumn), NOT by the dnd
@@ -441,13 +466,13 @@ function Column({
   // KanbanBoard for the rationale. The lib's snapshot is read for
   // the placeholder slot only; everything user-visible follows our
   // own hit-test.
-  const widthClass = isCollapsed ? 'w-20 md:w-20 shrink-0' : 'w-72 shrink-0 md:w-72 md:flex-1';
+  const widthClass = isCollapsed ? 'w-12 shrink-0' : 'min-w-[150px] flex-1';
   return (
     <Droppable droppableId={id}>
       {(provided) => (
         <div
           ref={setOuterRef}
-          className={`flex min-h-0 snap-start flex-col rounded-lg p-2 transition-all duration-300 ease-out ${widthClass} ${
+          className={`flex min-h-0 min-w-0 flex-col rounded-lg p-2 transition-all duration-300 ease-out ${widthClass} ${
             isActiveDropTarget
               ? 'bg-indigo-100 ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-50'
               : 'bg-slate-100'
@@ -470,9 +495,13 @@ function Column({
               ▶
             </span>
             <h2
-              className={`whitespace-nowrap text-sm font-semibold uppercase tracking-wide ${
+              className={`text-sm font-semibold uppercase tracking-wide ${
                 isActiveDropTarget ? 'text-indigo-700' : 'text-slate-600'
-              } ${isCollapsed ? 'rotate-180 [writing-mode:vertical-rl]' : ''}`}
+              } ${
+                isCollapsed
+                  ? 'rotate-180 whitespace-nowrap [writing-mode:vertical-rl]'
+                  : 'min-w-0 flex-1 truncate'
+              }`}
             >
               {label}
             </h2>

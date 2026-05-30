@@ -12,8 +12,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { EditToolbar } from '../../components/EditToolbar';
 import { Modal } from '../../components/Modal';
 import { Pagination } from '../../components/Pagination';
+import {
+  findSittingRoleHolder,
+  RoleReplacementConfirm,
+  type RoleReplacementContext,
+} from '../../components/RoleReplacementConfirm';
 import {
   ApiError,
   type Department,
@@ -23,6 +29,13 @@ import {
   type TeamRole,
 } from '../../lib/api';
 import { useCurrentPrincipal } from '../../lib/auth';
+import { departmentHref, userHref } from '../../lib/links';
+import {
+  canEditTeam,
+  disabledEditTooltip,
+  nearestEditors,
+  TEAM_REACH_PRIORITY,
+} from '../../lib/permissions';
 import {
   useCreateTeam,
   useDeleteTeam,
@@ -38,7 +51,14 @@ import {
 
 export default function TeamsPage() {
   const principal = useCurrentPrincipal();
+  // Two gates live on this page:
+  //   - isAdmin: workspace OWNER / ADMIN — controls the Create button
+  //     and the member-roster management inside the drawer (assign,
+  //     change team_role, remove). Those have always been admin-only.
+  //   - teamReach: priority-gated reach (≤ TEAM_REACH_PRIORITY) —
+  //     controls the team-metadata Edit toggle introduced in Task 3.
   const isAdmin = principal?.role === 'WORKSPACE_OWNER' || principal?.role === 'WORKSPACE_ADMIN';
+  const teamReach = canEditTeam(principal);
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -55,14 +75,14 @@ export default function TeamsPage() {
         </Link>
       </header>
 
-      <TeamsSection isAdmin={isAdmin} />
+      <TeamsSection isAdmin={isAdmin} teamReach={teamReach} />
     </div>
   );
 }
 
 const TEAMS_PAGE_SIZE = 20;
 
-function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
+function TeamsSection({ isAdmin, teamReach }: { isAdmin: boolean; teamReach: boolean }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState('');
   // 'all' = show every team, '' (empty string) = unfiled-only, else
@@ -233,8 +253,16 @@ function TeamsSection({ isAdmin }: { isAdmin: boolean }) {
 
       {openTeam ? (
         <TeamDetailDrawer
-          team={openTeam}
+          /* After PATCH /teams/{id} the cache is refreshed; ``teams``
+             carries the new row but our local ``openTeam`` captured
+             the snapshot at click-time. Re-resolve from the list so
+             the drawer always renders the latest version (e.g. the
+             department field after a Save). Falls back to ``openTeam``
+             during the brief window where the list refetch is in
+             flight. */
+          team={teams.find((t) => t.id === openTeam.id) ?? openTeam}
           isAdmin={isAdmin}
+          teamReach={teamReach}
           members={members}
           departments={departments}
           onClose={() => setOpenTeam(null)}
@@ -436,12 +464,17 @@ function CreateTeamDialog({
 function TeamDetailDrawer({
   team,
   isAdmin,
+  teamReach,
   members,
   departments,
   onClose,
 }: {
   team: TeamRecord;
   isAdmin: boolean;
+  /** Priority-gated reach (≤ TEAM_REACH_PRIORITY) — drives the team
+   *  metadata Edit toggle. Distinct from isAdmin, which still gates
+   *  the member-roster actions inside the drawer. */
+  teamReach: boolean;
   members: Member[];
   departments: Department[];
   onClose: () => void;
@@ -449,6 +482,7 @@ function TeamDetailDrawer({
   const update = useUpdateTeam();
   const remove = useDeleteTeam();
   const setMemberTeam = useSetMemberTeam();
+  const [editing, setEditing] = useState(false);
   const [name, setName] = useState(team.name);
   const [description, setDescription] = useState(team.description ?? '');
   const [departmentId, setDepartmentId] = useState<string>(team.department_id ?? '');
@@ -460,6 +494,7 @@ function TeamDetailDrawer({
     setName(team.name);
     setDescription(team.description ?? '');
     setDepartmentId(team.department_id ?? '');
+    setEditing(false);
     setError(null);
   }, [team.id, team.name, team.description, team.department_id]);
 
@@ -475,18 +510,22 @@ function TeamDetailDrawer({
   const onTeam = members.filter((m) => m.team_id === team.id);
   const ranked = [...onTeam].sort((a, b) => roleRank(a.team_role) - roleRank(b.team_role));
 
-  const onSaveDetails = async (e: FormEvent) => {
-    e.preventDefault();
+  const trimmedName = name.trim();
+  const trimmedDesc = description.trim();
+  const nameChanged = trimmedName !== team.name && trimmedName !== '';
+  const descChanged = trimmedDesc !== (team.description ?? '');
+  // department_id select stores '' for "no department"; the api takes
+  // null to mean the same. Both clear the FK.
+  const newDept = departmentId === '' ? null : departmentId;
+  const deptChanged = newDept !== team.department_id;
+  const dirty = nameChanged || descChanged || deptChanged;
+
+  const onSaveDetails = async () => {
     setError(null);
-    const trimmedName = name.trim();
-    const trimmedDesc = description.trim();
-    const nameChanged = trimmedName !== team.name && trimmedName !== '';
-    const descChanged = trimmedDesc !== (team.description ?? '');
-    // department_id select stores '' for "no department"; the api takes
-    // null to mean the same. Both clear the FK.
-    const newDept = departmentId === '' ? null : departmentId;
-    const deptChanged = newDept !== team.department_id;
-    if (!nameChanged && !descChanged && !deptChanged) return;
+    if (!dirty) {
+      setEditing(false);
+      return;
+    }
     try {
       await update.mutateAsync({
         id: team.id,
@@ -496,9 +535,18 @@ function TeamDetailDrawer({
           ...(deptChanged ? { department_id: newDept } : {}),
         },
       });
+      setEditing(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to save');
     }
+  };
+
+  const onCancelEdit = () => {
+    setName(team.name);
+    setDescription(team.description ?? '');
+    setDepartmentId(team.department_id ?? '');
+    setError(null);
+    setEditing(false);
   };
 
   const onDelete = async () => {
@@ -509,6 +557,52 @@ function TeamDetailDrawer({
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : 'Failed to delete');
     }
+  };
+
+  // Smart-tooltip context — the nearest authorised editor for THIS
+  // team. Falls back to "ask a workspace admin" when neither the
+  // team Manager nor the Dept Head is set.
+  const editors = nearestEditors({
+    teamId: team.id,
+    departmentId: team.department_id,
+    members,
+    departments,
+  });
+  const editTooltip = disabledEditTooltip(editors);
+
+  // Role-replacement intercept. When admin changes a sitting member's
+  // role to MANAGER (or LEAD) and someone ELSE already holds that
+  // slot, we surface a confirm modal naming the displaced holder.
+  // ``pendingRoleChange`` is the modal context plus the closure that
+  // commits the PATCH once the admin confirms.
+  const [pendingRoleChange, setPendingRoleChange] = useState<{
+    context: RoleReplacementContext;
+    commit: () => Promise<void>;
+  } | null>(null);
+
+  const requestRoleChange = async (target: Member, role: TeamRole) => {
+    const commit = async () => {
+      await setMemberTeam.mutateAsync({
+        memberId: target.id,
+        payload: { team_id: team.id, team_role: role },
+      });
+    };
+    if (role === 'MANAGER' || role === 'LEAD') {
+      const sitting = findSittingRoleHolder(members, team.id, role, target.id);
+      if (sitting !== null) {
+        setPendingRoleChange({
+          context: {
+            teamName: team.name,
+            role,
+            sittingHolder: sitting,
+            newHolderName: target.name,
+          },
+          commit,
+        });
+        return;
+      }
+    }
+    await commit();
   };
 
   return (
@@ -544,101 +638,117 @@ function TeamDetailDrawer({
           </header>
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
-            {isAdmin ? (
-              <form onSubmit={onSaveDetails} className="mb-5 space-y-3">
-                <div>
-                  <label
-                    htmlFor="team_drawer_name"
-                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-                  >
-                    Name
-                  </label>
-                  <input
-                    id="team_drawer_name"
-                    type="text"
-                    required
-                    value={name}
-                    maxLength={120}
-                    onChange={(e) => setName(e.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
+            <section className="mb-5 space-y-3">
+              <EditToolbar
+                editing={editing}
+                canEdit={teamReach}
+                disabledReason={editTooltip}
+                onEdit={() => setEditing(true)}
+                onCancel={onCancelEdit}
+                onSave={onSaveDetails}
+                dirty={dirty}
+                saving={update.isPending}
+                saveLabel="Save changes"
+              />
+
+              {editing ? (
+                <div className="space-y-3 rounded-md border border-indigo-100 bg-indigo-50/40 px-3 py-3">
+                  <div>
+                    <label
+                      htmlFor="team_drawer_name"
+                      className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                    >
+                      Name
+                    </label>
+                    <input
+                      id="team_drawer_name"
+                      type="text"
+                      required
+                      value={name}
+                      maxLength={120}
+                      onChange={(e) => setName(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="team_drawer_description"
+                      className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                    >
+                      Description
+                    </label>
+                    <textarea
+                      id="team_drawer_description"
+                      rows={3}
+                      value={description}
+                      maxLength={20_000}
+                      placeholder="What this team is responsible for."
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="team_drawer_department"
+                      className="block text-xs font-medium uppercase tracking-wide text-slate-600"
+                    >
+                      Department
+                    </label>
+                    <select
+                      id="team_drawer_department"
+                      value={departmentId}
+                      onChange={(e) => setDepartmentId(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="">No department</option>
+                      {departments.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label
-                    htmlFor="team_drawer_description"
-                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-                  >
-                    Description
-                  </label>
-                  <textarea
-                    id="team_drawer_description"
-                    rows={3}
-                    value={description}
-                    maxLength={20_000}
-                    placeholder="What this team is responsible for."
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
+              ) : (
+                <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      Name
+                    </p>
+                    <p className="mt-1 text-sm text-slate-800">{team.name}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      Description
+                    </p>
+                    <p className="mt-1 text-sm text-slate-800">
+                      {team.description ? (
+                        team.description
+                      ) : (
+                        <span className="italic text-slate-500">No description.</span>
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      Department
+                    </p>
+                    <p className="mt-1 text-sm text-slate-800">
+                      {team.department_id ? (
+                        <Link
+                          href={departmentHref(team.department_id)}
+                          className="text-slate-800 hover:text-indigo-700 hover:underline"
+                        >
+                          {departments.find((d) => d.id === team.department_id)?.name ?? '—'}
+                        </Link>
+                      ) : (
+                        <span className="italic text-slate-500">Unfiled.</span>
+                      )}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <label
-                    htmlFor="team_drawer_department"
-                    className="block text-xs font-medium uppercase tracking-wide text-slate-600"
-                  >
-                    Department
-                  </label>
-                  <select
-                    id="team_drawer_department"
-                    value={departmentId}
-                    onChange={(e) => setDepartmentId(e.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  >
-                    <option value="">No department</option>
-                    {departments.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={update.isPending}
-                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {update.isPending ? 'Saving…' : 'Save changes'}
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <section className="mb-5 space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    Description
-                  </p>
-                  <p className="mt-1 text-sm text-slate-800">
-                    {team.description ? (
-                      team.description
-                    ) : (
-                      <span className="italic text-slate-500">No description.</span>
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    Department
-                  </p>
-                  <p className="mt-1 text-sm text-slate-800">
-                    {team.department_id ? (
-                      (departments.find((d) => d.id === team.department_id)?.name ?? '—')
-                    ) : (
-                      <span className="italic text-slate-500">Unfiled.</span>
-                    )}
-                  </p>
-                </div>
-              </section>
-            )}
+              )}
+            </section>
 
             <div className="mb-3 flex items-baseline justify-between">
               <h3 className="text-sm font-semibold text-slate-900">
@@ -665,12 +775,7 @@ function TeamDetailDrawer({
                     key={m.id}
                     member={m}
                     isAdmin={isAdmin}
-                    onChangeRole={async (role) => {
-                      await setMemberTeam.mutateAsync({
-                        memberId: m.id,
-                        payload: { team_id: team.id, team_role: role },
-                      });
-                    }}
+                    onChangeRole={(role) => requestRoleChange(m, role)}
                     onRemove={async () => {
                       await setMemberTeam.mutateAsync({
                         memberId: m.id,
@@ -706,7 +811,7 @@ function TeamDetailDrawer({
             ) : null}
           </div>
 
-          {isAdmin ? (
+          {teamReach ? (
             <footer className="border-t border-slate-200 bg-slate-50 px-5 py-3">
               <button
                 type="button"
@@ -733,6 +838,17 @@ function TeamDetailDrawer({
           setConfirmDelete(false);
         }}
       />
+
+      <RoleReplacementConfirm
+        context={pendingRoleChange?.context ?? null}
+        pending={setMemberTeam.isPending}
+        onCancel={() => setPendingRoleChange(null)}
+        onConfirm={async () => {
+          if (!pendingRoleChange) return;
+          await pendingRoleChange.commit();
+          setPendingRoleChange(null);
+        }}
+      />
     </>
   );
 }
@@ -754,7 +870,12 @@ function DrawerMemberRow({
     <li className="flex items-center justify-between gap-2 py-2 text-sm">
       <div className="min-w-0">
         <p className="truncate font-medium text-slate-900">
-          {member.name}
+          <Link
+            href={userHref(member.id)}
+            className="text-slate-900 hover:text-indigo-700 hover:underline"
+          >
+            {member.name}
+          </Link>
           {member.type === 'AGENT' ? (
             <span className="ml-1.5 rounded bg-violet-100 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700">
               Agent
