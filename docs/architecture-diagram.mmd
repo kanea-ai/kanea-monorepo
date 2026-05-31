@@ -1,0 +1,38 @@
+flowchart LR
+    subgraph Internet
+        U[Browser / external integrator]
+    end
+
+    subgraph Edge["Google Cloud edge"]
+        LB["HTTPS Load Balancer<br/>kanea-url-map"]
+        CA["Cloud Armor<br/>(OWASP rules + per-IP rate ban)"]
+        LB --- CA
+    end
+
+    subgraph Routing["Host-based URL map"]
+        H1["kanea.ai / www.kanea.ai -> www"]
+        H2["app.kanea.ai -> web-app"]
+        H3["admin.kanea.ai -> admin-panel<br/>(IAP-gated)"]
+        H4["/api/* on every host -> api"]
+    end
+
+    subgraph CloudRun["Cloud Run services<br/>(europe-west1)"]
+        WWW["www<br/>(Next.js 14)"]
+        WEB["web-app<br/>(Next.js 14)"]
+        ADM["admin-panel<br/>(Next.js 14)<br/>ingress=internal-LB-only"]
+        API["api<br/>(FastAPI - Python 3.12)"]
+    end
+
+    subgraph Data["Private services VPC"]
+        SQL[("Cloud SQL Postgres 15<br/>private IP only")]
+        SM[("Secret Manager<br/>db_url - oauth - agent_api_key_pepper")]
+    end
+
+    U --> CA --> LB
+    LB --> H1 --> WWW
+    LB --> H2 --> WEB
+    LB --> H3
+    H3 -. "IAP at LB edge:<br/>roles/iap.httpsResourceAccessor<br/>on engineering@kanea.ai" .-> ADM
+    LB --> H4 --> API
+    API -- VPC connector --> SQL
+    API -- secret_key_ref --> SM
