@@ -152,3 +152,77 @@ resource "google_secret_manager_secret_iam_member" "api_agent_api_key_pepper_acc
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.run["api"].email}"
 }
+
+# ---------- JWT signing secret (Phase A — dormant) ----------
+#
+# HMAC key for jwt.encode / jwt.decode in apps/api. The same secret
+# signs and verifies every JWT the platform issues — human workspace
+# tokens, agent JWTs (scope='agent'), selection tokens, and OAuth
+# onboarding tickets — via the single signing path on
+# ``apps/api/app/infrastructure/security/tokens.py`` and the single
+# verification path on ``apps/api/app/api/deps.py:_decode_principal``.
+# Rotating the value invalidates every token of every type atomically;
+# see issue #42 for the blast-radius analysis that motivated this work.
+#
+# Phase A of the two-PR safe ordering — same shape as the
+# agent_api_key_pepper rollout in PRs #40 / #41. This PR lands the
+# secret CONTAINER + secretAccessor IAM grant on `run-api`, and
+# NOTHING references the secret yet (no env binding in cloudrun.tf,
+# no Settings field expects it). Applying this PR changes nothing
+# about how the running api behaves; the existing standalone pepper
+# validator stays in force, the api keeps booting on the field-default
+# placeholder for `jwt_secret`, and prod continues to serve as it
+# does today. The latent issue #42 remains latent until Phase B.
+#
+# After this PR is applied, the operator runs out-of-band (one per
+# environment that gets cut over):
+#
+#   PROD:
+#     JWT_SECRET=$(head -c 64 /dev/urandom | base64)
+#     printf '%s' "$JWT_SECRET" | gcloud secrets versions add \
+#       jwt-secret --data-file=- --project=kanea-prod-env
+#     unset JWT_SECRET
+#
+#   STAGING (only if cutting staging over):
+#     JWT_SECRET=$(head -c 64 /dev/urandom | base64)
+#     printf '%s' "$JWT_SECRET" | gcloud secrets versions add \
+#       jwt-secret-staging --data-file=- --project=<staging-project-id>
+#     unset JWT_SECRET
+#
+# Phase B (a separate draft PR, ``infra/jwt-secret-arm-validator``)
+# then adds the JWT_SECRET secret_key_ref binding on the api Cloud
+# Run service AND folds the standalone pepper validator into a unified
+# `_check_required_secrets_in_prod` that also enforces jwt_secret. By
+# the time Phase B's image rolls, the real secret already exists, so
+# the new revision boots reading it on first try — no deliberate-
+# failure window.
+#
+# OPERATIONAL CONSEQUENCE — store the generated value in durable
+# secret storage (e.g. a password manager). The value is never
+# persisted by the api, never logged, and never recoverable from
+# Secret Manager once a newer version is added. Losing it = forced
+# rotation = every active session logged out, every agent forced to
+# re-exchange its API key. Rotating it deliberately has the same
+# effect; see README ops section for the procedure.
+
+resource "google_secret_manager_secret" "jwt_secret" {
+  secret_id = "jwt-secret${local.name_suffix}"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "jwt_secret" {
+  secret      = google_secret_manager_secret.jwt_secret.id
+  secret_data = "PLACEHOLDER_SET_VIA_GCLOUD" # pragma: allowlist secret
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "api_jwt_secret_accessor" {
+  secret_id = google_secret_manager_secret.jwt_secret.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run["api"].email}"
+}
