@@ -99,66 +99,56 @@ resource "google_secret_manager_secret_iam_member" "api_github_oauth_accessor" {
   member    = "serviceAccount:${google_service_account.run["api"].email}"
 }
 
-# ---------- Agent API-key pepper (DEPLOY-TIME TODO, blocked on follow-up infra PR) ----------
+# ---------- Agent API-key pepper (Phase A — dormant) ----------
 #
-# The HMAC pepper backing `agent_api_keys.secret_hash`. Added in the
-# API PR that introduced per-agent keys. The api refuses to boot in
-# any non-development environment with the committed placeholder
-# (see apps/api/app/core/config.py:_check_pepper_set_in_prod), so a
-# Tofu apply that lands the api image without ALSO landing this
-# wiring will surface as a hard Cloud Run startup failure with
+# Phase A of the two-PR safe ordering. This file change lands the
+# secret CONTAINER + the secretAccessor IAM grant on `run-api`, and
+# NOTHING references the secret yet — the api Cloud Run service's
+# env spec is untouched in this PR. So applying this PR changes
+# nothing about how the running api behaves; the prod-only validator
+# in app/core/config.py stays dormant and no revision can boot-fail.
 #
-#   ValueError: agent_api_key_pepper is set to the committed
-#   placeholder in a non-development environment ('production').
+# After this PR is applied, the operator runs out-of-band:
 #
-# That's the intended behavior — better a loud boot failure than a
-# silent default secret. It does mean the four steps below must land
-# together in a single deploy.
+#   PEPPER=$(head -c 64 /dev/urandom | base64)
+#   printf '%s' "$PEPPER" | gcloud secrets versions add \
+#     agent-api-key-pepper${local.name_suffix} \
+#     --data-file=- --project=<project>
+#   unset PEPPER
 #
-# Uncomment + apply in the follow-up infra PR:
+# Phase B (a separate PR) then adds the AGENT_API_KEY_PEPPER
+# secret_key_ref binding + ENVIRONMENT=production + AGENT_API_KEY_ENV_TAG=live
+# on the api Cloud Run service. By then the real pepper already exists,
+# so the first new revision Phase B rolls boots healthy — no deliberate
+# failure window.
 #
-#   1. The secret container + initial placeholder version.
-#      Replace the placeholder via:
-#        head -c 48 /dev/urandom | base64 | gcloud secrets versions add \
-#          agent-api-key-pepper --data-file=- --project=kanea-prod-env
-#      Treat each env's pepper as independent — never share live + staging.
-#
-#   2. The secretAccessor IAM grant on the run-api SA (same shape as
-#      `api_db_url_accessor` / `api_google_oauth_accessor` above).
-#
-#   3. Mount as `AGENT_API_KEY_PEPPER` on the api Cloud Run service —
-#      add a `secret_key_ref` env binding in cloudrun.tf alongside the
-#      existing DB URL one. `version = "latest"` so a future rotation
-#      via `gcloud secrets versions add` flows on the next revision
-#      rollout.
-#
-#   4. Set `AGENT_API_KEY_ENV_TAG=live` as a plain env var on the prod
-#      api service (and leave it unset / `dev` everywhere else). The
-#      exchange endpoint refuses keys whose env-tag doesn't match, so a
-#      dev key leaked into prod cannot mint a JWT and vice versa.
-#
-# Operational consequence (also in the api's config.py docstring):
+# Operational consequence (also documented in app/core/config.py):
 # rotating or losing this pepper invalidates every existing agent API
 # key — plaintext is never persisted, so rotation = mint fresh keys
 # under the new pepper, then revoke the old ones.
 #
-# resource "google_secret_manager_secret" "agent_api_key_pepper" {
-#   secret_id = "agent-api-key-pepper${local.name_suffix}"
-#   replication {
-#     auto {}
-#   }
-# }
-#
-# resource "google_secret_manager_secret_version" "agent_api_key_pepper" {
-#   secret      = google_secret_manager_secret.agent_api_key_pepper.id
-#   secret_data = "PLACEHOLDER_SET_VIA_GCLOUD" # pragma: allowlist secret
-#   lifecycle {
-#     ignore_changes = [secret_data]
-#   }
-# }
-#
-# resource "google_secret_manager_secret_iam_member" "api_agent_api_key_pepper_accessor" {
-#   secret_id = google_secret_manager_secret.agent_api_key_pepper.id
-#   role      = "roles/secretmanager.secretAccessor"
-#   member    = "serviceAccount:${google_service_account.run["api"].email}"
-# }
+# Future rotation: `gcloud secrets versions add` against the existing
+# container; Cloud Run reads via `version = "latest"` so the next
+# revision rollout picks it up automatically.
+
+resource "google_secret_manager_secret" "agent_api_key_pepper" {
+  secret_id = "agent-api-key-pepper${local.name_suffix}"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "agent_api_key_pepper" {
+  secret      = google_secret_manager_secret.agent_api_key_pepper.id
+  secret_data = "PLACEHOLDER_SET_VIA_GCLOUD" # pragma: allowlist secret
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "api_agent_api_key_pepper_accessor" {
+  secret_id = google_secret_manager_secret.agent_api_key_pepper.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run["api"].email}"
+}
