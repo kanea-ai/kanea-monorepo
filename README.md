@@ -38,7 +38,7 @@ The coverage badge above represents the enforced CI gate (`--cov-fail-under=92` 
 
 - **Workspaces** with strict tenant isolation and a four-level hierarchy (workspace → department → team → member).
 - **Role-based access control** combining a workspace-level role (`WORKSPACE_OWNER` / `WORKSPACE_ADMIN` / `WORKSPACE_USER`), a numeric **priority** (1 = highest rank), and an intra-team role (`MANAGER` / `LEAD` / `MEMBER`) for task delegation.
-- **A rich task lifecycle**: five canonical statuses (`PENDING`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELLED`), an orthogonal `is_blocked` flag, directed relations (`BLOCKS`, `MITIGATES`, `DUPLICATES`, `RELATES_TO`), cross-team work requests with leadership-gated fulfillment, append-only activity logs, comments with mentions, and per-task ratings.
+- **A rich task lifecycle**: five canonical statuses (`PENDING`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELLED`), an orthogonal `is_blocked` flag, directed relations (`BLOCKS`, `MITIGATES`, `DUPLICATES`, `RELATES_TO`), cross-team work requests with automatic dependency linking, append-only activity logs, comments with mentions, and per-task ratings.
 - **Agents as members** with their own scoped JWT (`scope='agent'`, 15-minute TTL) issued by exchanging an API key. Keys are admin-issued, HMAC-hashed at rest, soft-revocable, and carry an env tag that prevents cross-environment misuse.
 - **An internal admin panel** for cross-tenant operator intervention, sealed behind a six-layer zero-trust topology.
 
@@ -240,13 +240,15 @@ Columns are individually collapsible. During drag, an empty or collapsed column 
 
 ### Cross-team collaboration
 
-A team that needs another team's output opens a task request (`task_requests`). The request lands in the target team's inbox (`/teams/{id}/requests`) and can only be fulfilled or rejected by a team-leadership member — `MANAGER`, `LEAD`, or the department head. Fulfilling the request mints a target task on the target team and links the two via a `BLOCKS` task relation, so the source task automatically shows the new dependency in its blocked-by panel. Cross-team requests can also auto-fulfill in specific scenarios when the originating team's leadership is also the target team's leadership.
+A member who owns a source task — its creator, its assignee, or any workspace admin — files a cross-team request anchored to that task via `POST /tasks/{id}/requests`. The standard path (`create_request` in `app/application/tasks/service.py:428-533`) mints the target task on the requested team immediately and creates a directed task-relation linking source and target (default `BLOCKS`, configurable per request), atomically with the request itself. The request row is recorded as `FULFILLED` and surfaces in the target team's inbox (`GET /teams/{team_id}/requests`) as a notification, not as an approval step — readers of the source task see the new dependency in the blocked-by panel the moment the request lands.
+
+A separate manual-fulfilment path exists for `PENDING` requests: `POST /requests/{id}/fulfill` and `POST /requests/{id}/reject`, both gated on the **source** task's team leadership (`MANAGER`, `LEAD`, or the department head) or a workspace admin — verified at `_require_team_leadership_for_source` in `app/application/tasks/service.py:703-725`. The standard `create_request` endpoint does not produce `PENDING` rows itself, so this lifecycle path is reserved for internal/staged flows that explicitly mint `PENDING` requests outside the standard endpoint.
 
 ### Append-only activity stream
 
 Every state-changing operation on a task writes a row into `task_activities`. The vocabulary lives in `TaskActivityType` and currently covers: `CREATED`, `STATUS_CHANGED`, `ASSIGNED`, `DELEGATED`, `BLOCKED`, `UNBLOCKED`, `PROJECT_CHANGED`, `TEAM_CHANGED`, `RATED`, `PRIORITY_CHANGED`. Each row carries a JSONB payload with the transition's specifics (e.g. `{from, to}` for status changes).
 
-`GET /api/v1/tasks/{id}/activity` returns the chronological feed merged with comments. The same endpoint at the project level (`GET /api/v1/projects/{id}/history`) aggregates across tasks. This stream is the canonical artifact an AI agent reads when reconstructing context, and the platform deliberately makes it the source of truth — there is no separate "agent context" store to drift from.
+`GET /api/v1/tasks/{id}/activity` returns the chronological activity feed for the task — activity entries only. Comments are served from a separate `GET /api/v1/tasks/{id}/comments` endpoint. The same endpoint at the project level (`GET /api/v1/projects/{id}/history`) aggregates across tasks. This stream is the canonical artifact an AI agent reads when reconstructing context, and the platform deliberately makes it the source of truth — there is no separate "agent context" store to drift from.
 
 ### Entity navigation mesh
 
@@ -560,6 +562,7 @@ All routes are mounted under `/api/v1` by `apps/api/app/main.py`. Auth column:
 - **admin(P≤N)** — priority-gated admin
 - **owner** — `WORKSPACE_OWNER`
 - **superadmin** — platform `users.is_superadmin = true`
+- **source-team leadership** — workspace admin OR a `MANAGER` / `LEAD` on the **source task's** team OR the head of that team's department. Used by the manual cross-team request fulfil/reject endpoints; verified at `_require_team_leadership_for_source` in `app/application/tasks/service.py:703-725`.
 
 Plus `GET /health` outside the `/api/v1` prefix for Cloud Run probes.
 
@@ -627,29 +630,29 @@ Plus `GET /health` outside the `/api/v1` prefix for Cloud Run probes.
 
 ### Tasks, blocks, cross-team requests
 
-| Method | Path                                  | Auth            | Purpose                                                                    |
-| ------ | ------------------------------------- | --------------- | -------------------------------------------------------------------------- |
-| GET    | `/tasks`                              | JWT             | List with filters / sort.                                                  |
-| POST   | `/tasks`                              | JWT             | Create.                                                                    |
-| GET    | `/tasks/{id}`                         | JWT             | Read.                                                                      |
-| POST   | `/tasks/{id}/delegate`                | JWT             | Delegate to another member (priority-gated).                               |
-| PATCH  | `/tasks/{id}/status`                  | JWT             | Change status.                                                             |
-| PATCH  | `/tasks/{id}/links`                   | JWT             | Update project_id / team_id.                                               |
-| PATCH  | `/tasks/{id}/priority`                | JWT             | Adjust priority.                                                           |
-| PATCH  | `/tasks/{id}/block`                   | JWT             | Set / clear `is_blocked` with a reason.                                    |
-| GET    | `/tasks/{id}/comments`                | JWT             | List comments.                                                             |
-| POST   | `/tasks/{id}/comments`                | JWT             | Post a comment (supports `@`-mentions).                                    |
-| GET    | `/tasks/{id}/activity`                | JWT             | Append-only activity log merged with comments.                             |
-| GET    | `/tasks/{id}/relations`               | JWT             | List task relations.                                                       |
-| POST   | `/tasks/{id}/relations`               | JWT             | Add a relation (`BLOCKS` / `MITIGATES` / `DUPLICATES` / `RELATES_TO`).     |
-| DELETE | `/tasks/{id}/relations/{relation_id}` | JWT             | Remove a relation.                                                         |
-| POST   | `/tasks/{id}/requests`                | JWT             | Open an outbound cross-team request from this task.                        |
-| GET    | `/tasks/{id}/requests`                | JWT             | This task's outbound requests.                                             |
-| POST   | `/tasks/{id}/rate`                    | JWT             | Rate a completed task (issuer-only, single-shot).                          |
-| GET    | `/teams/{team_id}/requests`           | team leadership | Team's inbox of pending cross-team requests.                               |
-| POST   | `/requests/{id}/fulfill`              | team leadership | Mint the target task + link with `BLOCKS`.                                 |
-| POST   | `/requests/{id}/reject`               | team leadership | Reject with a reason.                                                      |
-| GET    | `/blocks`                             | JWT             | Workspace-wide blocked tasks with sort (`PRIORITY` / `NEWEST` / `OLDEST`). |
+| Method | Path                                  | Auth                   | Purpose                                                                                                                                                 |
+| ------ | ------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/tasks`                              | JWT                    | List with filters / sort.                                                                                                                               |
+| POST   | `/tasks`                              | JWT                    | Create.                                                                                                                                                 |
+| GET    | `/tasks/{id}`                         | JWT                    | Read.                                                                                                                                                   |
+| POST   | `/tasks/{id}/delegate`                | JWT                    | Delegate to another member (priority-gated).                                                                                                            |
+| PATCH  | `/tasks/{id}/status`                  | JWT                    | Change status.                                                                                                                                          |
+| PATCH  | `/tasks/{id}/links`                   | JWT                    | Update project_id / team_id.                                                                                                                            |
+| PATCH  | `/tasks/{id}/priority`                | JWT                    | Adjust priority.                                                                                                                                        |
+| PATCH  | `/tasks/{id}/block`                   | JWT                    | Set / clear `is_blocked` with a reason.                                                                                                                 |
+| GET    | `/tasks/{id}/comments`                | JWT                    | List comments.                                                                                                                                          |
+| POST   | `/tasks/{id}/comments`                | JWT                    | Post a comment (supports `@`-mentions).                                                                                                                 |
+| GET    | `/tasks/{id}/activity`                | JWT                    | Append-only activity log merged with comments.                                                                                                          |
+| GET    | `/tasks/{id}/relations`               | JWT                    | List task relations.                                                                                                                                    |
+| POST   | `/tasks/{id}/relations`               | JWT                    | Add a relation (`BLOCKS` / `MITIGATES` / `DUPLICATES` / `RELATES_TO`).                                                                                  |
+| DELETE | `/tasks/{id}/relations/{relation_id}` | JWT                    | Remove a relation.                                                                                                                                      |
+| POST   | `/tasks/{id}/requests`                | JWT                    | Open an outbound cross-team request from this task.                                                                                                     |
+| GET    | `/tasks/{id}/requests`                | JWT                    | This task's outbound requests.                                                                                                                          |
+| POST   | `/tasks/{id}/rate`                    | JWT                    | Rate a `DONE` task (creator-only, single-shot — 403 if not the creator, 409 if not in `DONE` or already rated).                                         |
+| GET    | `/teams/{team_id}/requests`           | JWT                    | Inbox view: cross-team requests filed against tasks on this team. Readable by any workspace member; pass `?status_filter=PENDING` for actionable items. |
+| POST   | `/requests/{id}/fulfill`              | source-team leadership | Manually fulfil a `PENDING` request: mint the target task on `requested_team_id` and link with `BLOCKS`. 409 if already resolved.                       |
+| POST   | `/requests/{id}/reject`               | source-team leadership | Reject a `PENDING` request with a reason. 409 if already resolved.                                                                                      |
+| GET    | `/blocks`                             | JWT                    | Workspace-wide blocked tasks with sort (`PRIORITY` / `NEWEST` / `OLDEST`).                                                                              |
 
 ### Agents
 
