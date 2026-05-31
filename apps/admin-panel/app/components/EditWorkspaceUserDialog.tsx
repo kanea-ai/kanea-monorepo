@@ -125,6 +125,10 @@ export function EditWorkspaceUserDialog({
       return;
     }
     try {
+      // Caller (workspace detail page) only opens this dialog for HUMAN
+      // members; agents have no user_id and aren't editable through the
+      // user-keyed PATCH endpoint.
+      if (!user.user_id) throw new Error('Cannot edit an agent member.');
       await mutation.mutateAsync({ userId: user.user_id, payload });
       onClose();
     } catch (err) {

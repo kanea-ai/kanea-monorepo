@@ -191,13 +191,17 @@ export default function WorkspaceDetailPage() {
                       )}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setOpenUser(u)}
-                        className="rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                      >
-                        Edit
-                      </button>
+                      {u.user_id ? (
+                        <button
+                          type="button"
+                          onClick={() => setOpenUser(u)}
+                          className="rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                        >
+                          Edit
+                        </button>
+                      ) : (
+                        <span className="text-[10px] italic text-slate-400">Agent</span>
+                      )}
                     </td>
                   </tr>
                 ))}

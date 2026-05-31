@@ -56,7 +56,12 @@ class AdminWorkspaceUserRow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     member_id: UUID
-    user_id: UUID
+    # Agents have no backing user row (CHECK constraint on members:
+    # HUMAN ⇒ user_id NOT NULL, AGENT ⇒ user_id NULL), so any workspace
+    # with even one agent broke serialisation here and 500'd the whole
+    # listing. Treat user_id as optional and let the UI handle the
+    # agent case explicitly (e.g. hide the Edit affordance).
+    user_id: UUID | None
     email: str | None
     full_name: str
     type: MemberType

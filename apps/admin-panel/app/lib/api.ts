@@ -135,7 +135,7 @@ export type TeamRoleValue = 'MANAGER' | 'LEAD' | 'MEMBER';
 
 export interface AdminWorkspaceUserRow {
   member_id: string;
-  user_id: string;
+  user_id: string | null;
   email: string | null;
   full_name: string;
   type: 'HUMAN' | 'AGENT';
