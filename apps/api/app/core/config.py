@@ -1,14 +1,51 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Sentinel value committed to the repo so local dev / unit tests can
-# boot without a real pepper. The validator below refuses to start
-# when this value is still present AND the environment is anything
-# other than "development". Treat this constant as a tripwire — never
-# rename it without also fixing the env files that ship it.
+# Sentinel values for required-in-prod secret placeholders. Both kept
+# as named constants so tests and the unified validator below can
+# reference them without re-typing the literal — and so detect-secrets
+# tooling can be allowlisted on this single line per secret rather than
+# every call site.
+#
+# Provenance:
+#
+# - ``agent_api_key_pepper`` protection was introduced in PRs #39-#41
+#   as a standalone ``_check_pepper_set_in_prod`` validator + Tofu
+#   wiring. The standalone validator was folded into the unified
+#   ``_check_required_secrets_in_prod`` below in the issue-#42 work;
+#   protection is unchanged (same trigger condition, same fail-loud at
+#   import).
+#
+# - ``jwt_secret`` protection lands as the second occupant via issue
+#   #42. The wiring (Phase A + Phase B Tofu) follows the same shape
+#   as PRs #40 / #41.
+_DEV_JWT_SECRET_PLACEHOLDER = "change-me-in-production"  # pragma: allowlist secret
 _DEV_PEPPER_PLACEHOLDER = "change-me-in-production-agent-pepper"  # pragma: allowlist secret
+
+# Registry of (field, placeholder) pairs the unified validator
+# enforces in any non-development environment. Adding a new
+# required-in-prod secret = one line here, the field declaration
+# below, and the matching Tofu wiring (Phase A container + Phase B
+# secret_key_ref binding).
+_REQUIRED_IN_PROD_PLACEHOLDERS: tuple[tuple[str, str], ...] = (
+    ("jwt_secret", _DEV_JWT_SECRET_PLACEHOLDER),
+    ("agent_api_key_pepper", _DEV_PEPPER_PLACEHOLDER),
+)
+
+# Explicit environment whitelist. The ``Settings.environment`` field
+# below is typed as this Literal WITH NO DEFAULT, so pydantic refuses
+# both "unset" (no env var supplied → field-required error) and
+# "invalid" (typo → enum-value error) BEFORE the model_validator
+# below runs. That ordering is non-negotiable: it ensures a broken
+# ENVIRONMENT is always reported as its own pydantic field error,
+# never as a misleading cascade of "secret X is the placeholder"
+# downstream errors that are really just symptoms of environment
+# never being set.
+Environment = Literal["development", "staging", "production"]
 
 
 class Settings(BaseSettings):
@@ -25,14 +62,22 @@ class Settings(BaseSettings):
 
     app_name: str = "kanea-api"
     version: str = "0.0.0"
-    environment: str = "development"
+
+    # No default. Pydantic raises "field required" when ENVIRONMENT
+    # isn't supplied. Local dev gets it from .env.development
+    # (committed, sets ENVIRONMENT=development); CI's pytest job runs
+    # from apps/api/ so it picks up the same file; prod / staging
+    # Cloud Run set it via cloudrun.tf. A future deploy that forgets
+    # the binding crashes on import rather than silently no-op'ing
+    # every prod-only validator below.
+    environment: Environment
 
     database_url: str = (
         "postgresql+asyncpg://kanea:kanea@localhost:5432/kanea"  # pragma: allowlist secret
     )
     database_echo: bool = False
 
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str = _DEV_JWT_SECRET_PLACEHOLDER
     jwt_algorithm: str = "HS256"
     jwt_human_ttl_seconds: int = 3600
     jwt_agent_ttl_seconds: int = 900
@@ -51,8 +96,8 @@ class Settings(BaseSettings):
     #   the new pepper, hand them to operators, revoke the old keys.
     #
     # In prod this MUST come from Secret Manager. The committed default
-    # is a sentinel that the validator below refuses in any non-dev
-    # environment — see ``_check_pepper_set_in_prod``.
+    # is a sentinel that ``_check_required_secrets_in_prod`` refuses in
+    # any non-development environment.
     agent_api_key_pepper: str = _DEV_PEPPER_PLACEHOLDER
 
     # `live` (prod) / `dev` (everything else). Embedded in agent API
@@ -60,23 +105,6 @@ class Settings(BaseSettings):
     # accept a key whose env-tag doesn't match this setting, so a
     # dev-env key leaked into prod (or vice-versa) cannot mint a JWT.
     agent_api_key_env_tag: str = "dev"
-
-    @model_validator(mode="after")
-    def _check_pepper_set_in_prod(self) -> Settings:
-        """Refuse to boot in any non-development environment when the
-        agent API-key pepper still carries the committed sentinel.
-        Equivalent to a startup tripwire — better to crash on import
-        than to silently accept the placeholder secret in prod."""
-        if (
-            self.environment != "development"
-            and self.agent_api_key_pepper == _DEV_PEPPER_PLACEHOLDER
-        ):
-            raise ValueError(
-                "agent_api_key_pepper is set to the committed placeholder in a "
-                f"non-development environment ({self.environment!r}). Provide a "
-                "real pepper via Secret Manager / env var before booting."
-            )
-        return self
 
     # CORS allow-list. Empty in prod (LB serves api and web-app on the same
     # origin). Populated locally so the Next.js dev servers (3000/3001/3002)
@@ -106,6 +134,57 @@ class Settings(BaseSettings):
     # Set Secure on the oauth_state cookie. False in local dev (HTTP),
     # True in prod where the LB terminates TLS.
     cookie_secure: bool = False
+
+    @model_validator(mode="after")
+    def _check_required_secrets_in_prod(self) -> Settings:
+        """Unified tripwire for required-in-prod secrets.
+
+        By the time this validator runs, pydantic has already validated
+        ``environment`` against the ``Environment`` Literal — an unset
+        or invalid ENVIRONMENT raises a field error BEFORE this method
+        runs. So "ENVIRONMENT is broken" is always its own pydantic
+        field error, never cascading into a misleading list of
+        "secret X is the placeholder" downstream errors that are really
+        just symptoms of environment-never-set. That ordering is
+        non-negotiable and is the reason this validator does not
+        re-check ``environment`` itself.
+
+        When ``environment != "development"``, every registered
+        required-in-prod secret must carry a non-placeholder value.
+        Multiple offenders are aggregated into a single error so a
+        fresh deploy that forgot all of them surfaces a readable
+        list, not three deploys-worth of fix-one-at-a-time.
+
+        Security invariant: the error message names FIELDS, never
+        VALUES. No placeholder string (and by extension no real
+        value, since both go through the same code path) is
+        included in the error. Pinned by
+        ``test_both_placeholders_aggregated_in_one_error``.
+
+        Pepper provenance: PRs #39-#41 introduced the standalone
+        ``_check_pepper_set_in_prod`` validator and the Tofu wiring
+        that feeds it. That standalone validator was folded into this
+        unified rule in the issue-#42 work — protection is unchanged
+        (same trigger: environment != "development" AND value ==
+        placeholder, same fail-loud at import).
+        """
+        if self.environment == "development":
+            return self
+
+        offenders = [
+            name
+            for name, placeholder in _REQUIRED_IN_PROD_PLACEHOLDERS
+            if getattr(self, name) == placeholder
+        ]
+        if offenders:
+            names = ", ".join(offenders)
+            verb = "is" if len(offenders) == 1 else "are"
+            raise ValueError(
+                f"{names} {verb} set to the committed placeholder in "
+                f"environment={self.environment!r}. Provide real "
+                "value(s) via Secret Manager / env var before booting."
+            )
+        return self
 
 
 settings = Settings()
