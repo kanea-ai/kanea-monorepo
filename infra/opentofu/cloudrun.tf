@@ -188,6 +188,37 @@ resource "google_cloud_run_v2_service" "svc" {
           value = local.is_prod ? "live" : "dev"
         }
       }
+
+      # ---------- JWT signing secret (api-only) ----------
+      # HMAC key for jwt.encode / jwt.decode in apps/api. The same
+      # secret signs and verifies every JWT (human / agent / selection
+      # / OAuth onboarding) — see issue #42 for the blast-radius
+      # analysis. Mounted via secret_key_ref so the value never appears
+      # in the service spec or in `gcloud run services describe`
+      # output. `version = "latest"` so a future rotation via
+      # `gcloud secrets versions add` flows on the next revision
+      # rollout — no Tofu apply needed for routine rotation.
+      #
+      # Merge order: this binding REQUIRES the jwt-secret container
+      # created by the Phase-A PR (infra/jwt-secret-secret) to already
+      # exist AND a real value to have been set via
+      # `gcloud secrets versions add` before this PR is merged. The
+      # unified _check_required_secrets_in_prod validator in
+      # app/core/config.py boot-fails the new revision otherwise.
+      # Same prereq + cutover shape as PR #41 — see this PR's
+      # description.
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name = "JWT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.jwt_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
     }
   }
 
