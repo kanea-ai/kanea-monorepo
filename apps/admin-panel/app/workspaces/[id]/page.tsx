@@ -2,11 +2,10 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import { AdminShell } from '../../components/AdminShell';
-import { EditWorkspaceUserDialog } from '../../components/EditWorkspaceUserDialog';
-import { type AdminWorkspaceUserRow } from '../../lib/api';
+import { EntityDetailPanel } from '../../components/EntityDetailPanel';
 import { useRequireAuth } from '../../lib/auth';
 import { useWorkspaceDetail, useWorkspaceUsers } from '../../lib/queries';
 
@@ -18,7 +17,10 @@ export default function WorkspaceDetailPage() {
   const workspaceId = params.id;
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [openUser, setOpenUser] = useState<AdminWorkspaceUserRow | null>(null);
+  // We only need the member id to open the panel; the panel fetches
+  // the full row via useWorkspaceMember (shared cache with the
+  // listing below).
+  const [openMemberId, setOpenMemberId] = useState<string | null>(null);
 
   const { data: detail, isLoading: detailLoading } = useWorkspaceDetail(workspaceId);
   const { data: usersPage, isLoading: usersLoading } = useWorkspaceUsers(workspaceId, {
@@ -27,32 +29,7 @@ export default function WorkspaceDetailPage() {
     limit: PAGE_SIZE,
   });
 
-  // The teams + departments dropdowns in the edit dialog are seeded
-  // from whatever team / department references appear in the users
-  // listing. This keeps the back-office self-sufficient — no extra
-  // /admin/teams or /admin/departments endpoint needed for the MVP.
-  // (When a workspace has thousands of users we'd swap this for a
-  // dedicated lookup; for now the listing covers it.)
   const allUsers = usersPage?.items ?? [];
-  const teamOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const u of allUsers) {
-      if (u.team_id && u.team_name) map.set(u.team_id, u.team_name);
-    }
-    return Array.from(map, ([id, name]) => ({ id, name }));
-  }, [allUsers]);
-  const departmentOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const u of allUsers) {
-      if (u.team_department_id && u.team_department_name) {
-        map.set(u.team_department_id, u.team_department_name);
-      }
-      if (u.headed_department_id && u.headed_department_name) {
-        map.set(u.headed_department_id, u.headed_department_name);
-      }
-    }
-    return Array.from(map, ([id, name]) => ({ id, name }));
-  }, [allUsers]);
 
   if (!ready) return null;
   const lastPage = Math.max(1, Math.ceil((usersPage?.total ?? 0) / PAGE_SIZE));
@@ -132,7 +109,7 @@ export default function WorkspaceDetailPage() {
           <header className="border-b border-slate-100 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-900">Workspace users</h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Hierarchy slot per member. Click Edit to intervene on the tenant&apos;s behalf.
+              Hierarchy slot per member. Click a row to intervene on the tenant&apos;s behalf.
             </p>
           </header>
           <div className="border-b border-slate-100 px-4 py-2">
@@ -156,18 +133,33 @@ export default function WorkspaceDetailPage() {
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
                 <tr>
                   <th className="px-4 py-2 text-left">User</th>
-                  <th className="w-32 px-4 py-2 text-left">Role</th>
+                  <th className="w-20 px-4 py-2 text-left">Type</th>
+                  <th className="w-28 px-4 py-2 text-left">Role</th>
                   <th className="w-40 px-4 py-2 text-left">Team / Head</th>
                   <th className="w-40 px-4 py-2 text-left">Department</th>
-                  <th className="w-20 px-4 py-2 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {allUsers.map((u) => (
-                  <tr key={u.member_id}>
+                  <tr
+                    key={u.member_id}
+                    onClick={() => setOpenMemberId(u.member_id)}
+                    className="cursor-pointer hover:bg-slate-50"
+                  >
                     <td className="truncate px-4 py-2">
                       <p className="truncate font-medium text-slate-900">{u.full_name}</p>
                       <p className="truncate text-[11px] text-slate-500">{u.email ?? '—'}</p>
+                    </td>
+                    <td className="px-4 py-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          u.type === 'AGENT'
+                            ? 'bg-indigo-100 text-indigo-800'
+                            : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        {u.type}
+                      </span>
                     </td>
                     <td className="px-4 py-2 text-[11px] text-slate-700">
                       {u.role.replace('WORKSPACE_', '')}
@@ -188,19 +180,6 @@ export default function WorkspaceDetailPage() {
                     <td className="px-4 py-2 text-[11px] text-slate-700">
                       {u.headed_department_name ?? u.team_department_name ?? (
                         <span className="italic text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      {u.user_id ? (
-                        <button
-                          type="button"
-                          onClick={() => setOpenUser(u)}
-                          className="rounded-md border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                        >
-                          Edit
-                        </button>
-                      ) : (
-                        <span className="text-[10px] italic text-slate-400">Agent</span>
                       )}
                     </td>
                   </tr>
@@ -236,13 +215,14 @@ export default function WorkspaceDetailPage() {
           ) : null}
         </section>
 
-        {openUser ? (
-          <EditWorkspaceUserDialog
-            workspaceId={workspaceId}
-            user={openUser}
-            teamOptions={teamOptions}
-            departmentOptions={departmentOptions}
-            onClose={() => setOpenUser(null)}
+        {openMemberId ? (
+          <EntityDetailPanel
+            entry={{
+              kind: 'workspace-member',
+              workspaceId,
+              memberId: openMemberId,
+            }}
+            onClose={() => setOpenMemberId(null)}
           />
         ) : null}
       </div>

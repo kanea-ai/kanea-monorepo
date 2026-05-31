@@ -4,6 +4,8 @@ import { type QueryKey, useMutation, useQuery, useQueryClient } from '@tanstack/
 
 import {
   adminApi,
+  type AdminAgentRow,
+  type AdminMemberStats,
   type AdminUserDetail,
   type AdminUserRow,
   type AdminWorkspaceDetail,
@@ -12,7 +14,7 @@ import {
   type BanUserPayload,
   type ForcePasswordResetResponse,
   type Page,
-  type PatchWorkspaceUserPayload,
+  type PatchWorkspaceMemberPayload,
   type PlatformMetrics,
   type SuspendWorkspacePayload,
 } from './api';
@@ -27,6 +29,13 @@ export const adminKeys = {
     ['admin', 'workspace', id, 'users', opts] as const satisfies QueryKey,
   workspaceUsersAll: (id: string) =>
     ['admin', 'workspace', id, 'users'] as const satisfies QueryKey,
+  memberStats: (workspaceId: string, memberId: string) =>
+    ['admin', 'workspace', workspaceId, 'member', memberId, 'stats'] as const satisfies QueryKey,
+  workspaceMember: (workspaceId: string, memberId: string) =>
+    ['admin', 'workspace', workspaceId, 'member', memberId] as const satisfies QueryKey,
+  agents: (opts: { name?: string; skip?: number; limit?: number }) =>
+    ['admin', 'agents', opts] as const satisfies QueryKey,
+  agentsAll: ['admin', 'agents'] as const satisfies QueryKey,
   users: (opts: { name?: string; skip?: number; limit?: number }) =>
     ['admin', 'users', opts] as const satisfies QueryKey,
   usersAll: ['admin', 'users'] as const satisfies QueryKey,
@@ -119,20 +128,49 @@ export function useWorkspaceUsers(
   });
 }
 
-export function usePatchWorkspaceUser(workspaceId: string) {
+// Member-id-keyed PATCH — the only path that can reach AGENT members
+// (agents have no user row, so the user-id sibling structurally excludes
+// them). Also accepts workspace_role + priority on top of the team/dept
+// fields, matching the superadmin's full intervention surface.
+export function usePatchWorkspaceMember(workspaceId: string) {
   const qc = useQueryClient();
   return useMutation<
     AdminWorkspaceUserRow,
     Error,
-    { userId: string; payload: PatchWorkspaceUserPayload }
+    { memberId: string; payload: PatchWorkspaceMemberPayload }
   >({
-    mutationFn: ({ userId, payload }) => adminApi.patchWorkspaceUser(workspaceId, userId, payload),
-    onSuccess: () => {
-      // The detail stats can shift (e.g. team counts) and the users
-      // family is definitely stale — bust both.
+    mutationFn: ({ memberId, payload }) =>
+      adminApi.patchWorkspaceMember(workspaceId, memberId, payload),
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: adminKeys.workspaceDetail(workspaceId) });
       qc.invalidateQueries({ queryKey: adminKeys.workspaceUsersAll(workspaceId) });
+      qc.invalidateQueries({
+        queryKey: adminKeys.memberStats(workspaceId, vars.memberId),
+      });
     },
+  });
+}
+
+export function useMemberStats(workspaceId: string | null, memberId: string | null) {
+  return useQuery<AdminMemberStats>({
+    queryKey: adminKeys.memberStats(workspaceId ?? '', memberId ?? ''),
+    queryFn: () => adminApi.getMemberStats(workspaceId as string, memberId as string),
+    enabled: !!workspaceId && !!memberId,
+  });
+}
+
+export function useWorkspaceMember(workspaceId: string | null, memberId: string | null) {
+  return useQuery<AdminWorkspaceUserRow>({
+    queryKey: adminKeys.workspaceMember(workspaceId ?? '', memberId ?? ''),
+    queryFn: () => adminApi.getWorkspaceMember(workspaceId as string, memberId as string),
+    enabled: !!workspaceId && !!memberId,
+  });
+}
+
+export function useAdminAgents(opts: { name?: string; skip?: number; limit?: number }) {
+  return useQuery<Page<AdminAgentRow>>({
+    queryKey: adminKeys.agents(opts),
+    queryFn: () => adminApi.listAgents(opts),
   });
 }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.enums import MemberRole, MemberType, TeamRole
 
@@ -94,3 +94,59 @@ class PatchWorkspaceUserRequest(BaseModel):
     team_id: UUID | None = None
     team_role: TeamRole | None = None
     department_id: UUID | None = None
+
+
+class PatchWorkspaceMemberRequest(BaseModel):
+    """Member-id-keyed superadmin PATCH. Strict superset of
+    ``PatchWorkspaceUserRequest``:
+
+    - works for both HUMAN and AGENT members (the user-id-keyed
+      endpoint structurally excludes agents because agents have no
+      backing user row),
+    - adds ``workspace_role`` and ``priority`` so the directory's
+      rank + role can be tuned from the back-office in the same
+      transaction.
+
+    Send any subset; omitting a field leaves that side untouched.
+    The Round-2 dual-scope rule (no member is simultaneously a
+    Department Head AND on a Team) is enforced verbatim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    team_id: UUID | None = None
+    team_role: TeamRole | None = None
+    department_id: UUID | None = None
+    workspace_role: MemberRole | None = None
+    priority: int | None = Field(default=None, ge=1, le=100)
+
+
+class AdminAgentRow(BaseModel):
+    """One row in the cross-tenant agent grid. Agents have no global
+    user identity (they're members of exactly one workspace), so the
+    listing carries workspace context inline. Powers the unified
+    /users page in the back-office, where humans + agents are merged
+    behind a Type column."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    member_id: UUID
+    workspace_id: UUID
+    workspace_name: str
+    workspace_slug: str
+    full_name: str
+    created_at: datetime
+
+
+class AdminMemberStats(BaseModel):
+    """Per-member task stats for the back-office detail panel.
+    Same shape regardless of member type — agents and humans both
+    have assignments / completions / rated tasks / token usage."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    assigned_count: int
+    completed_count: int
+    avg_resolution_seconds: float | None
+    accuracy_percent: float | None
+    last_activity_at: datetime | None
+    total_tokens_used: int

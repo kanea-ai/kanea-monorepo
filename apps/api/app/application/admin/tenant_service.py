@@ -7,8 +7,11 @@ from uuid import UUID
 from app.application.admin.ports import AdminWorkspaceRepository
 from app.application.admin.tenant_ports import AdminTenantRepository
 from app.application.admin.tenant_schemas import (
+    AdminAgentRow,
+    AdminMemberStats,
     AdminWorkspaceDetail,
     AdminWorkspaceUserRow,
+    PatchWorkspaceMemberRequest,
     PatchWorkspaceUserRequest,
     WorkspaceStatusBreakdown,
 )
@@ -16,7 +19,10 @@ from app.application.departments.schemas import UpdateDepartmentRequest
 from app.application.departments.service import DepartmentService
 from app.application.pagination import Page
 from app.application.tasks.schemas import Principal
-from app.application.tenants.schemas import SetMemberTeamRequest
+from app.application.tenants.schemas import (
+    SetMemberTeamRequest,
+    UpdateMemberProfileRequest,
+)
 from app.application.tenants.service import InviteService
 from app.domain.enums import MemberRole, MemberType
 from app.domain.exceptions import (
@@ -232,6 +238,174 @@ class AdminTenantService:
         if refreshed is None:  # pragma: no cover - reads after mutations
             raise InvalidMemberTypeError("user is not a member of this workspace")
         return _to_row(refreshed)
+
+    async def patch_workspace_member(
+        self,
+        workspace_id: UUID,
+        target_member_id: UUID,
+        request: PatchWorkspaceMemberRequest,
+        *,
+        superadmin_user_id: UUID,
+    ) -> AdminWorkspaceUserRow:
+        """Member-id-keyed superset of ``patch_workspace_user``. Works
+        for AGENT members too (the user-id-keyed sibling can't reach
+        them because agents have no backing user row).
+
+        Order: dual-scope refusal → workspace_role/priority → dept
+        promotion/demotion → team assignment. Profile changes go
+        first so the existing audit hook fires before team rewiring.
+        """
+        has_team = "team_id" in request.model_fields_set
+        has_team_role = "team_role" in request.model_fields_set
+        has_department = "department_id" in request.model_fields_set
+        has_workspace_role = "workspace_role" in request.model_fields_set
+        has_priority = "priority" in request.model_fields_set
+        if (
+            has_team
+            and request.team_id is not None
+            and has_department
+            and request.department_id is not None
+        ):
+            raise WorkspaceUserDualScopeError(
+                "a user cannot simultaneously be a Department Head and on a Team"
+            )
+
+        ws = await self.workspaces.get_by_id(workspace_id)
+        if ws is None:
+            raise WorkspaceNotFoundError("workspace not found")
+
+        member_row = await self.tenant.find_member_by_id(workspace_id, target_member_id)
+        if member_row is None:
+            raise InvalidMemberTypeError("member not found in this workspace")
+
+        actor_member_id = await self.tenant.find_first_owner_member_id(workspace_id)
+        principal = Principal(
+            member_id=actor_member_id or member_row.member_id,
+            workspace_id=workspace_id,
+            type=MemberType.HUMAN,
+            priority=1,
+            scope="human",
+            role=MemberRole.WORKSPACE_OWNER,
+        )
+
+        # 1. Profile: workspace_role + priority go through the existing
+        #    InviteService path so the last-OWNER guard + audit-log
+        #    side effects fire identically to a tenant-side edit.
+        if has_workspace_role or has_priority:
+            await self.invites.update_member_profile(
+                member_row.member_id,
+                UpdateMemberProfileRequest(
+                    role=request.workspace_role if has_workspace_role else None,
+                    priority=request.priority if has_priority else None,
+                ),
+                principal,
+            )
+            logger.info(
+                "admin.tenant.profile_patched",
+                extra={
+                    "workspace_id": str(workspace_id),
+                    "member_id": str(target_member_id),
+                    "workspace_role": (
+                        request.workspace_role.value if request.workspace_role else None
+                    ),
+                    "priority": request.priority,
+                    "by_superadmin": str(superadmin_user_id),
+                },
+            )
+
+        # 2. Department changes — same orchestration as the user-id sibling.
+        if has_department:
+            if request.department_id is not None:
+                await self.departments.update(
+                    request.department_id,
+                    UpdateDepartmentRequest(head_id=member_row.member_id),
+                    principal,
+                )
+                logger.info(
+                    "admin.tenant.head_promoted",
+                    extra={
+                        "workspace_id": str(workspace_id),
+                        "member_id": str(target_member_id),
+                        "department_id": str(request.department_id),
+                        "by_superadmin": str(superadmin_user_id),
+                    },
+                )
+            else:
+                if member_row.headed_department_id is not None:
+                    await self.departments.update(
+                        member_row.headed_department_id,
+                        UpdateDepartmentRequest.model_validate({"head_id": None}),
+                        principal,
+                    )
+                    logger.info(
+                        "admin.tenant.head_demoted",
+                        extra={
+                            "workspace_id": str(workspace_id),
+                            "member_id": str(target_member_id),
+                            "department_id": str(member_row.headed_department_id),
+                            "by_superadmin": str(superadmin_user_id),
+                        },
+                    )
+
+        # 3. Team changes — same auto-demote-from-head carve-out.
+        if has_team or has_team_role:
+            if request.team_id is not None and member_row.headed_department_id is not None:
+                await self.departments.update(
+                    member_row.headed_department_id,
+                    UpdateDepartmentRequest.model_validate({"head_id": None}),
+                    principal,
+                )
+            await self.invites.set_member_team(
+                member_row.member_id,
+                SetMemberTeamRequest(team_id=request.team_id, team_role=request.team_role),
+                principal,
+            )
+            logger.info(
+                "admin.tenant.team_assigned",
+                extra={
+                    "workspace_id": str(workspace_id),
+                    "member_id": str(target_member_id),
+                    "team_id": (str(request.team_id) if request.team_id else None),
+                    "team_role": (request.team_role.value if request.team_role else None),
+                    "by_superadmin": str(superadmin_user_id),
+                },
+            )
+
+        refreshed = await self.tenant.find_member_by_id(workspace_id, target_member_id)
+        if refreshed is None:  # pragma: no cover - reads after mutations
+            raise InvalidMemberTypeError("member not found in this workspace")
+        return _to_row(refreshed)
+
+    async def get_member_stats(self, workspace_id: UUID, member_id: UUID) -> AdminMemberStats:
+        """Per-member task stats — humans and agents both ship through
+        the same path. The workspace-scope check happens via
+        ``find_member_by_id`` so cross-tenant snooping 404s rather
+        than leaking a stats row."""
+        member_row = await self.tenant.find_member_by_id(workspace_id, member_id)
+        if member_row is None:
+            raise InvalidMemberTypeError("member not found in this workspace")
+        return await self.tenant.compute_member_stats(member_id)
+
+    async def get_member(self, workspace_id: UUID, member_id: UUID) -> AdminWorkspaceUserRow:
+        """Single workspace-member fetch by id. Lets the unified panel
+        load a workspace-scoped slot for any (workspace_id, member_id)
+        pair without paging the full listing — important when the user
+        clicked an agent row in the cross-tenant /users grid."""
+        member_row = await self.tenant.find_member_by_id(workspace_id, member_id)
+        if member_row is None:
+            raise InvalidMemberTypeError("member not found in this workspace")
+        return _to_row(member_row)
+
+    async def list_agents(
+        self,
+        *,
+        name: str | None = None,
+        skip: int = 0,
+        limit: int = 25,
+    ) -> Page[AdminAgentRow]:
+        """Cross-tenant agent listing for the unified /users page."""
+        rows, total = await self.tenant.list_agents(name=name, skip=skip, limit=limit)
+        return Page[AdminAgentRow](items=rows, total=total)
 
 
 def _to_row(r) -> AdminWorkspaceUserRow:
