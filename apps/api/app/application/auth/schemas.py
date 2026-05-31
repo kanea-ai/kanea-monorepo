@@ -29,10 +29,15 @@ class RegisterRequest(BaseModel):
 
 
 class AgentTokenRequest(BaseModel):
+    """Body for ``POST /auth/agent-token``. The single ``api_key`` field
+    carries the whole ``kna_<env>_<body>`` string; the server parses it,
+    validates the env-tag, HMACs the body, and looks up the row in
+    ``agent_api_keys``. No separate agent_id parameter — the secret
+    alone identifies the agent."""
+
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: UUID
-    secret: str = Field(min_length=1, max_length=256)
+    api_key: str = Field(min_length=1, max_length=256)
 
 
 class TokenResponse(BaseModel):

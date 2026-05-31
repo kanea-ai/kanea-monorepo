@@ -25,10 +25,14 @@ from app.application.auth.schemas import (
     SelectWorkspaceRequest,
 )
 from app.application.auth.service import AuthService
-from app.domain.entities import User, Workspace
+from app.domain.entities import AgentApiKey, User, Workspace
 from app.domain.enums import MemberType
 from app.domain.exceptions import AuthenticationError, EmailAlreadyExistsError
-from tests.auth.factories import make_agent, make_credentials, make_human
+from app.infrastructure.security.agent_api_keys import mint
+from tests.auth.factories import make_agent, make_human
+
+_ENV_TAG = "dev"
+_PEPPER = "test-pepper"
 
 
 def _user(email: str = "alice@kanea.ai") -> User:
@@ -94,6 +98,11 @@ def tokens() -> MagicMock:
 
 
 @pytest.fixture
+def agent_api_keys() -> AsyncMock:
+    return AsyncMock()
+
+
+@pytest.fixture
 def service(
     workspaces: AsyncMock,
     members: AsyncMock,
@@ -101,6 +110,7 @@ def service(
     hasher: MagicMock,
     tokens: MagicMock,
     users: AsyncMock,
+    agent_api_keys: AsyncMock,
 ) -> AuthService:
     return AuthService(
         workspaces=workspaces,
@@ -108,6 +118,9 @@ def service(
         credentials=credentials,
         hasher=hasher,
         tokens=tokens,
+        agent_api_keys=agent_api_keys,
+        agent_api_key_env_tag=_ENV_TAG,
+        agent_api_key_pepper=_PEPPER,
         users=users,
     )
 
@@ -258,40 +271,101 @@ async def test_select_workspace_rejects_non_member(
         )
 
 
-# ---------- agent-token (unchanged) ----------
+# ---------- agent-token (clean-break flow: { api_key } only) ----------
+
+
+def _seed_key(agent_member_id) -> tuple[str, AgentApiKey]:
+    """Helper: mint a real key bundle and return both the plaintext
+    that the exchange would send AND the AgentApiKey row the repo
+    would surface. Lets the tests exercise the real format / HMAC
+    without duplicating that logic in the fixtures."""
+    minted = mint(env_tag=_ENV_TAG, pepper=_PEPPER)
+    row = AgentApiKey(
+        id=uuid4(),
+        member_id=agent_member_id,
+        secret_hash=minted.secret_hash,
+        prefix=minted.prefix,
+        last4=minted.last4,
+        created_by_member_id=agent_member_id,
+        created_at=datetime.now(UTC),
+    )
+    return minted.plaintext, row
 
 
 async def test_agent_token_success(
     service: AuthService,
     members: AsyncMock,
-    credentials: AsyncMock,
-    hasher: MagicMock,
+    agent_api_keys: AsyncMock,
     tokens: MagicMock,
 ) -> None:
     agent = make_agent()
+    plaintext, key_row = _seed_key(agent.id)
+    agent_api_keys.find_active_by_secret_hash.return_value = key_row
     members.get_by_id.return_value = agent
-    credentials.get_for_member.return_value = make_credentials(
-        member_id=agent.id, agent_secret_hash="bcrypt$agent"
-    )
 
-    response = await service.issue_agent_token(
-        AgentTokenRequest(agent_id=agent.id, secret="s3cret")
-    )
+    response = await service.issue_agent_token(AgentTokenRequest(api_key=plaintext))
 
     assert response.access_token == "agent.jwt"
     tokens.issue_agent_token.assert_called_once_with(agent)
+    # Heartbeat side-effect — load-bearing for the ONLINE/IDLE/STALE pill.
+    members.heartbeat.assert_awaited_once_with(agent.id)
+    # Per-key last_used_at stamp lands in the same transaction.
+    agent_api_keys.mark_used.assert_awaited_once()
+    assert agent_api_keys.mark_used.await_args.args[0] == key_row.id
 
 
-async def test_agent_token_unknown_agent(service: AuthService, members: AsyncMock) -> None:
+async def test_agent_token_malformed_key(service: AuthService, agent_api_keys: AsyncMock) -> None:
+    """Unparseable key body short-circuits before touching the DB."""
+    with pytest.raises(AuthenticationError):
+        await service.issue_agent_token(
+            AgentTokenRequest(api_key="not-a-key")  # pragma: allowlist secret
+        )
+    agent_api_keys.find_active_by_secret_hash.assert_not_called()
+
+
+async def test_agent_token_cross_env_rejected(
+    service: AuthService, agent_api_keys: AsyncMock
+) -> None:
+    """A live-env key handed to a dev-env API never reaches the DB."""
+    with pytest.raises(AuthenticationError):
+        await service.issue_agent_token(
+            AgentTokenRequest(api_key="kna_live_anything")  # pragma: allowlist secret
+        )
+    agent_api_keys.find_active_by_secret_hash.assert_not_called()
+
+
+async def test_agent_token_revoked_or_unknown(
+    service: AuthService, agent_api_keys: AsyncMock
+) -> None:
+    """Repo returns None for both revoked + unknown — same response shape."""
+    agent_api_keys.find_active_by_secret_hash.return_value = None
+    plaintext = mint(env_tag=_ENV_TAG, pepper=_PEPPER).plaintext
+    with pytest.raises(AuthenticationError):
+        await service.issue_agent_token(AgentTokenRequest(api_key=plaintext))
+
+
+async def test_agent_token_member_missing(
+    service: AuthService, members: AsyncMock, agent_api_keys: AsyncMock
+) -> None:
+    """Key row exists but the member was hard-deleted — bail without
+    minting a JWT or stamping heartbeat (which would touch a NULL row)."""
+    plaintext, key_row = _seed_key(uuid4())
+    agent_api_keys.find_active_by_secret_hash.return_value = key_row
     members.get_by_id.return_value = None
     with pytest.raises(AuthenticationError):
-        await service.issue_agent_token(AgentTokenRequest(agent_id=uuid4(), secret="x"))
+        await service.issue_agent_token(AgentTokenRequest(api_key=plaintext))
 
 
-async def test_agent_token_rejects_human_member(service: AuthService, members: AsyncMock) -> None:
+async def test_agent_token_rejects_human_member(
+    service: AuthService, members: AsyncMock, agent_api_keys: AsyncMock
+) -> None:
+    """Defensive: a key whose member_id points at a HUMAN row (DB drift
+    / partial migration) is treated identically to invalid creds."""
+    plaintext, key_row = _seed_key(uuid4())
+    agent_api_keys.find_active_by_secret_hash.return_value = key_row
     members.get_by_id.return_value = make_human()
     with pytest.raises(AuthenticationError):
-        await service.issue_agent_token(AgentTokenRequest(agent_id=uuid4(), secret="x"))
+        await service.issue_agent_token(AgentTokenRequest(api_key=plaintext))
 
 
 # ---------- register ----------

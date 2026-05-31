@@ -15,7 +15,6 @@ def _to_entity(row: CredentialsModel) -> Credentials:
         id=row.id,
         member_id=row.member_id,
         password_hash=row.password_hash,
-        agent_secret_hash=row.agent_secret_hash,
         oauth_provider=row.oauth_provider,
         oauth_id=row.oauth_id,
         created_at=row.created_at,
@@ -45,7 +44,6 @@ class SqlAlchemyCredentialsRepository:
             id=credentials.id,
             member_id=credentials.member_id,
             password_hash=credentials.password_hash,
-            agent_secret_hash=credentials.agent_secret_hash,
             oauth_provider=credentials.oauth_provider,
             oauth_id=credentials.oauth_id,
         )

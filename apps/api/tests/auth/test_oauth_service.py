@@ -85,6 +85,11 @@ def tokens() -> MagicMock:
 
 
 @pytest.fixture
+def agent_api_keys() -> AsyncMock:
+    return AsyncMock()
+
+
+@pytest.fixture
 def service(
     workspaces: AsyncMock,
     members: AsyncMock,
@@ -92,6 +97,7 @@ def service(
     hasher: MagicMock,
     tokens: MagicMock,
     users: AsyncMock,
+    agent_api_keys: AsyncMock,
 ) -> AuthService:
     return AuthService(
         workspaces=workspaces,
@@ -99,6 +105,9 @@ def service(
         credentials=credentials,
         hasher=hasher,
         tokens=tokens,
+        agent_api_keys=agent_api_keys,
+        agent_api_key_env_tag="dev",  # pragma: allowlist secret
+        agent_api_key_pepper="test-pepper",  # pragma: allowlist secret
         users=users,
     )
 

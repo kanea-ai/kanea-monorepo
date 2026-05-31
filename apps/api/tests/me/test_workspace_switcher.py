@@ -210,6 +210,9 @@ def auth_service() -> (
         credentials=credentials,
         hasher=hasher,
         tokens=tokens,
+        agent_api_keys=AsyncMock(),
+        agent_api_key_env_tag="dev",  # pragma: allowlist secret
+        agent_api_key_pepper="test-pepper",  # pragma: allowlist secret
         users=users,
     )
     return svc, workspaces, members, credentials, hasher, tokens, users

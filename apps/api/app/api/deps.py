@@ -17,6 +17,7 @@ from app.application.admin.tenant_ports import AdminTenantRepository
 from app.application.admin.tenant_service import AdminTenantService
 from app.application.admin.users_ports import AdminUserRepository
 from app.application.admin.users_service import AdminUserService
+from app.application.agents.api_key_ports import AgentApiKeyRepository
 from app.application.agents.ports import AgentMemberRepository
 from app.application.agents.service import AgentService
 from app.application.audit.ports import AuditLogRepository
@@ -75,6 +76,7 @@ from app.infrastructure.repositories.admin_metrics import SqlAlchemyAdminMetrics
 from app.infrastructure.repositories.admin_tenant import SqlAlchemyAdminTenantRepository
 from app.infrastructure.repositories.admin_user import SqlAlchemyAdminUserRepository
 from app.infrastructure.repositories.admin_workspace import SqlAlchemyAdminWorkspaceRepository
+from app.infrastructure.repositories.agent_api_key import SqlAlchemyAgentApiKeyRepository
 from app.infrastructure.repositories.audit_log import SqlAlchemyAuditLogRepository
 from app.infrastructure.repositories.credentials import SqlAlchemyCredentialsRepository
 from app.infrastructure.repositories.department import SqlAlchemyDepartmentRepository
@@ -155,6 +157,10 @@ def get_workspace_service(
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
+def get_agent_api_key_repository(session: SessionDep) -> AgentApiKeyRepository:
+    return SqlAlchemyAgentApiKeyRepository(session)
+
+
 def get_auth_service(
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     members: Annotated[MemberRepository, Depends(get_member_repository)],
@@ -162,6 +168,7 @@ def get_auth_service(
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
     users: Annotated[UserRepository, Depends(get_user_repository)],
+    agent_api_keys: Annotated[AgentApiKeyRepository, Depends(get_agent_api_key_repository)],
 ) -> AuthService:
     return AuthService(
         workspaces=workspaces,
@@ -169,6 +176,9 @@ def get_auth_service(
         credentials=credentials,
         hasher=hasher,
         tokens=tokens,
+        agent_api_keys=agent_api_keys,
+        agent_api_key_env_tag=settings.agent_api_key_env_tag,
+        agent_api_key_pepper=settings.agent_api_key_pepper,
         users=users,
     )
 
@@ -365,14 +375,14 @@ def get_agent_member_repository(session: SessionDep) -> AgentMemberRepository:
 def get_agent_service(
     members_for_listing: Annotated[AgentMemberRepository, Depends(get_agent_member_repository)],
     auth_members: Annotated[MemberRepository, Depends(get_member_repository)],
-    credentials: Annotated[CredentialsRepository, Depends(get_credentials_repository)],
-    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+    api_keys: Annotated[AgentApiKeyRepository, Depends(get_agent_api_key_repository)],
 ) -> AgentService:
     return AgentService(
         members_for_listing=members_for_listing,
         auth_members=auth_members,
-        credentials=credentials,
-        hasher=hasher,
+        api_keys=api_keys,
+        env_tag=settings.agent_api_key_env_tag,
+        pepper=settings.agent_api_key_pepper,
     )
 
 

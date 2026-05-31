@@ -93,9 +93,7 @@ def test_agent_token_returns_token(client: TestClient, auth_service: AsyncMock) 
         access_token="agent-jwt", expires_in=900
     )
 
-    response = client.post(
-        "/api/v1/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "s3cret"}
-    )
+    response = client.post("/api/v1/auth/agent-token", json={"api_key": "kna_dev_AbCdEf0123456789"})
 
     assert response.status_code == 200
     body = response.json()
@@ -107,18 +105,24 @@ def test_agent_token_returns_token(client: TestClient, auth_service: AsyncMock) 
 def test_agent_token_invalid_returns_401(client: TestClient, auth_service: AsyncMock) -> None:
     auth_service.issue_agent_token.side_effect = AuthenticationError("invalid agent credentials")
 
-    response = client.post(
-        "/api/v1/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "x"}
-    )
+    response = client.post("/api/v1/auth/agent-token", json={"api_key": "kna_dev_obviously-wrong"})
 
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid agent credentials"
 
 
 def test_agent_token_validation_error_returns_422(client: TestClient) -> None:
+    """The legacy ``{agent_id, secret}`` shape is gone — sending it now
+    422s on the schema's ``extra='forbid'`` rule, which is exactly what
+    we want for any caller still on the old contract."""
     response = client.post(
-        "/api/v1/auth/agent-token", json={"agent_id": "not-a-uuid", "secret": "s"}
+        "/api/v1/auth/agent-token", json={"agent_id": str(uuid4()), "secret": "s"}
     )
+    assert response.status_code == 422
+
+
+def test_agent_token_empty_body_returns_422(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/agent-token", json={})
     assert response.status_code == 422
 
 

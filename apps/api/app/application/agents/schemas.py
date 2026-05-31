@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.entities import AgentStats, Member
+from app.domain.entities import AgentApiKey, AgentStats, Member
 
 
 class CreateAgentRequest(BaseModel):
@@ -70,9 +70,10 @@ class AgentResponse(BaseModel):
 
 
 class CreateAgentResponse(BaseModel):
-    """Returned exactly once on POST /agents with the raw API key in plaintext.
-    Subsequent GETs return AgentResponse only — the secret is bcrypted on
-    persist and we cannot recover it."""
+    """Returned exactly once on POST /agents with the raw API key in
+    plaintext. Subsequent GETs return AgentResponse only — only the
+    HMAC-SHA-256 digest of the key body is persisted, so the plaintext
+    cannot be recovered."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +82,60 @@ class CreateAgentResponse(BaseModel):
     name: str
     priority: int
     model: str | None
+    api_key: str
+
+
+class IssueAgentApiKeyRequest(BaseModel):
+    """Body for ``POST /agents/{id}/api-keys``. ``label`` is optional
+    human-readable context the operator can set so future inventory
+    reads ("ci-runner key minted by Bob") stay meaningful."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class AgentApiKeyResponse(BaseModel):
+    """Listing shape — metadata only. No plaintext, no hash. ``prefix``
+    + ``last4`` form the fingerprint the UI shows ("kna_live_…AbCd").
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    prefix: str
+    last4: str
+    label: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+    @classmethod
+    def from_entity(cls, key: AgentApiKey) -> AgentApiKeyResponse:
+        return cls(
+            id=key.id,
+            prefix=key.prefix,
+            last4=key.last4,
+            label=key.label,
+            created_at=key.created_at,
+            last_used_at=key.last_used_at,
+            revoked_at=key.revoked_at,
+        )
+
+
+class IssueAgentApiKeyResponse(BaseModel):
+    """Returned exactly once on ``POST /agents/{id}/api-keys`` with the
+    plaintext key. Same shape as ``AgentApiKeyResponse`` plus the
+    ``api_key`` field — the route returns this, the listing endpoint
+    returns ``AgentApiKeyResponse``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    prefix: str
+    last4: str
+    label: str | None
+    created_at: datetime
     api_key: str
 
 
