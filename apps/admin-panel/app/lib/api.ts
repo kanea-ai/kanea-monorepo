@@ -150,10 +150,37 @@ export interface AdminWorkspaceUserRow {
   headed_department_name: string | null;
 }
 
-export interface PatchWorkspaceUserPayload {
+// Member-id-keyed superset. Adds workspace_role + priority and is the
+// only payload shape that can target AGENT members (the user-id-keyed
+// PATCH is structurally limited to humans).
+export interface PatchWorkspaceMemberPayload {
   team_id?: string | null;
   team_role?: TeamRoleValue | null;
   department_id?: string | null;
+  workspace_role?: WorkspaceRole | null;
+  priority?: number | null;
+}
+
+export interface AdminMemberStats {
+  assigned_count: number;
+  completed_count: number;
+  avg_resolution_seconds: number | null;
+  accuracy_percent: number | null;
+  last_activity_at: string | null;
+  total_tokens_used: number;
+}
+
+// Cross-tenant agent listing row. Agents have no global user identity,
+// so each row carries workspace context inline — the unified /users
+// page renders Type=AGENT rows with a workspace name in the row, and
+// clicks straight into the detail panel in workspace-member mode.
+export interface AdminAgentRow {
+  member_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+  full_name: string;
+  created_at: string;
 }
 
 export interface LoginPayload {
@@ -319,9 +346,25 @@ export const adminApi = {
       `${V1}/admin/workspaces/${workspaceId}/users${qs ? `?${qs}` : ''}`,
     );
   },
-  patchWorkspaceUser: (workspaceId: string, userId: string, payload: PatchWorkspaceUserPayload) =>
-    request<AdminWorkspaceUserRow>(`${V1}/admin/workspaces/${workspaceId}/users/${userId}`, {
+  patchWorkspaceMember: (
+    workspaceId: string,
+    memberId: string,
+    payload: PatchWorkspaceMemberPayload,
+  ) =>
+    request<AdminWorkspaceUserRow>(`${V1}/admin/workspaces/${workspaceId}/members/${memberId}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  getMemberStats: (workspaceId: string, memberId: string) =>
+    request<AdminMemberStats>(`${V1}/admin/workspaces/${workspaceId}/members/${memberId}/stats`),
+  getWorkspaceMember: (workspaceId: string, memberId: string) =>
+    request<AdminWorkspaceUserRow>(`${V1}/admin/workspaces/${workspaceId}/members/${memberId}`),
+  listAgents: (opts: { name?: string; skip?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.name) params.set('name', opts.name);
+    if (opts.skip != null) params.set('skip', String(opts.skip));
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<Page<AdminAgentRow>>(`${V1}/admin/agents${qs ? `?${qs}` : ''}`);
+  },
 };

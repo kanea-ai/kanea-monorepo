@@ -23,8 +23,11 @@ from app.application.admin.schemas import (
     SuspendWorkspaceRequest,
 )
 from app.application.admin.tenant_schemas import (
+    AdminAgentRow,
+    AdminMemberStats,
     AdminWorkspaceDetail,
     AdminWorkspaceUserRow,
+    PatchWorkspaceMemberRequest,
     PatchWorkspaceUserRequest,
 )
 from app.application.admin.tenant_service import WorkspaceUserDualScopeError
@@ -223,6 +226,113 @@ async def patch_workspace_user(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidMemberTypeError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/members/{member_id}",
+    response_model=AdminWorkspaceUserRow,
+    status_code=status.HTTP_200_OK,
+)
+async def patch_workspace_member(
+    workspace_id: UUID,
+    member_id: UUID,
+    payload: PatchWorkspaceMemberRequest,
+    superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+) -> AdminWorkspaceUserRow:
+    """Member-id-keyed superset of ``patch_workspace_user``. The one
+    path through which AGENT members can be edited — the user-id-keyed
+    sibling structurally excludes them (agents have no user row).
+
+    Adds two editable fields on top of team / department:
+    ``workspace_role`` (OWNER / ADMIN / USER, gated by the existing
+    last-OWNER guard) and ``priority`` (1..100, drives the directory's
+    ranked sort)."""
+    try:
+        return await service.patch_workspace_member(
+            workspace_id,
+            member_id,
+            payload,
+            superadmin_user_id=superadmin.id,
+        )
+    except WorkspaceUserDualScopeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except WorkspaceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except MemberIsDepartmentHeadError as exc:  # pragma: no cover
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MemberAlreadyDepartmentHeadError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/members/{member_id}",
+    response_model=AdminWorkspaceUserRow,
+    status_code=status.HTTP_200_OK,
+)
+async def get_workspace_member(
+    workspace_id: UUID,
+    member_id: UUID,
+    _superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+) -> AdminWorkspaceUserRow:
+    """Single workspace-member fetch by id. The unified detail panel
+    calls this when it needs to load a workspace-scoped slot for a
+    row identified by (workspace_id, member_id) — e.g. when the
+    operator clicks an agent in the cross-tenant /users grid, or when
+    the panel re-resolves a slot after the workspace picker changes."""
+    try:
+        return await service.get_member(workspace_id, member_id)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/members/{member_id}/stats",
+    response_model=AdminMemberStats,
+    status_code=status.HTTP_200_OK,
+)
+async def get_member_stats(
+    workspace_id: UUID,
+    member_id: UUID,
+    _superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+) -> AdminMemberStats:
+    """Per-member task aggregations (assigned / completed counts, avg
+    resolution, accuracy, last activity, token usage). Same shape
+    regardless of member type. The workspace scope is enforced inside
+    the service so cross-tenant snooping 404s instead of leaking."""
+    try:
+        return await service.get_member_stats(workspace_id, member_id)
+    except InvalidMemberTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Cross-tenant agent listing — feeds the unified /users page where
+# humans + agents are merged behind a Type column.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/agents",
+    response_model=Page[AdminAgentRow],
+    status_code=status.HTTP_200_OK,
+)
+async def list_agents(
+    _superadmin: SuperadminDep,
+    service: AdminTenantServiceDep,
+    name: Annotated[str | None, Query(max_length=200)] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[AdminAgentRow]:
+    """Cross-tenant agent listing. Each row carries its host workspace
+    inline so the back-office /users page can render Name / Workspace
+    / Created columns and open the detail panel directly without a
+    follow-up lookup."""
+    return await service.list_agents(name=name, skip=skip, limit=limit)
 
 
 # ---------------------------------------------------------------------------

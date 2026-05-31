@@ -5,9 +5,10 @@ from __future__ import annotations
 # hierarchy slot (team + team_role + headed department). Both
 # materialise their result set in a single SQL pass so the back-
 # office pages don't N+1 over members.
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -17,14 +18,17 @@ from app.application.admin.tenant_ports import (
     WorkspaceStatusCounts,
     WorkspaceUserDetailRow,
 )
+from app.application.admin.tenant_schemas import AdminAgentRow, AdminMemberStats
 from app.domain.enums import MemberRole, MemberType, TaskStatus
 from app.infrastructure.db.models import (
     DepartmentModel,
     MemberModel,
     ProjectModel,
     TaskModel,
+    TaskRatingModel,
     TeamModel,
     UserModel,
+    WorkspaceModel,
 )
 
 
@@ -257,6 +261,167 @@ class SqlAlchemyAdminTenantRepository(AdminTenantRepository):
                 )
             )
         return items, len(items)
+
+    async def find_member_by_id(
+        self, workspace_id: UUID, member_id: UUID
+    ) -> WorkspaceUserDetailRow | None:
+        """Member-id-keyed lookup. Required for AGENT support — agents
+        have no backing user row so the user-id-keyed sibling can't
+        reach them."""
+        rows, _ = await self._list_by_member(workspace_id, member_id)
+        return rows[0] if rows else None
+
+    async def _list_by_member(
+        self, workspace_id: UUID, member_id: UUID
+    ) -> tuple[list[WorkspaceUserDetailRow], int]:
+        TeamDept = aliased(DepartmentModel)  # noqa: N806
+        HeadDept = aliased(DepartmentModel)  # noqa: N806
+        stmt = (
+            select(
+                MemberModel.id.label("member_id"),
+                MemberModel.user_id.label("user_id"),
+                MemberModel.email,
+                MemberModel.name,
+                MemberModel.type,
+                MemberModel.role,
+                MemberModel.is_suspended,
+                MemberModel.team_id,
+                TeamModel.name.label("team_name"),
+                MemberModel.team_role,
+                TeamModel.department_id.label("team_department_id"),
+                TeamDept.name.label("team_department_name"),
+                HeadDept.id.label("headed_department_id"),
+                HeadDept.name.label("headed_department_name"),
+                UserModel.full_name.label("user_full_name"),
+            )
+            .outerjoin(UserModel, UserModel.id == MemberModel.user_id)
+            .outerjoin(TeamModel, TeamModel.id == MemberModel.team_id)
+            .outerjoin(TeamDept, TeamDept.id == TeamModel.department_id)
+            .outerjoin(HeadDept, HeadDept.head_id == MemberModel.id)
+            .where(
+                MemberModel.workspace_id == workspace_id,
+                MemberModel.id == member_id,
+            )
+        )
+        result = await self._session.execute(stmt)
+        items = [
+            WorkspaceUserDetailRow(
+                member_id=row.member_id,
+                user_id=row.user_id,
+                email=row.email,
+                full_name=row.user_full_name or row.name,
+                type=row.type,
+                role=row.role,
+                is_suspended=row.is_suspended,
+                team_id=row.team_id,
+                team_name=row.team_name,
+                team_role=row.team_role,
+                team_department_id=row.team_department_id,
+                team_department_name=row.team_department_name,
+                headed_department_id=row.headed_department_id,
+                headed_department_name=row.headed_department_name,
+            )
+            for row in result.all()
+        ]
+        return items, len(items)
+
+    async def compute_member_stats(self, member_id: UUID) -> AdminMemberStats:
+        """Mirrors the per-agent stats SQL on
+        ``SqlAlchemyMemberRepository.compute_agent_stats`` — same
+        aggregation, just returned as the admin-side schema. Three
+        queries (task aggregate / rating aggregate / last activity max);
+        readability beats squeezing them into a single CTE at this scale."""
+        task_stmt = select(
+            func.count()
+            .filter(
+                and_(
+                    TaskModel.status != TaskStatus.DONE,
+                    TaskModel.status != TaskStatus.CANCELLED,
+                )
+            )
+            .label("assigned"),
+            func.count().filter(TaskModel.status == TaskStatus.DONE).label("completed"),
+            func.coalesce(func.sum(TaskModel.tokens_used), 0).label("tokens"),
+            func.avg(func.extract("epoch", TaskModel.completed_at - TaskModel.created_at))
+            .filter(TaskModel.status == TaskStatus.DONE)
+            .label("avg_seconds"),
+        ).where(TaskModel.assignee_id == member_id)
+        task_row = (await self._session.execute(task_stmt)).one()
+
+        rating_stmt = select(func.avg(TaskRatingModel.score)).where(
+            TaskRatingModel.rated_member_id == member_id
+        )
+        avg_score = (await self._session.execute(rating_stmt)).scalar_one_or_none()
+
+        last_stmt = select(func.max(TaskModel.updated_at)).where(
+            or_(
+                TaskModel.assignee_id == member_id,
+                TaskModel.created_by_id == member_id,
+            )
+        )
+        last_at = (await self._session.execute(last_stmt)).scalar_one_or_none()
+        if last_at is not None and last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=UTC)
+
+        return AdminMemberStats(
+            assigned_count=int(task_row.assigned or 0),
+            completed_count=int(task_row.completed or 0),
+            avg_resolution_seconds=(
+                float(task_row.avg_seconds) if task_row.avg_seconds is not None else None
+            ),
+            accuracy_percent=float(avg_score) if avg_score is not None else None,
+            last_activity_at=last_at if isinstance(last_at, datetime) else None,
+            total_tokens_used=int(task_row.tokens or 0),
+        )
+
+    async def list_agents(
+        self,
+        *,
+        name: str | None = None,
+        skip: int = 0,
+        limit: int = 25,
+    ) -> tuple[list[AdminAgentRow], int]:
+        """Cross-tenant agent listing. Each row is one AGENT member +
+        its host workspace's identity, so the back-office /users page
+        can click straight into the detail panel without an extra
+        round-trip to look up the workspace name."""
+        base = (
+            select(
+                MemberModel.id.label("member_id"),
+                MemberModel.name.label("full_name"),
+                MemberModel.created_at,
+                WorkspaceModel.id.label("workspace_id"),
+                WorkspaceModel.name.label("workspace_name"),
+                WorkspaceModel.slug.label("workspace_slug"),
+            )
+            .join(WorkspaceModel, WorkspaceModel.id == MemberModel.workspace_id)
+            .where(MemberModel.type == MemberType.AGENT)
+        )
+        if name is not None and name != "":
+            needle = f"%{name.lower()}%"
+            base = base.where(func.lower(MemberModel.name).like(needle))
+        base = base.order_by(MemberModel.created_at.desc())
+
+        items_stmt = base.offset(skip).limit(limit)
+        items_result = await self._session.execute(items_stmt)
+        items = [
+            AdminAgentRow(
+                member_id=row.member_id,
+                workspace_id=row.workspace_id,
+                workspace_name=row.workspace_name,
+                workspace_slug=row.workspace_slug,
+                full_name=row.full_name,
+                created_at=row.created_at,
+            )
+            for row in items_result.all()
+        ]
+
+        count_stmt = select(func.count(MemberModel.id)).where(MemberModel.type == MemberType.AGENT)
+        if name is not None and name != "":
+            needle = f"%{name.lower()}%"
+            count_stmt = count_stmt.where(func.lower(MemberModel.name).like(needle))
+        total = (await self._session.execute(count_stmt)).scalar_one()
+        return items, int(total)
 
     async def find_first_owner_member_id(self, workspace_id: UUID) -> UUID | None:
         stmt = (

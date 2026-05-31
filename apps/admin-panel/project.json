@@ -38,6 +38,15 @@
         "cwd": "apps/admin-panel",
         "command": "next lint"
       }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default", "^default"],
+      "options": {
+        "cwd": "apps/admin-panel",
+        "command": "vitest run"
+      }
     }
   }
 }

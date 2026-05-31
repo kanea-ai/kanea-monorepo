@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
+from app.application.admin.tenant_schemas import AdminAgentRow, AdminMemberStats
 from app.domain.enums import MemberRole, MemberType, TeamRole
 
 
@@ -70,6 +71,34 @@ class AdminTenantRepository(Protocol):
         given global user id. Powers the PATCH path which is keyed by
         ``user_id`` from the URL but routed through the existing
         ``set_member_team`` (member-id based)."""
+        ...
+
+    async def find_member_by_id(
+        self, workspace_id: UUID, member_id: UUID
+    ) -> WorkspaceUserDetailRow | None:
+        """Member-id-keyed lookup. Used by the back-office's member-id
+        PATCH route — which is the only path through which AGENT members
+        can be edited, since agents have no backing user row."""
+        ...
+
+    async def compute_member_stats(self, member_id: UUID) -> AdminMemberStats:
+        """Per-member task aggregations: assigned / completed counts,
+        avg resolution, accuracy, last activity, token usage. Same
+        shape for humans and agents."""
+        ...
+
+    async def list_agents(
+        self,
+        *,
+        name: str | None = None,
+        skip: int = 0,
+        limit: int = 25,
+    ) -> tuple[list[AdminAgentRow], int]:
+        """Cross-tenant agent listing. Powers the unified back-office
+        /users page where humans + agents are merged behind a Type
+        column. Each row carries workspace context inline so the click
+        target (the detail panel) can open in workspace-member mode
+        without a follow-up lookup."""
         ...
 
     async def find_first_owner_member_id(self, workspace_id: UUID) -> UUID | None:
