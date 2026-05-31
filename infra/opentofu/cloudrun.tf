@@ -135,6 +135,59 @@ resource "google_cloud_run_v2_service" "svc" {
           value = "true"
         }
       }
+
+      # ---------- Environment label (api-only) ----------
+      # ENVIRONMENT is the trigger for the api's prod-only guards (see
+      # ``app/core/config.py``'s model validators). Without this binding
+      # the Settings model falls back to its ``"development"`` default
+      # in prod, and any guard gated on ``environment != "development"``
+      # silently no-ops. Set explicitly per env.
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "ENVIRONMENT"
+          value = local.is_prod ? "production" : "staging"
+        }
+      }
+
+      # ---------- Agent API-key pepper + env tag (api-only) ----------
+      # The pepper itself is mounted via secret_key_ref so the value
+      # never appears in the service spec or in `gcloud run services
+      # describe` output. `version = "latest"` means a future rotation
+      # via `gcloud secrets versions add` flows on the next revision
+      # rollout — no Tofu apply needed for routine rotation.
+      #
+      # Merge order: this binding REQUIRES the secret container created
+      # by the Phase-A PR to already exist AND a real pepper value to
+      # have been set via ``gcloud secrets versions add`` before this
+      # PR's apply. If the secret only has the placeholder version when
+      # this revision rolls, the api's prod validator boot-fails the
+      # new revision (correct behaviour, but a fragile cutover —
+      # which is exactly why this is split out as Phase B).
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name = "AGENT_API_KEY_PEPPER"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.agent_api_key_pepper.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      # AGENT_API_KEY_ENV_TAG is embedded into the literal `kna_<env>_`
+      # prefix of every minted key, and the exchange endpoint refuses
+      # keys whose env-tag doesn't match. A staging key handed to the
+      # prod api therefore 401s with no DB round-trip + no HMAC compute.
+      dynamic "env" {
+        for_each = each.key == "api" ? toset(["api"]) : toset([])
+        content {
+          name  = "AGENT_API_KEY_ENV_TAG"
+          value = local.is_prod ? "live" : "dev"
+        }
+      }
     }
   }
 
