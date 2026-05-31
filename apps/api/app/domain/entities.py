@@ -29,7 +29,7 @@ class User:
     credential check.
 
     AGENT-typed members don't have an associated User row; they auth
-    via the per-workspace API-key handshake (Credentials.agent_secret_hash).
+    via the per-workspace API-key handshake against ``agent_api_keys``.
     """
 
     id: UUID
@@ -176,16 +176,40 @@ class Member:
 
 @dataclass(slots=True)
 class Credentials:
+    """Per-HUMAN-member auth secrets (password hash and/or an OAuth
+    identity). AGENT members never get a credentials row; their auth
+    secret lives in ``agent_api_keys`` instead (see migration 0029).
+    """
+
     id: UUID
     member_id: UUID
     password_hash: str | None
-    agent_secret_hash: str | None
     created_at: datetime
     updated_at: datetime
     # OAuth identity. (provider, oauth_id) is globally unique — see
     # uq_credentials_oauth_provider_oauth_id in migration 0003.
     oauth_provider: OAuthProvider | None = None
     oauth_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentApiKey:
+    """One agent API key. N keys per agent are allowed — see
+    ``agent_api_keys`` (migration 0029). The plaintext key is shown
+    exactly once at issuance; only the HMAC-SHA-256 hex digest of the
+    body is persisted in ``secret_hash``. ``prefix`` + ``last4`` are
+    unhashed by design (UI fingerprint / ops grep only)."""
+
+    id: UUID
+    member_id: UUID
+    secret_hash: str
+    prefix: str
+    last4: str
+    created_by_member_id: UUID
+    created_at: datetime
+    label: str | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
 @dataclass(slots=True)

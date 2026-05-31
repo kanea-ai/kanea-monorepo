@@ -312,12 +312,15 @@ class MemberModel(TimestampMixin, Base):
 
 
 class CredentialsModel(TimestampMixin, Base):
+    """Per-HUMAN-member auth secrets. AGENT members have NO credentials
+    row — their auth lives in ``agent_api_keys`` (since migration 0029).
+    """
+
     __tablename__ = "credentials"
     __table_args__ = (
         CheckConstraint(
             (
                 "password_hash IS NOT NULL "
-                "OR agent_secret_hash IS NOT NULL "
                 "OR (oauth_provider IS NOT NULL AND oauth_id IS NOT NULL)"
             ),
             name="at_least_one_secret",
@@ -335,11 +338,55 @@ class CredentialsModel(TimestampMixin, Base):
         unique=True,
     )
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    agent_secret_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[OAuthProvider | None] = mapped_column(oauth_provider_enum, nullable=True)
     oauth_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     member: Mapped[MemberModel] = relationship(back_populates="credentials")
+
+
+class AgentApiKeyModel(Base):
+    """One row per agent API key. Migration 0029 introduced this as the
+    sole auth path for AGENT members. The secret body is HMAC-SHA-256'd
+    with the server-side pepper (``settings.agent_api_key_pepper``); the
+    hex digest sits in ``secret_hash`` under a unique B-tree index,
+    which IS the entire lookup path at /auth/agent-token exchange time.
+
+    ``prefix`` and ``last4`` are unhashed by design — they exist for the
+    UI fingerprint + ops grep, never for auth. Per-key revocation is
+    soft: ``revoked_at`` gets stamped, the exchange filter is
+    ``WHERE secret_hash=$1 AND revoked_at IS NULL``.
+    """
+
+    __tablename__ = "agent_api_keys"
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+        default=uuid.uuid4,
+    )
+    member_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    last4: Mapped[str] = mapped_column(String(8), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_by_member_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("members.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TaskModel(TimestampMixin, Base):

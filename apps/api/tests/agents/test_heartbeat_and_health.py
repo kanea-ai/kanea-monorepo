@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import jwt
@@ -83,6 +83,14 @@ def test_health_stale_when_never_seen() -> None:
     assert derive_health_status(None) == "STALE"
 
 
+def test_health_handles_naive_datetime_from_db() -> None:
+    """SQLAlchemy with timezone=True should always yield aware values,
+    but belt-and-braces for migration-era rows: a naive datetime gets
+    coerced to UTC rather than blowing up the comparison."""
+    naive = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=2)
+    assert derive_health_status(naive) == "ONLINE"
+
+
 # ---------- AgentService.heartbeat ----------
 
 
@@ -97,27 +105,22 @@ def auth_members() -> AsyncMock:
 
 
 @pytest.fixture
-def credentials() -> AsyncMock:
+def api_keys() -> AsyncMock:
     return AsyncMock()
-
-
-@pytest.fixture
-def hasher() -> MagicMock:
-    return MagicMock()
 
 
 @pytest.fixture
 def service(
     members_for_listing: AsyncMock,
     auth_members: AsyncMock,
-    credentials: AsyncMock,
-    hasher: MagicMock,
+    api_keys: AsyncMock,
 ) -> AgentService:
     return AgentService(
         members_for_listing=members_for_listing,
         auth_members=auth_members,
-        credentials=credentials,
-        hasher=hasher,
+        api_keys=api_keys,
+        env_tag="dev",
+        pepper="test-pepper",
     )
 
 

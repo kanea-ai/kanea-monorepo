@@ -54,14 +54,14 @@ def make_credentials(
     *,
     member_id: UUID,
     password_hash: str | None = None,
-    agent_secret_hash: str | None = None,
 ) -> Credentials:
+    """HUMAN-only credentials row. AGENT members never have one — their
+    auth secret lives in ``agent_api_keys``."""
     now = datetime.now(UTC)
     return Credentials(
         id=uuid4(),
         member_id=member_id,
         password_hash=password_hash,
-        agent_secret_hash=agent_secret_hash,
         created_at=now,
         updated_at=now,
     )

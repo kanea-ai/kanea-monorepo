@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -9,16 +9,28 @@ from app.application.agents.schemas import CreateAgentRequest
 from app.application.agents.service import AgentService
 from app.application.tasks.schemas import Principal
 from app.domain.enums import MemberRole, MemberType
+from app.domain.exceptions import ForbiddenError
+
+# Constant inputs for the key-format / pepper tests below. The pepper is
+# arbitrary — the assertions only care that minted keys are valid format
+# strings, not what their hashes look like.
+_ENV_TAG = "dev"
+_PEPPER = "test-pepper"
 
 
-def _principal(*, workspace_id=None, member_id=None) -> Principal:
+def _principal(
+    *,
+    workspace_id=None,
+    member_id=None,
+    role: MemberRole = MemberRole.WORKSPACE_OWNER,
+) -> Principal:
     return Principal(
         member_id=member_id or uuid4(),
         workspace_id=workspace_id or uuid4(),
         type=MemberType.HUMAN,
         priority=1,
         scope="human",
-        role=MemberRole.WORKSPACE_OWNER,
+        role=role,
     )
 
 
@@ -33,48 +45,43 @@ def auth_members() -> AsyncMock:
 
 
 @pytest.fixture
-def credentials() -> AsyncMock:
+def api_keys() -> AsyncMock:
     return AsyncMock()
-
-
-@pytest.fixture
-def hasher() -> MagicMock:
-    h = MagicMock()
-    h.hash.side_effect = lambda raw: f"bcrypt${raw}"
-    return h
 
 
 @pytest.fixture
 def service(
     members_for_listing: AsyncMock,
     auth_members: AsyncMock,
-    credentials: AsyncMock,
-    hasher: MagicMock,
+    api_keys: AsyncMock,
 ) -> AgentService:
     return AgentService(
         members_for_listing=members_for_listing,
         auth_members=auth_members,
-        credentials=credentials,
-        hasher=hasher,
+        api_keys=api_keys,
+        env_tag=_ENV_TAG,
+        pepper=_PEPPER,
     )
 
 
 async def test_create_agent_returns_plaintext_key_once(
     service: AgentService,
     auth_members: AsyncMock,
-    credentials: AsyncMock,
-    hasher: MagicMock,
+    api_keys: AsyncMock,
 ) -> None:
+    """Plaintext appears in the response exactly once; only the HMAC
+    digest is persisted to ``agent_api_keys``. Verifies that no legacy
+    ``credentials`` write happens on the agent path."""
     auth_members.create.side_effect = lambda m: m
-    credentials.create.side_effect = lambda c: c
+    api_keys.create.side_effect = lambda k: k
     p = _principal()
 
     response = await service.create_agent(CreateAgentRequest(name="researcher-bot", priority=5), p)
 
-    # Plaintext key returned to caller (32 bytes urlsafe → 43 chars).
-    assert response.api_key
-    assert len(response.api_key) >= 40
-    # Member created as AGENT in the requester's workspace, no email.
+    assert response.api_key.startswith(f"kna_{_ENV_TAG}_")
+    # 32-byte CSPRNG → 43 base64url chars. Total length is prefix + body.
+    assert len(response.api_key) >= len(f"kna_{_ENV_TAG}_") + 40
+
     auth_members.create.assert_awaited_once()
     created_member = auth_members.create.await_args.args[0]
     assert created_member.workspace_id == p.workspace_id
@@ -82,12 +89,28 @@ async def test_create_agent_returns_plaintext_key_once(
     assert created_member.email is None
     assert created_member.priority == 5
     assert created_member.name == "researcher-bot"
-    # Credentials carry the bcrypted secret, not the plaintext.
-    credentials.create.assert_awaited_once()
-    creds = credentials.create.await_args.args[0]
-    assert creds.member_id == created_member.id
-    assert creds.password_hash is None
-    assert creds.agent_secret_hash == f"bcrypt${response.api_key}"
+
+    api_keys.create.assert_awaited_once()
+    persisted = api_keys.create.await_args.args[0]
+    assert persisted.member_id == created_member.id
+    # The plaintext is NEVER persisted — neither in secret_hash nor anywhere.
+    assert persisted.secret_hash != response.api_key
+    assert response.api_key not in persisted.secret_hash
+    assert persisted.prefix == f"kna_{_ENV_TAG}_"
+    assert len(persisted.last4) == 4
+
+
+async def test_create_agent_rejects_non_admin_principal(
+    service: AgentService, auth_members: AsyncMock, api_keys: AsyncMock
+) -> None:
+    """Belt-and-braces: the route layer enforces WorkspaceAdminDep, but
+    the service re-asserts so agents can't self-provision via a leaked
+    USER-role JWT even if the route wiring drifts."""
+    p = _principal(role=MemberRole.WORKSPACE_USER)
+    with pytest.raises(ForbiddenError):
+        await service.create_agent(CreateAgentRequest(name="bot"), p)
+    auth_members.create.assert_not_called()
+    api_keys.create.assert_not_called()
 
 
 async def test_list_agents_filters_to_principal_workspace(
@@ -100,12 +123,12 @@ async def test_list_agents_filters_to_principal_workspace(
 
 
 async def test_two_creates_yield_distinct_keys(
-    service: AgentService, auth_members: AsyncMock, credentials: AsyncMock
+    service: AgentService, auth_members: AsyncMock, api_keys: AsyncMock
 ) -> None:
     """Sanity: each call mints a fresh secret. If the same key were
-    returned twice, the second agent would reuse the first's credentials."""
+    returned twice, the second agent would inherit the first's auth."""
     auth_members.create.side_effect = lambda m: m
-    credentials.create.side_effect = lambda c: c
+    api_keys.create.side_effect = lambda k: k
     p = _principal()
 
     a = await service.create_agent(CreateAgentRequest(name="bot-1"), p)

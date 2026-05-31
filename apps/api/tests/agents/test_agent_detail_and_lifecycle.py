@@ -7,7 +7,7 @@ probing reveals nothing."""
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -63,29 +63,22 @@ def auth_members() -> AsyncMock:
 
 
 @pytest.fixture
-def credentials() -> AsyncMock:
+def api_keys() -> AsyncMock:
     return AsyncMock()
-
-
-@pytest.fixture
-def hasher() -> MagicMock:
-    h = MagicMock()
-    h.hash.side_effect = lambda raw: f"bcrypt${raw}"
-    return h
 
 
 @pytest.fixture
 def service(
     members_for_listing: AsyncMock,
     auth_members: AsyncMock,
-    credentials: AsyncMock,
-    hasher: MagicMock,
+    api_keys: AsyncMock,
 ) -> AgentService:
     return AgentService(
         members_for_listing=members_for_listing,
         auth_members=auth_members,
-        credentials=credentials,
-        hasher=hasher,
+        api_keys=api_keys,
+        env_tag="dev",
+        pepper="test-pepper",
     )
 
 
@@ -93,10 +86,10 @@ def service(
 
 
 async def test_create_agent_persists_model_attribute(
-    service: AgentService, auth_members: AsyncMock, credentials: AsyncMock
+    service: AgentService, auth_members: AsyncMock, api_keys: AsyncMock
 ) -> None:
     auth_members.create.side_effect = lambda m: m
-    credentials.create.side_effect = lambda c: c
+    api_keys.create.side_effect = lambda k: k
     p = _principal()
 
     response = await service.create_agent(

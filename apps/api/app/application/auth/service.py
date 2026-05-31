@@ -4,11 +4,12 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import jwt
 from sqlalchemy.exc import IntegrityError
 
+from app.application.agents.api_key_ports import AgentApiKeyRepository
 from app.application.auth.oauth import OAuthIdentity
 from app.application.auth.ports import (
     CredentialsRepository,
@@ -36,6 +37,7 @@ from app.domain.exceptions import (
     EmailAlreadyExistsError,
     WorkspaceNameConflictError,
 )
+from app.infrastructure.security.agent_api_keys import parse_and_hash
 
 # Workspace owners are the highest rank in the hierarchy. The delegate
 # rule (lower number = higher priority) keys off this.
@@ -49,6 +51,9 @@ class AuthService:
     credentials: CredentialsRepository
     hasher: PasswordHasher
     tokens: TokenService
+    agent_api_keys: AgentApiKeyRepository
+    agent_api_key_env_tag: str
+    agent_api_key_pepper: str
     # Phase 1 multi-tenancy: human auth lives on the global User row.
     # Optional so legacy DI / unit-test constructors stay compatible —
     # the login + register paths raise if it's missing.
@@ -205,18 +210,39 @@ class AuthService:
         return TokenResponse(access_token=token, expires_in=ttl)
 
     async def issue_agent_token(self, request: AgentTokenRequest) -> TokenResponse:
-        member = await self._load_agent(request.agent_id)
+        """Exchange a ``kna_<env>_<body>`` API key for a scope='agent' JWT.
 
-        creds = await self.credentials.get_for_member(member.id)
-        if creds is None or creds.agent_secret_hash is None:
+        Path: parse the prefix + env-tag → HMAC the body → SELECT the
+        active row in ``agent_api_keys`` → load the agent → mint the
+        JWT → stamp ``last_used_at`` on the key AND ``last_seen_at``
+        on the member in the same transaction.
+
+        Every step returns the same generic ``invalid agent credentials``
+        error on failure so an attacker can't tell whether the key was
+        malformed, wrong env, unknown, revoked, or pointed at a deleted
+        agent.
+        """
+        secret_hash = parse_and_hash(
+            request.api_key,
+            expected_env_tag=self.agent_api_key_env_tag,
+            pepper=self.agent_api_key_pepper,
+        )
+        if secret_hash is None:
             raise AuthenticationError("invalid agent credentials")
 
-        if not self.hasher.verify(request.secret, creds.agent_secret_hash):
+        key_row = await self.agent_api_keys.find_active_by_secret_hash(secret_hash)
+        if key_row is None:
             raise AuthenticationError("invalid agent credentials")
 
-        # Free presence signal: every successful key-exchange is a
-        # heartbeat. Agents that never call the explicit /me/heartbeat
-        # still surface as ONLINE for their JWT TTL window.
+        member = await self.members.get_by_id(key_row.member_id)
+        if member is None or member.type is not MemberType.AGENT:
+            raise AuthenticationError("invalid agent credentials")
+
+        now = datetime.utcnow()
+        # Last-used stamp on the key + free heartbeat on the member.
+        # Persisted in the same transaction as the JWT issuance so the
+        # two timestamps can't drift.
+        await self.agent_api_keys.mark_used(key_row.id, used_at=now)
         await self.members.heartbeat(member.id)
 
         token, ttl = self.tokens.issue_agent_token(member)
@@ -382,12 +408,6 @@ class AuthService:
             selection_token=selection_token,
             workspaces=options,
         )
-
-    async def _load_agent(self, agent_id: UUID) -> Member:
-        member = await self.members.get_by_id(agent_id)
-        if member is None or member.type is not MemberType.AGENT:
-            raise AuthenticationError("invalid agent credentials")
-        return member
 
 
 # Slugs are unique per workspace and we always append a 6-hex-char suffix

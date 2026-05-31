@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Sentinel value committed to the repo so local dev / unit tests can
+# boot without a real pepper. The validator below refuses to start
+# when this value is still present AND the environment is anything
+# other than "development". Treat this constant as a tripwire — never
+# rename it without also fixing the env files that ship it.
+_DEV_PEPPER_PLACEHOLDER = "change-me-in-production-agent-pepper"  # pragma: allowlist secret
 
 
 class Settings(BaseSettings):
@@ -29,6 +37,46 @@ class Settings(BaseSettings):
     jwt_human_ttl_seconds: int = 3600
     jwt_agent_ttl_seconds: int = 900
     jwt_issuer: str = "kanea-api"
+
+    # Server-side pepper for the agent API-key lookup hash. The body of
+    # a `kna_<env>_<body>` key is HMAC-SHA-256'd with this pepper to
+    # derive the `agent_api_keys.secret_hash` column. The HMAC (vs bare
+    # SHA-256) means a DB-only compromise cannot verify guessed or
+    # leaked key bodies without also stealing this app secret.
+    #
+    # Operational consequence (LOAD-BEARING — surface this in ops docs):
+    #   If this pepper is ever rotated or lost, every existing agent
+    #   API key stops verifying — there is NO re-hash path because the
+    #   plaintext is never persisted. Rotation = mint new keys under
+    #   the new pepper, hand them to operators, revoke the old keys.
+    #
+    # In prod this MUST come from Secret Manager. The committed default
+    # is a sentinel that the validator below refuses in any non-dev
+    # environment — see ``_check_pepper_set_in_prod``.
+    agent_api_key_pepper: str = _DEV_PEPPER_PLACEHOLDER
+
+    # `live` (prod) / `dev` (everything else). Embedded in agent API
+    # keys as `kna_<env>_<body>`; the exchange endpoint refuses to
+    # accept a key whose env-tag doesn't match this setting, so a
+    # dev-env key leaked into prod (or vice-versa) cannot mint a JWT.
+    agent_api_key_env_tag: str = "dev"
+
+    @model_validator(mode="after")
+    def _check_pepper_set_in_prod(self) -> Settings:
+        """Refuse to boot in any non-development environment when the
+        agent API-key pepper still carries the committed sentinel.
+        Equivalent to a startup tripwire — better to crash on import
+        than to silently accept the placeholder secret in prod."""
+        if (
+            self.environment != "development"
+            and self.agent_api_key_pepper == _DEV_PEPPER_PLACEHOLDER
+        ):
+            raise ValueError(
+                "agent_api_key_pepper is set to the committed placeholder in a "
+                f"non-development environment ({self.environment!r}). Provide a "
+                "real pepper via Secret Manager / env var before booting."
+            )
+        return self
 
     # CORS allow-list. Empty in prod (LB serves api and web-app on the same
     # origin). Populated locally so the Next.js dev servers (3000/3001/3002)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from app.api.deps import (
+    get_agent_api_key_repository,
     get_audit_log_repository,
     get_audit_log_service,
     get_auth_service,
@@ -126,5 +127,6 @@ def test_get_auth_service_wires_dependencies() -> None:
         hasher=get_password_hasher(),
         tokens=get_token_service(config),
         users=get_user_repository(session),
+        agent_api_keys=get_agent_api_key_repository(session),
     )
     assert isinstance(service, AuthService)

@@ -73,6 +73,12 @@ class AgentHasCreatedTasksError(DomainError):
     that other members still own. Returned as 409 with guidance."""
 
 
+class AgentApiKeyNotFoundError(DomainError):
+    """Raised when ``DELETE /agents/{id}/api-keys/{key_id}`` targets a
+    key that doesn't belong to the agent, doesn't exist, or has already
+    been revoked-and-deleted. Returned as 404."""
+
+
 class TaskNotInDoneStateError(DomainError):
     """Raised when rating a task that hasn't transitioned to DONE."""
 

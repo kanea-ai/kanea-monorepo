@@ -52,7 +52,7 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra --strict-markers --cov --cov-report=term-missing --cov-fail-under=90 --cov-config=.coveragerc"
+addopts = "-ra --strict-markers --cov --cov-report=term-missing --cov-fail-under=92 --cov-config=.coveragerc"
 
 [tool.mypy]
 python_version = "3.12"
