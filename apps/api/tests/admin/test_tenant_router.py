@@ -232,6 +232,41 @@ def test_workspace_users_returns_hierarchy_slot(
     assert body["items"][0]["team_department_name"] == "Engineering"
 
 
+def test_workspace_users_serialises_agent_with_null_user_id(
+    client: TestClient, tenant_service: AsyncMock, auth_headers: dict[str, str]
+) -> None:
+    # Agents have no backing user row (CHECK on members: AGENT ⇒ user_id NULL).
+    # If the response schema treats user_id as non-nullable, the listing 500s
+    # on any workspace that contains an agent — which was the actual prod bug.
+    agent_row = AdminWorkspaceUserRow(
+        member_id=uuid4(),
+        user_id=None,
+        email=None,
+        full_name="Aria (Agent)",
+        type=MemberType.AGENT,
+        role=MemberRole.WORKSPACE_USER,
+        is_suspended=False,
+        team_id=None,
+        team_name=None,
+        team_role=None,
+        team_department_id=None,
+        team_department_name=None,
+        headed_department_id=None,
+        headed_department_name=None,
+    )
+    tenant_service.list_workspace_users.return_value = Page[AdminWorkspaceUserRow](
+        items=[agent_row], total=1
+    )
+    response = client.get(
+        f"/api/v1/admin/workspaces/{uuid4()}/users",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["user_id"] is None
+    assert body["items"][0]["type"] == "AGENT"
+
+
 # ---------- patch ----------
 
 
