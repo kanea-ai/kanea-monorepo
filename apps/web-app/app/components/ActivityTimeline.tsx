@@ -79,10 +79,16 @@ function describe(a: TaskActivity): string {
       return p.reason ? `blocked the task — ${p.reason}` : 'blocked the task';
     case 'UNBLOCKED':
       return 'unblocked the task';
-    case 'DELEGATED':
-      return `delegated to ${shorten(p.to as string | null)}`;
+    case 'DELEGATED': {
+      // Prefer the server-resolved names (same denormalisation as
+      // Task.assignee_name); fall back to a truncated uuid for legacy
+      // rows where the lookup missed.
+      const to = a.to_member_name ?? shorten(p.to as string | null);
+      const from = a.from_member_name ?? shorten(p.from as string | null);
+      return p.from ? `delegated from ${from} to ${to}` : `delegated to ${to}`;
+    }
     case 'ASSIGNED':
-      return `assigned to ${shorten(p.to as string | null)}`;
+      return `assigned to ${a.to_member_name ?? shorten(p.to as string | null)}`;
     case 'PROJECT_CHANGED':
       return `moved project ${shorten(p.from as string | null)} → ${shorten(p.to as string | null)}`;
     case 'TEAM_CHANGED':

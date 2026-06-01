@@ -9,10 +9,11 @@ import { CrossTeamRequestsPanel } from '../../../components/CrossTeamRequestsPan
 import { MentionTextarea } from '../../../components/MentionTextarea';
 import { RenderWithMentions } from '../../../components/RenderWithMentions';
 import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
-import { ApiError, type Task, type TaskComment } from '../../../lib/api';
+import { ApiError, type Member, type Task, type TaskComment } from '../../../lib/api';
 import { useCurrentPrincipal } from '../../../lib/auth';
 import { userHref } from '../../../lib/links';
 import {
+  useDelegateTask,
   useMembers,
   usePostComment,
   useProjects,
@@ -234,7 +235,7 @@ function SidePanel({ task }: { task: Task }) {
             </span>
           </Row>
           <Row label="Assignee">
-            <AssigneeCell assigneeId={task.assignee_id} assigneeName={task.assignee_name} />
+            <DelegateControl task={task} members={members} />
           </Row>
           <Row label="Project">
             <select
@@ -331,8 +332,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-// Renders the task's assignee from the denormalised assignee_name
-// field on the Task response. Three paths:
+// Read-only label for the current assignee. Three paths:
 //   - assignee_id is null → "Unassigned" plain italic (no link).
 //   - assignee_id is set but assignee_name is null → "Former member"
 //     italic link (defensive fallback for legacy data; under normal
@@ -340,7 +340,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 //     the FK when a member is deleted, so this case shouldn't occur).
 //   - both set → indigo link with the name.
 // The link target is the standard entity-navigation mesh helper.
-function AssigneeCell({
+function AssigneeLabel({
   assigneeId,
   assigneeName,
 }: {
@@ -367,6 +367,106 @@ function AssigneeCell({
     >
       {assigneeName}
     </Link>
+  );
+}
+
+// Assignee + delegate affordance. Renders the current assignee label
+// followed by a "Delegate" toggle that opens an inline picker.
+//
+// The picker filters to members below the caller's rank — the
+// strict-greater priority rule the server enforces. The caller never
+// appears in their own picker (same priority as themselves). Higher-
+// ranked members never appear. The empty-picker case is intentional
+// and surfaced to the user: it is the *visible* form of the constraint
+// that work can only move down the hierarchy. Filing #49 (peer-to-peer
+// delegation product question) was the right time to make that
+// limitation legible rather than masking it.
+//
+// Server is the authority — the UI filter is convenience. A caller
+// who bypasses the UI and posts a same-rank target still gets 403.
+function DelegateControl({ task, members }: { task: Task; members: Member[] }) {
+  const principal = useCurrentPrincipal();
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const delegate = useDelegateTask(task.id);
+
+  const myPriority = principal?.priority ?? null;
+  // Strict-greater rule: target.priority > requester.priority. Excludes
+  // self by construction (same priority) but we also exclude by id
+  // defensively in case of priority ties.
+  const eligible: Member[] =
+    myPriority == null
+      ? []
+      : members
+          .filter((m) => m.priority > myPriority && m.id !== principal?.member_id)
+          .slice()
+          .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+
+  const onPick = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const memberId = e.target.value;
+    if (!memberId) return;
+    setError(null);
+    setPending(memberId);
+    try {
+      await delegate.mutateAsync({ memberId });
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : 'Delegation failed.');
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2">
+        <AssigneeLabel assigneeId={task.assignee_id} assigneeName={task.assignee_name} />
+        <button
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+            setError(null);
+          }}
+          className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50"
+          aria-expanded={open}
+        >
+          {open ? 'Cancel' : 'Delegate'}
+        </button>
+      </div>
+      {open ? (
+        eligible.length === 0 ? (
+          <p className="max-w-[14rem] text-right text-[10px] italic leading-snug text-slate-500">
+            Delegation requires a member below your rank. No eligible members in this workspace.
+          </p>
+        ) : (
+          <select
+            defaultValue=""
+            disabled={delegate.isPending}
+            onChange={onPick}
+            className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px]"
+            aria-label="Delegate to"
+          >
+            <option value="" disabled>
+              Delegate to…
+            </option>
+            {eligible.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} (P{m.priority})
+              </option>
+            ))}
+          </select>
+        )
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-[10px] text-red-600">
+          {error}
+        </p>
+      ) : null}
+      {pending && delegate.isPending ? (
+        <p className="text-[10px] italic text-slate-500">Delegating…</p>
+      ) : null}
+    </div>
   );
 }
 

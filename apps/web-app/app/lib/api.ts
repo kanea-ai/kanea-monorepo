@@ -162,6 +162,13 @@ export interface TaskActivity {
   // treats it as Record<string, unknown>; consumers that need stricter
   // typing should narrow on event_type.
   payload: Record<string, unknown>;
+  // Denormalised display names for DELEGATED rows: payload.from / .to
+  // hold member uuids and these are the resolved names the server
+  // looked up at read time. Null for non-DELEGATED rows or for legacy
+  // rows whose member id no longer resolves — the UI then falls back
+  // to a truncated-uuid label. Same shape as Task.assignee_name.
+  from_member_name: string | null;
+  to_member_name: string | null;
   created_at: string;
 }
 
@@ -761,6 +768,17 @@ export const tasksApi = {
     request<Task>(`${V1}/tasks/${id}/priority`, {
       method: 'PATCH',
       body: JSON.stringify({ priority }),
+    }),
+  /** Delegate a task to a workspace member. Server enforces the
+   *  strict-greater priority rule (caller can only assign to a target
+   *  with priority numerically greater than their own). Drives both
+   *  first-time assignment and subsequent reassignment — there is no
+   *  separate /assign endpoint. Returns the updated Task with
+   *  ``assignee_id`` + ``assignee_name`` already populated. */
+  delegate: (id: string, memberId: string) =>
+    request<Task>(`${V1}/tasks/${id}/delegate`, {
+      method: 'POST',
+      body: JSON.stringify({ member_id: memberId }),
     }),
   updateLinks: (id: string, payload: UpdateTaskLinksPayload) =>
     request<Task>(`${V1}/tasks/${id}/links`, {

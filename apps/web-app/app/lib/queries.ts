@@ -821,6 +821,27 @@ export function useDeleteTeam() {
   });
 }
 
+// ---------- Task delegation ----------
+
+/** Delegate a task to another workspace member. Server enforces the
+ *  strict-greater priority rule (caller can only assign to a target
+ *  with priority numerically greater than their own). The UI's member
+ *  picker is expected to filter to eligible targets; this hook is
+ *  agnostic to which member id is passed and lets the server be the
+ *  authority. Used by both the "Delegate" affordance on /tasks/{id}
+ *  (first-time assignment and subsequent reassignment go through the
+ *  same endpoint) and any future quick-action surface. */
+export function useDelegateTask(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, { memberId: string }>({
+    mutationFn: ({ memberId }) => tasksApi.delegate(id, memberId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(id) });
+    },
+  });
+}
+
 // ---------- Task project / team move ----------
 
 export function useUpdateTaskLinks(id: string) {
