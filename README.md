@@ -670,7 +670,7 @@ The exchange endpoint accepts only `{ api_key }`. There is no legacy `{ agent_id
 | GET    | `/agents/{id}/api-keys`          | admin             | Inventory listing. Metadata only — no plaintext, no hash.                           |
 | DELETE | `/agents/{id}/api-keys/{key_id}` | admin             | Soft-revoke. Idempotent.                                                            |
 
-[^agents-rbac]: The current code uses `PrincipalDep` here, not `WorkspaceAdminDep`, so any signed-in workspace member can edit or delete an agent. This row reflects the code; the design intent was almost certainly admin-only (matching `POST /agents` and the per-agent key endpoints). Tracked for tightening; see the linked issue in the security tracker.
+[^agents-rbac]: The current code uses `PrincipalDep` here, not `WorkspaceAdminDep`, so any signed-in workspace member can edit or delete an agent. This row reflects the code; the design intent was almost certainly admin-only (matching `POST /agents` and the per-agent key endpoints). Tracked at [#46](https://github.com/kanea-ai/kanea-monorepo/issues/46) for tightening to `WorkspaceAdminDep`. When that lands, this footnote goes away and both rows revert to `admin`.
 
 ### Audit
 
