@@ -92,12 +92,29 @@ async def test_member_role_cannot_suspend(service: InviteService, members_repo: 
 
 
 async def test_admin_can_suspend(service: InviteService, members_repo: AsyncMock) -> None:
+    """Admin (priority=2) suspends a regular member (priority=3). The
+    helper defaults previously had the admin at priority=5 acting on
+    a target at priority=3 — accidentally encoding a rank violation
+    that became visible once the #51 rank gate landed. Setting the
+    admin to a sensible above-target priority preserves the test's
+    intent (admin can suspend a USER below them) without touching
+    the suspension semantics."""
     p = _principal(role=MemberRole.WORKSPACE_ADMIN)
-    target = _member(p.workspace_id)
+    p_with_rank = Principal(
+        member_id=p.member_id,
+        workspace_id=p.workspace_id,
+        type=p.type,
+        priority=2,
+        scope=p.scope,
+        role=p.role,
+    )
+    target = _member(p_with_rank.workspace_id)
     members_repo.get_by_id.return_value = target
     members_repo.set_suspended.return_value = target
 
-    await service.set_member_suspension(target.id, SetMemberSuspensionRequest(is_suspended=True), p)
+    await service.set_member_suspension(
+        target.id, SetMemberSuspensionRequest(is_suspended=True), p_with_rank
+    )
     members_repo.set_suspended.assert_awaited_once_with(target.id, is_suspended=True)
 
 

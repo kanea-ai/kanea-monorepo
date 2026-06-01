@@ -1567,6 +1567,13 @@ class TaskService:
     def _enforce_hierarchy(requester: Principal, target: Member) -> None:
         # Lower numerical priority = higher rank. A requester may only delegate
         # to members with a strictly greater numerical priority (lower rank).
+        #
+        # DELIBERATELY DISTINCT from
+        # ``tenants.service.InviteService._enforce_admin_rank``, which uses
+        # INCLUSIVE >= for admin-power. Two rules, two helpers — do NOT
+        # unify them. Delegation hands work strictly down-rank; admin
+        # authority extends across your own rank. The syntactic similarity
+        # is a trap. See #51 for the design rationale on the asymmetry.
         if requester.priority >= target.priority:
             raise DelegationForbiddenError(
                 "requester rank is not high enough to delegate to this member"
