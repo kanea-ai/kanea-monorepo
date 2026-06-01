@@ -614,12 +614,12 @@ Plus `GET /health` outside the `/api/v1` prefix for Cloud Run probes.
 | GET    | `/departments`                     | JWT        | List departments.                                        |
 | POST   | `/departments`                     | admin(P≤2) | Create.                                                  |
 | GET    | `/departments/{id}`                | JWT        | Read.                                                    |
-| PATCH  | `/departments/{id}`                | admin      | Update name / description / head_id.                     |
-| DELETE | `/departments/{id}`                | admin      | Delete.                                                  |
+| PATCH  | `/departments/{id}`                | admin(P≤2) | Update name / description / head_id.                     |
+| DELETE | `/departments/{id}`                | admin(P≤2) | Delete.                                                  |
 | GET    | `/teams`                           | JWT        | List teams.                                              |
 | POST   | `/teams`                           | admin(P≤3) | Create.                                                  |
-| PATCH  | `/teams/{id}`                      | admin      | Update.                                                  |
-| DELETE | `/teams/{id}`                      | admin      | Delete.                                                  |
+| PATCH  | `/teams/{id}`                      | admin(P≤3) | Update.                                                  |
+| DELETE | `/teams/{id}`                      | admin(P≤3) | Delete.                                                  |
 | GET    | `/projects`                        | JWT        | List.                                                    |
 | POST   | `/projects`                        | JWT        | Create.                                                  |
 | GET    | `/projects/{id}`                   | JWT        | Read.                                                    |
@@ -658,23 +658,25 @@ Plus `GET /health` outside the `/api/v1` prefix for Cloud Run probes.
 
 The exchange endpoint accepts only `{ api_key }`. There is no legacy `{ agent_id, secret }` shape.
 
-| Method | Path                             | Auth  | Purpose                                                                             |
-| ------ | -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
-| POST   | `/agents`                        | admin | Provision an agent + mint a first API key in one response.                          |
-| GET    | `/agents`                        | JWT   | List agents in the workspace.                                                       |
-| POST   | `/agents/me/heartbeat`           | agent | Agent self-pings `last_seen_at`. 403 for human callers.                             |
-| GET    | `/agents/{id}`                   | JWT   | Agent detail with computed stats + health pill.                                     |
-| PATCH  | `/agents/{id}`                   | admin | Edit name / priority / model.                                                       |
-| DELETE | `/agents/{id}`                   | admin | Hard delete. 409 if the agent created tasks (FK RESTRICT on `tasks.created_by_id`). |
-| POST   | `/agents/{id}/api-keys`          | admin | Mint an additional API key. Returns plaintext exactly once.                         |
-| GET    | `/agents/{id}/api-keys`          | admin | Inventory listing. Metadata only — no plaintext, no hash.                           |
-| DELETE | `/agents/{id}/api-keys/{key_id}` | admin | Soft-revoke. Idempotent.                                                            |
+| Method | Path                             | Auth              | Purpose                                                                             |
+| ------ | -------------------------------- | ----------------- | ----------------------------------------------------------------------------------- |
+| POST   | `/agents`                        | admin             | Provision an agent + mint a first API key in one response.                          |
+| GET    | `/agents`                        | JWT               | List agents in the workspace.                                                       |
+| POST   | `/agents/me/heartbeat`           | agent             | Agent self-pings `last_seen_at`. 403 for human callers.                             |
+| GET    | `/agents/{id}`                   | JWT               | Agent detail with computed stats + health pill.                                     |
+| PATCH  | `/agents/{id}`                   | JWT[^agents-rbac] | Edit name / priority / model.                                                       |
+| DELETE | `/agents/{id}`                   | JWT[^agents-rbac] | Hard delete. 409 if the agent created tasks (FK RESTRICT on `tasks.created_by_id`). |
+| POST   | `/agents/{id}/api-keys`          | admin             | Mint an additional API key. Returns plaintext exactly once.                         |
+| GET    | `/agents/{id}/api-keys`          | admin             | Inventory listing. Metadata only — no plaintext, no hash.                           |
+| DELETE | `/agents/{id}/api-keys/{key_id}` | admin             | Soft-revoke. Idempotent.                                                            |
+
+[^agents-rbac]: The current code uses `PrincipalDep` here, not `WorkspaceAdminDep`, so any signed-in workspace member can edit or delete an agent. This row reflects the code; the design intent was almost certainly admin-only (matching `POST /agents` and the per-agent key endpoints). Tracked for tightening; see the linked issue in the security tracker.
 
 ### Audit
 
-| Method | Path          | Auth | Purpose                                                                     |
-| ------ | ------------- | ---- | --------------------------------------------------------------------------- |
-| GET    | `/audit/logs` | JWT  | List with hierarchical visibility (WORKSPACE ⊃ DEPARTMENT ⊃ TEAM ⊃ MEMBER). |
+| Method | Path          | Auth  | Purpose                                                                                                |
+| ------ | ------------- | ----- | ------------------------------------------------------------------------------------------------------ |
+| GET    | `/audit/logs` | admin | List with hierarchical visibility (WORKSPACE ⊃ DEPARTMENT ⊃ TEAM ⊃ MEMBER). 403 for non-admin members. |
 
 ### Admin (cross-tenant — superadmin only)
 
