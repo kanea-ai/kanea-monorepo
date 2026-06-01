@@ -168,6 +168,38 @@ async def test_equal_priority_is_rejected(
     task_repo.assign.assert_not_awaited()
 
 
+async def test_self_assign_is_rejected(
+    service: TaskService, task_repo: AsyncMock, member_repo: AsyncMock
+) -> None:
+    """Self-assignment is blocked: a member at any priority cannot
+    delegate a task to themselves, because the strict-greater rule
+    evaluates ``requester.priority >= target.priority`` and they're
+    equal. The UI's member-picker filter is expected to hide the self
+    entry; this test pins that even if a caller bypasses the UI and
+    posts their own member_id directly, the server refuses."""
+    workspace_id = uuid4()
+    requester_member_id = uuid4()
+    requester = make_principal(member_id=requester_member_id, workspace_id=workspace_id, priority=4)
+    # Same uuid + same priority on the target — a member trying to
+    # assign a task to themselves.
+    self_target = make_human(
+        member_id=requester_member_id,
+        workspace_id=workspace_id,
+        priority=4,
+        email="me@kanea.ai",
+    )
+    task = make_task(workspace_id=workspace_id)
+    task_repo.get_by_id.return_value = task
+    member_repo.get_by_id.return_value = self_target
+
+    with pytest.raises(DelegationForbiddenError):
+        await service.delegate(
+            task.id, DelegateTaskRequest(member_id=requester_member_id), requester
+        )
+
+    task_repo.assign.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("requester_priority", "target_priority"),
     [

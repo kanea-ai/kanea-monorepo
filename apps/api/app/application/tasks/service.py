@@ -87,6 +87,30 @@ from app.domain.exceptions import (
 # toggled via PATCH /tasks/{id}/block, never via status.
 
 
+def _payload_uuid(payload: dict, key: str) -> UUID | None:
+    """Best-effort extract a UUID from a free-form activity payload.
+
+    The activity payload is intentionally schemaless (each event type
+    carries its own shape, documented in TaskActivityType). For
+    DELEGATED rows, ``from`` and ``to`` are uuid strings (or None for
+    ``from`` when the task was unassigned). Legacy and test data may
+    represent the field as a literal UUID or string; missing keys are
+    treated as None. Anything we can't parse returns None so the
+    activity row still renders — the absent name just falls back.
+    """
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, UUID):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return UUID(raw)
+        except ValueError:
+            return None
+    return None
+
+
 @dataclass(slots=True)
 class TaskService:
     tasks: TaskRepository
@@ -425,7 +449,11 @@ class TaskService:
             raise RuntimeError("list_activity called without activities repo")
         await self._load_task(task_id, requester)
         rows = await self.activities.list_for_task(task_id)
-        return [await self._activity_to_response(r) for r in rows]
+        # Cache member name lookups so an activity feed full of
+        # DELEGATED rows touching the same members doesn't N+1 the
+        # members repo (actor + payload from/to all flow through here).
+        name_cache: dict[UUID, str | None] = {}
+        return [await self._activity_to_response(r, name_cache=name_cache) for r in rows]
 
     async def _resolve_assignee_name(
         self,
@@ -462,11 +490,39 @@ class TaskService:
             cache[assignee_id] = name
         return name
 
-    async def _activity_to_response(self, row: TaskActivity) -> ActivityResponse:
-        actor_name: str | None = None
-        if row.actor_member_id is not None:
-            actor = await self.members.get_by_id(row.actor_member_id)
-            actor_name = actor.name if actor is not None else None
+    async def _activity_to_response(
+        self,
+        row: TaskActivity,
+        *,
+        name_cache: dict[UUID, str | None] | None = None,
+    ) -> ActivityResponse:
+        async def _resolve_name(member_id: UUID | None) -> str | None:
+            if member_id is None:
+                return None
+            if name_cache is not None and member_id in name_cache:
+                return name_cache[member_id]
+            member = await self.members.get_by_id(member_id)
+            name = member.name if member is not None else None
+            if name_cache is not None:
+                name_cache[member_id] = name
+            return name
+
+        actor_name = await _resolve_name(row.actor_member_id)
+
+        # For DELEGATED rows the payload carries from/to assignee uuids
+        # (see TaskActivityType docstring). Resolve them once at read
+        # time so the UI's "delegated to <name>" rendering doesn't fall
+        # back to a truncated uuid. Backwards compatible with legacy
+        # rows: they go through the same resolution path. Other event
+        # types leave the fields as their None defaults.
+        from_member_name: str | None = None
+        to_member_name: str | None = None
+        if row.event_type is TaskActivityType.DELEGATED:
+            from_id = _payload_uuid(row.payload, "from")
+            to_id = _payload_uuid(row.payload, "to")
+            from_member_name = await _resolve_name(from_id)
+            to_member_name = await _resolve_name(to_id)
+
         return ActivityResponse(
             id=row.id,
             task_id=row.task_id,
@@ -474,6 +530,8 @@ class TaskService:
             actor_name=actor_name,
             event_type=row.event_type,
             payload=row.payload,
+            from_member_name=from_member_name,
+            to_member_name=to_member_name,
             created_at=row.created_at,
         )
 

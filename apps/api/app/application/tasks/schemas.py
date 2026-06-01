@@ -330,6 +330,16 @@ class ActivityResponse(BaseModel):
     event_type: TaskActivityType
     # JSON payload, shape-per-event (see TaskActivityType docstring).
     payload: dict
+    # Denormalised display names for events that carry assignee ids in
+    # the payload (currently only DELEGATED — payload.from / payload.to
+    # hold member uuids). Populated server-side by ``_activity_to_response``
+    # so the UI can render "delegated to <name>" without a per-row
+    # /tenants/members lookup (which 403s for non-admins on cross-team
+    # members — see TaskResponse.assignee_name for the same rationale).
+    # Both None for event types that don't carry assignee ids, and
+    # selectively None when the legacy data path can't resolve a name.
+    from_member_name: str | None = None
+    to_member_name: str | None = None
     created_at: datetime
 
 
