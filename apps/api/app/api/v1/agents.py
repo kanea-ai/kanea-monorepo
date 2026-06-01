@@ -110,14 +110,20 @@ async def get_agent_detail(
 async def update_agent(
     agent_id: UUID,
     payload: UpdateAgentRequest,
-    principal: PrincipalDep,
+    principal: WorkspaceAdminDep,
     service: AgentServiceDep,
 ) -> AgentResponse:
-    """Partial update: name / priority / model. id is immutable."""
+    """Partial update: name / priority / model. id is immutable.
+
+    Gated by ``WorkspaceAdminDep`` — agent lifecycle is an admin
+    action (parity with POST and DELETE). The service-layer role
+    assertion is the belt-and-braces."""
     try:
         return await service.update_agent(agent_id, payload, principal)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
 @router.delete(
@@ -127,17 +133,22 @@ async def update_agent(
 )
 async def delete_agent(
     agent_id: UUID,
-    principal: PrincipalDep,
+    principal: WorkspaceAdminDep,
     service: AgentServiceDep,
 ) -> Response:
     """Hard delete. 409 if the agent created tasks (those would be
-    orphaned via the FK RESTRICT on tasks.created_by_id)."""
+    orphaned via the FK RESTRICT on tasks.created_by_id).
+
+    Gated by ``WorkspaceAdminDep`` — destructive action, admin only.
+    The service-layer role assertion is the belt-and-braces."""
     try:
         await service.delete_agent(agent_id, principal)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except AgentHasCreatedTasksError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
