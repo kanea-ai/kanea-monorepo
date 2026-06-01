@@ -38,7 +38,7 @@ Layered on top of the role is a numeric **priority**: a small integer where lowe
 Priority is the actual gate for many administrative operations — not the role alone — and it drives two reach rules:
 
 - **Administrative reach.** A higher-ranked admin can administer a lower-ranked admin. Two members can both hold `WORKSPACE_ADMIN`, but if one has `priority=1` and the other has `priority=3`, the priority-1 admin has reach over operations the priority-3 admin does not.
-- **Delegation reach.** A member can delegate a task to anyone whose priority is greater than or equal to their own (equal-or-lower rank). An agent at priority `5` cannot delegate to a human at priority `2`.
+- **Delegation reach.** A member can delegate a task only to members whose priority is **strictly greater** than their own (strictly lower rank). A member at priority `3` cannot delegate to another priority-`3` member — equal-rank delegation is refused; the target must be priority `4` or higher.
 
 When you build integrations that move work around, the priority of the acting member determines what's reachable.
 
