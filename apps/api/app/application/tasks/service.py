@@ -24,6 +24,7 @@ from app.application.tasks.schemas import (
     CreateRelationRequest,
     CreateRequestPayload,
     CreateTaskRequest,
+    CrossTeamOriginRef,
     DelegateTaskRequest,
     FulfillRequestPayload,
     Principal,
@@ -41,7 +42,7 @@ from app.application.tasks.schemas import (
     UpdateTaskStatusRequest,
 )
 from app.application.teams.ports import TeamRepository
-from app.application.tenants.ports import WorkspaceReadRepository
+from app.application.tenants.ports import TenantMemberRepository, WorkspaceReadRepository
 from app.domain.entities import (
     Member,
     Task,
@@ -138,6 +139,12 @@ class TaskService:
     # comment posting. Optional so legacy tests that don't care
     # about notifications can omit it.
     notifications: NotificationService | None = None
+    # Used for cross-team request handling: resolving the target team's
+    # MANAGER / LEAD for notification recipients and the workspace
+    # owners for the leaderless-team fallback. Optional so legacy DI
+    # paths that don't exercise the cross-team flow stay valid; the
+    # cross-team notification path no-ops when this isn't wired.
+    tenant_members: TenantMemberRepository | None = None
 
     async def delegate(
         self,
@@ -161,7 +168,10 @@ class TaskService:
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         assignee_name = await self._resolve_assignee_name(updated.assignee_id)
-        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
+        origin = await self._resolve_cross_team_origin(updated.id)
+        return TaskResponse.from_entity(
+            updated, prefix=prefix, assignee_name=assignee_name, cross_team_origin=origin
+        )
 
     async def list_blocks(
         self,
@@ -208,10 +218,21 @@ class TaskService:
         # Cache assignee-name lookups so the page hits the members repo
         # once per unique assignee rather than once per row.
         assignee_cache: dict[UUID, str | None] = {}
+        # Single ``WHERE fulfilled_task_id IN (:ids)`` lookup for the
+        # whole page — critical for board / blocks views, which can
+        # render hundreds of rows.
+        origin_map = await self._resolve_cross_team_origin_map([r.id for r in rows])
         items: list[TaskResponse] = []
         for r in rows:
             name = await self._resolve_assignee_name(r.assignee_id, cache=assignee_cache)
-            items.append(TaskResponse.from_entity(r, prefix=prefix, assignee_name=name))
+            items.append(
+                TaskResponse.from_entity(
+                    r,
+                    prefix=prefix,
+                    assignee_name=name,
+                    cross_team_origin=origin_map.get(r.id),
+                )
+            )
         return Page[TaskResponse](items=items, total=total)
 
     async def list_for_workspace(
@@ -246,10 +267,20 @@ class TaskService:
         prefix = await self._workspace_prefix(requester.workspace_id)
         # Cache assignee-name lookups (board / project tasks views).
         assignee_cache: dict[UUID, str | None] = {}
+        # One IN-clause lookup for cross-team origin on every row in
+        # the page (see _resolve_cross_team_origin_map).
+        origin_map = await self._resolve_cross_team_origin_map([row.id for row in rows])
         out: list[TaskResponse] = []
         for row in rows:
             name = await self._resolve_assignee_name(row.assignee_id, cache=assignee_cache)
-            out.append(TaskResponse.from_entity(row, prefix=prefix, assignee_name=name))
+            out.append(
+                TaskResponse.from_entity(
+                    row,
+                    prefix=prefix,
+                    assignee_name=name,
+                    cross_team_origin=origin_map.get(row.id),
+                )
+            )
         return out
 
     async def get_by_id(self, task_id: UUID, requester: Principal) -> TaskDetailResponse:
@@ -277,6 +308,7 @@ class TaskService:
             )
 
         assignee_name = await self._resolve_assignee_name(task.assignee_id)
+        cross_team_origin = await self._resolve_cross_team_origin(task.id)
         return TaskDetailResponse(
             id=task.id,
             workspace_id=task.workspace_id,
@@ -289,6 +321,7 @@ class TaskService:
             description=task.description,
             assignee_id=task.assignee_id,
             assignee_name=assignee_name,
+            cross_team_origin=cross_team_origin,
             project_id=task.project_id,
             team_id=task.team_id,
             due_at=task.due_at,
@@ -361,7 +394,12 @@ class TaskService:
                 task_id=created.id,
                 actor=requester,
             )
-        return TaskResponse.from_entity(created, prefix=prefix, assignee_name=assignee_name)
+        # The freshly-created task can never itself be the
+        # fulfilled_task_id of any request — pass None directly instead
+        # of paying for the lookup we know will miss.
+        return TaskResponse.from_entity(
+            created, prefix=prefix, assignee_name=assignee_name, cross_team_origin=None
+        )
 
     async def update_links(
         self,
@@ -419,7 +457,10 @@ class TaskService:
 
         prefix = await self._workspace_prefix(requester.workspace_id)
         assignee_name = await self._resolve_assignee_name(updated.assignee_id)
-        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
+        origin = await self._resolve_cross_team_origin(updated.id)
+        return TaskResponse.from_entity(
+            updated, prefix=prefix, assignee_name=assignee_name, cross_team_origin=origin
+        )
 
     async def _record(
         self,
@@ -454,6 +495,62 @@ class TaskService:
         # members repo (actor + payload from/to all flow through here).
         name_cache: dict[UUID, str | None] = {}
         return [await self._activity_to_response(r, name_cache=name_cache) for r in rows]
+
+    async def _resolve_cross_team_origin(self, task_id: UUID) -> CrossTeamOriginRef | None:
+        """Single-task cross-team origin resolver: look up whether this
+        task was minted as the ``fulfilled_task_id`` of a cross-team
+        request. Returns None for normal tasks. Mirrors the
+        ``_resolve_assignee_name`` shape; list flows use the batch
+        variant below to avoid N+1."""
+        if self.requests is None:
+            return None
+        rows = await self.requests.list_fulfilled_by_task_ids([task_id])
+        if not rows:
+            return None
+        return await self._cross_team_origin_from_request(rows[0])
+
+    async def _resolve_cross_team_origin_map(
+        self, task_ids: list[UUID]
+    ) -> dict[UUID, CrossTeamOriginRef]:
+        """Batch resolver for list flows (board, blocks, project tasks).
+        Issues a single SQL ``WHERE fulfilled_task_id IN (:ids)`` to the
+        requests repo regardless of list size — critical for the board
+        view which can render hundreds of tasks. Tasks not minted via
+        a cross-team request are absent from the returned map; callers
+        treat ``.get(task_id)`` as the cross_team_origin field."""
+        if self.requests is None or not task_ids:
+            return {}
+        rows = await self.requests.list_fulfilled_by_task_ids(task_ids)
+        out: dict[UUID, CrossTeamOriginRef] = {}
+        for row in rows:
+            origin = await self._cross_team_origin_from_request(row)
+            if origin is not None and row.fulfilled_task_id is not None:
+                out[row.fulfilled_task_id] = origin
+        return out
+
+    async def _cross_team_origin_from_request(
+        self, request: TaskRequest
+    ) -> CrossTeamOriginRef | None:
+        """Build the CrossTeamOriginRef for a single resolved request
+        row. Resolves the source task's public_id from its workspace
+        prefix + seq and the requester member's display name."""
+        if request.fulfilled_task_id is None:
+            return None
+        source_task = await self.tasks.get_by_id(request.source_task_id)
+        if source_task is None:
+            return None
+        prefix = await self._workspace_prefix(source_task.workspace_id)
+        source_public_id = f"{prefix}-{source_task.seq:03d}" if source_task.seq else f"{prefix}-000"
+        requester_name: str | None = None
+        if request.requester_member_id is not None:
+            requester_name = await self._resolve_assignee_name(request.requester_member_id)
+        return CrossTeamOriginRef(
+            request_id=request.id,
+            source_task_id=source_task.id,
+            source_task_public_id=source_public_id,
+            requester_member_id=request.requester_member_id or source_task.created_by_id,
+            requester_name=requester_name,
+        )
 
     async def _resolve_assignee_name(
         self,
@@ -607,6 +704,18 @@ class TaskService:
         # The default BLOCKS preserves the previous semantics (target
         # blocks source) so existing UI behaviour around the
         # exception queue / blocked count stays consistent.
+        #
+        # ⚠ Non-obvious relation direction. Inside ``TaskRelation``:
+        #   - ``source_task_id`` points at the NEWLY MINTED target task.
+        #   - ``target_task_id`` points at the ORIGINATING source task.
+        # Read it as "the new task BLOCKS the originating task" — i.e.
+        # from the originating task's perspective, this new task is a
+        # blocker on its blocked-by panel. Agents and the API ref docs
+        # both already understand this convention; reordering it would
+        # be a breaking change. If you're touching this code, keep the
+        # direction as-is; both the README sweep and the Track C
+        # investigation had to reason through it carefully — saving the
+        # next reader that work.
         await self.relations.create(
             TaskRelation(
                 id=uuid4(),
@@ -642,7 +751,136 @@ class TaskService:
                 resolved_at=now,
             )
         )
+
+        # Notify the target team. Best-effort: the notification path is
+        # off the critical write path — request + task + relation are
+        # already persisted by here, so a missing notifications service
+        # or a leaderless team must never break the create_request call
+        # itself.
+        await self._notify_cross_team_request(
+            requester=requester,
+            target_team_id=request.requested_team_id,
+            target_task=target,
+            source_task=task,
+        )
+
         return await self._request_to_response(created)
+
+    async def _notify_cross_team_request(
+        self,
+        *,
+        requester: Principal,
+        target_team_id: UUID,
+        target_task: Task,
+        source_task: Task,
+    ) -> None:
+        """Resolve recipients for a CROSS_TEAM_REQUEST notification and
+        emit one row per recipient. Leadership of the target team (its
+        MANAGER, its LEAD, and the head of its department, if any) get
+        notified; the requester themselves is excluded; AGENT members
+        (no ``user_id``) are excluded. If that set is empty — a brand
+        new team with no roles assigned and no department head — fall
+        back to the workspace owners so a request to a leaderless team
+        is never invisible.
+
+        Best-effort under partial DI: silently skips if the notifications
+        service or the tenant_members repo isn't wired. The cross-team
+        request lifecycle has already succeeded by the time this runs."""
+        if self.notifications is None or self.tenant_members is None:
+            return
+
+        # Resolve the target team's leadership.
+        candidates: list[Member] = []
+        manager = await self.tenant_members.get_for_team_role(target_team_id, TeamRole.MANAGER)
+        if manager is not None:
+            candidates.append(manager)
+        lead = await self.tenant_members.get_for_team_role(target_team_id, TeamRole.LEAD)
+        if lead is not None:
+            candidates.append(lead)
+        if self.team_lookup is not None:
+            dept_head_id = await self.team_lookup.get_department_head_for_team(target_team_id)
+            if dept_head_id is not None:
+                dept_head = await self.members.get_by_id(dept_head_id)
+                if dept_head is not None:
+                    candidates.append(dept_head)
+
+        recipients = self._filter_notification_recipients(candidates, requester)
+
+        # Leaderless fallback: notify the workspace owners. A request to
+        # a team with no MANAGER / LEAD / dept head must never be silent
+        # — that's the exact failure mode we're fixing, just relocated.
+        #
+        # Invariant chain (the fallback always finds at least one
+        # recipient in production):
+        #   1. Workspace creation (POST /auth/register, OAuth onboarding,
+        #      POST /me/workspaces) mints a WORKSPACE_OWNER member in
+        #      the same transaction as the workspace row.
+        #   2. ``update_member_profile`` (last-owner invariant) refuses
+        #      to demote the only WORKSPACE_OWNER.
+        #   3. ``set_member_suspension`` (last-active-owner invariant)
+        #      refuses to suspend the only non-suspended OWNER.
+        #   4. WORKSPACE_OWNER is necessarily a HUMAN member (AGENT
+        #      can't hold the OWNER role), and HUMAN members always
+        #      have a non-null ``user_id`` (CHECK constraint on the
+        #      members table). So the filtered recipients list is
+        #      non-empty.
+        # The empty-recipients branch below is a defensive guard, not
+        # a reachable code path in production. It exists so a future
+        # regression that touches the recipient pipeline doesn't 500
+        # mid-create_request — the task + relation + request row have
+        # already persisted by the time notification runs.
+        if not recipients:
+            owners_page, _total = await self.tenant_members.list_for_workspace(
+                requester.workspace_id,
+                role=MemberRole.WORKSPACE_OWNER,
+                limit=None,
+            )
+            recipients = self._filter_notification_recipients(owners_page, requester)
+
+        if not recipients:
+            return  # defensive only — see invariant chain above
+
+        # Resolve a stable public_id for the source task so the preview
+        # reads as "Engineering asked your team for work: MKT-042 — title"
+        # rather than naming uuids.
+        prefix = await self._workspace_prefix(requester.workspace_id)
+        source_public_id = f"{prefix}-{source_task.seq:03d}" if source_task.seq else f"{prefix}-000"
+        target_public_id = f"{prefix}-{target_task.seq:03d}" if target_task.seq else f"{prefix}-000"
+        requester_name = await self._resolve_assignee_name(requester.member_id) or "Someone"
+        preview = (
+            f"{requester_name} asked your team for work: "
+            f"{target_public_id} — {target_task.title} "
+            f"(from {source_public_id})"
+        )
+
+        await self.notifications.notify_cross_team_request(
+            recipient_user_ids=[m.user_id for m in recipients if m.user_id is not None],
+            actor=requester,
+            target_task_id=target_task.id,
+            preview=preview,
+        )
+
+    @staticmethod
+    def _filter_notification_recipients(
+        candidates: list[Member], requester: Principal
+    ) -> list[Member]:
+        """Exclude the requester themselves and any member that can't
+        receive a notification (AGENT members have no ``user_id``).
+        The recipient set is small (0-3 leadership + at most a handful
+        of workspace owners as fallback) so dedup-by-member-id is a
+        trivial set operation."""
+        seen: set[UUID] = set()
+        out: list[Member] = []
+        for m in candidates:
+            if m.id == requester.member_id:
+                continue
+            if m.user_id is None:
+                continue
+            if m.id in seen:
+                continue
+            seen.add(m.id)
+            out.append(m)
+        return out
 
     async def list_requests_for_task(
         self, task_id: UUID, requester: Principal
@@ -658,14 +896,30 @@ class TaskService:
         team_id: UUID,
         requester: Principal,
         *,
+        direction: str = "incoming",
         status_filter: RequestStatus | None = None,
     ) -> list[TaskRequestResponse]:
-        """Leadership inbox: requests filed against tasks living on
-        this team. Anyone in the workspace can read."""
+        """Team inbox view of cross-team requests.
+
+        ``direction='incoming'`` (default): requests targeting this team
+        — i.e. other teams have asked this team for work. This is the
+        natural meaning of "inbox": the request landed here for triage
+        (delegate / cancel under the auto-fulfil model).
+
+        ``direction='outgoing'``: requests this team's tasks have filed
+        against other teams — the team's own "what have we asked for?"
+        view. Useful but not the default; the inbox label means
+        incoming.
+
+        Anyone in the workspace can read either direction; the data
+        isn't sensitive."""
         if self.requests is None:  # pragma: no cover - DI invariant
             raise RuntimeError("requests repo not wired")
         await self._require_workspace_team(team_id, requester)
-        rows = await self.requests.list_for_source_team(team_id, status=status_filter)
+        if direction == "outgoing":
+            rows = await self.requests.list_for_source_team(team_id, status=status_filter)
+        else:
+            rows = await self.requests.list_for_target_team(team_id, status=status_filter)
         return [await self._request_to_response(r) for r in rows]
 
     async def fulfill_request(
@@ -933,7 +1187,13 @@ class TaskService:
         if request.status is task.status:
             prefix = await self._workspace_prefix(requester.workspace_id)
             assignee_name = await self._resolve_assignee_name(task.assignee_id)
-            return TaskResponse.from_entity(task, prefix=prefix, assignee_name=assignee_name)
+            origin = await self._resolve_cross_team_origin(task.id)
+            return TaskResponse.from_entity(
+                task,
+                prefix=prefix,
+                assignee_name=assignee_name,
+                cross_team_origin=origin,
+            )
 
         updated = await self.tasks.update_status(
             task_id=task.id,
@@ -948,7 +1208,10 @@ class TaskService:
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         assignee_name = await self._resolve_assignee_name(updated.assignee_id)
-        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
+        origin = await self._resolve_cross_team_origin(updated.id)
+        return TaskResponse.from_entity(
+            updated, prefix=prefix, assignee_name=assignee_name, cross_team_origin=origin
+        )
 
     async def update_priority(
         self,
@@ -964,7 +1227,13 @@ class TaskService:
         if task.priority == request.priority:
             prefix = await self._workspace_prefix(requester.workspace_id)
             assignee_name = await self._resolve_assignee_name(task.assignee_id)
-            return TaskResponse.from_entity(task, prefix=prefix, assignee_name=assignee_name)
+            origin = await self._resolve_cross_team_origin(task.id)
+            return TaskResponse.from_entity(
+                task,
+                prefix=prefix,
+                assignee_name=assignee_name,
+                cross_team_origin=origin,
+            )
 
         await self._require_priority_editor(requester, task)
 
@@ -977,7 +1246,10 @@ class TaskService:
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
         assignee_name = await self._resolve_assignee_name(updated.assignee_id)
-        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
+        origin = await self._resolve_cross_team_origin(updated.id)
+        return TaskResponse.from_entity(
+            updated, prefix=prefix, assignee_name=assignee_name, cross_team_origin=origin
+        )
 
     async def _require_priority_editor(self, requester: Principal, task: Task) -> None:
         if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
@@ -1034,7 +1306,10 @@ class TaskService:
             )
         prefix = await self._workspace_prefix(requester.workspace_id)
         assignee_name = await self._resolve_assignee_name(updated.assignee_id)
-        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
+        origin = await self._resolve_cross_team_origin(updated.id)
+        return TaskResponse.from_entity(
+            updated, prefix=prefix, assignee_name=assignee_name, cross_team_origin=origin
+        )
 
     async def rate_task(
         self,

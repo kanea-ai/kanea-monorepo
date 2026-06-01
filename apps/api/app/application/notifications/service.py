@@ -65,6 +65,52 @@ class NotificationService:
             comment_id=comment_id,
         )
 
+    async def notify_cross_team_request(
+        self,
+        *,
+        recipient_user_ids: list[UUID],
+        actor: Principal,
+        target_task_id: UUID,
+        preview: str,
+    ) -> int:
+        """Write a CROSS_TEAM_REQUEST notification row per recipient.
+
+        Policy (who-to-notify) lives in TaskService.create_request,
+        which assembles the recipient list from the target team's
+        leadership + dept head — already excluding the requester and
+        non-HUMAN members — with a workspace-owner fallback for
+        leaderless teams. This method is the thin mechanism: dedup
+        the caller-supplied list, write the rows. Returns the count
+        written.
+
+        ``target_task_id`` is the *newly minted* target task (where
+        the recipient's triage action — delegate / cancel / let it
+        sit — happens). Deep-linking the bell row to this task lands
+        the recipient on the detail page with the Delegate control
+        immediately visible.
+        """
+        seen: set[UUID] = set()
+        written = 0
+        for user_id in recipient_user_ids:
+            if user_id in seen:
+                continue
+            seen.add(user_id)
+            await self.notifications.create(
+                Notification(
+                    id=uuid4(),
+                    user_id=user_id,
+                    type=NotificationType.CROSS_TEAM_REQUEST,
+                    source_task_id=target_task_id,
+                    source_comment_id=None,
+                    source_member_id=actor.member_id,
+                    preview=_preview(preview),
+                    read_at=None,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            written += 1
+        return written
+
     async def _notify(
         self,
         *,

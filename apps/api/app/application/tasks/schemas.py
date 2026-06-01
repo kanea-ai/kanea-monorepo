@@ -127,6 +127,32 @@ class UpdateTaskLinksRequest(BaseModel):
     team_id: UUID | None = None
 
 
+class CrossTeamOriginRef(BaseModel):
+    """Denormalised pointer to the cross-team request that birthed this
+    task. Present on ``TaskResponse.cross_team_origin`` when the task
+    was auto-minted by ``POST /tasks/{id}/requests`` (the source-task
+    team handed work to the target team); absent on tasks created
+    through the standard ``/tasks`` endpoint.
+
+    Mirrors the actor_name / author_name / requester_name shape: the UI
+    renders this directly without needing access to the source task or
+    the requester member (both of which may be on another team / behind
+    the priority-scoped /tenants/members lookup that 403s for non-
+    admin cross-team callers).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: UUID
+    source_task_id: UUID
+    # e.g. "ENG-101". Built from the source workspace's prefix + seq.
+    source_task_public_id: str
+    requester_member_id: UUID
+    # Denormalised name of the workspace member who filed the request.
+    # None when the requester member has been deleted (legacy / cascade).
+    requester_name: str | None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -154,6 +180,14 @@ class TaskResponse(BaseModel):
     # cross-team lookups). Field is server-populated only; callers do
     # not supply it on create / update payloads.
     assignee_name: str | None = None
+    # When this task was auto-minted by a cross-team request, this
+    # field points at the originating request + source task so the
+    # board card can render a "↗ from <source-public-id>" marker
+    # without a per-task /tasks/{id}/requests round-trip. Null for
+    # tasks created the normal way. Resolved server-side from
+    # ``task_requests`` where ``fulfilled_task_id == task.id``;
+    # batched in list flows.
+    cross_team_origin: CrossTeamOriginRef | None = None
     project_id: UUID | None
     team_id: UUID | None
     due_at: datetime | None
@@ -164,7 +198,12 @@ class TaskResponse(BaseModel):
 
     @classmethod
     def from_entity(
-        cls, task: Task, *, prefix: str, assignee_name: str | None = None
+        cls,
+        task: Task,
+        *,
+        prefix: str,
+        assignee_name: str | None = None,
+        cross_team_origin: CrossTeamOriginRef | None = None,
     ) -> TaskResponse:
         return cls(
             id=task.id,
@@ -178,6 +217,7 @@ class TaskResponse(BaseModel):
             description=task.description,
             assignee_id=task.assignee_id,
             assignee_name=assignee_name,
+            cross_team_origin=cross_team_origin,
             project_id=task.project_id,
             team_id=task.team_id,
             due_at=task.due_at,
@@ -306,6 +346,10 @@ class TaskDetailResponse(BaseModel):
     # See ``TaskResponse.assignee_name`` for the rationale; same
     # denormalisation path on the detail endpoint.
     assignee_name: str | None = None
+    # See ``TaskResponse.cross_team_origin``; populated for auto-minted
+    # cross-team tasks so the detail page can render an origin row
+    # without a follow-up lookup.
+    cross_team_origin: CrossTeamOriginRef | None = None
     due_at: datetime | None
     project_id: UUID | None
     team_id: UUID | None

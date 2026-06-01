@@ -43,14 +43,33 @@ async def list_team_inbox_requests(
     team_id: UUID,
     principal: PrincipalDep,
     service: TaskServiceDep,
+    direction: str = "incoming",
     status_filter: RequestStatus | None = None,
 ) -> list[TaskRequestResponse]:
-    """Inbox for a team's leadership: cross-team requests anchored to
-    a source task that lives on this team. Pass ?status_filter=PENDING
-    to scope to actionable items."""
+    """Team inbox of cross-team requests.
+
+    ``direction=incoming`` (default) — requests targeting THIS team.
+    Use this when you want to see "what have other teams asked us to
+    do?" Under the auto-fulfilment model (issue #50 tracks the
+    approval-gate alternative) these are typically already ``FULFILLED``
+    by the time they appear — the requester has already had a task
+    auto-minted on this team's board.
+
+    ``direction=outgoing`` — requests anchored to a source task LIVING
+    on this team. Use this to see "what have we asked other teams for?"
+
+    Any workspace member can read either direction. The default
+    ``status_filter`` is unset (return all statuses), since under
+    auto-fulfilment new requests are born ``FULFILLED`` and a default
+    ``PENDING`` filter would silently hide everything."""
+    if direction not in ("incoming", "outgoing"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="direction must be 'incoming' or 'outgoing'",
+        )
     try:
         return await service.list_requests_for_team_inbox(
-            team_id, principal, status_filter=status_filter
+            team_id, principal, direction=direction, status_filter=status_filter
         )
     except TeamNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

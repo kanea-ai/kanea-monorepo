@@ -239,6 +239,7 @@ def get_task_service(
     activities: Annotated[TaskActivityRepository, Depends(get_task_activity_repository)],
     requests: Annotated[TaskRequestRepository, Depends(get_task_request_repository)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    tenant_members: Annotated[TenantMemberRepository, Depends(get_tenant_member_repository)],
 ) -> TaskService:
     return TaskService(
         tasks=tasks,
@@ -253,6 +254,7 @@ def get_task_service(
         activities=activities,
         requests=requests,
         notifications=notifications,
+        tenant_members=tenant_members,
     )
 
 

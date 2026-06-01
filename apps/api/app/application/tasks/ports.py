@@ -117,6 +117,32 @@ class TaskRequestRepository(Protocol):
         *,
         status: RequestStatus | None = None,
     ) -> list[TaskRequest]: ...
+    async def list_for_target_team(
+        self,
+        team_id: UUID,
+        *,
+        status: RequestStatus | None = None,
+    ) -> list[TaskRequest]:
+        """Incoming-direction inbox: requests whose ``requested_team_id``
+        is this team — i.e. someone else asked this team for work.
+
+        Filters on the ``requested_team_id`` column directly (covered
+        by the ``ix_task_requests_requested_team_id_status`` index).
+        Distinct from ``list_for_source_team`` which filters by joining
+        through the source task's ``team_id`` (the outgoing view —
+        requests THIS team's tasks filed against others)."""
+        ...
+
+    async def list_fulfilled_by_task_ids(self, task_ids: list[UUID]) -> list[TaskRequest]:
+        """Batch lookup for the ``TaskResponse.cross_team_origin``
+        denormalised field. Returns every request whose
+        ``fulfilled_task_id`` is in ``task_ids`` — used by list flows
+        (board, blocks, project tasks) to resolve cross-team origin for
+        every row in one round-trip rather than N. Empty input returns
+        empty list. Tasks not minted via a cross-team request match
+        no row, which the caller treats as ``cross_team_origin=None``."""
+        ...
+
     async def create(self, request: TaskRequest) -> TaskRequest: ...
     async def mark_fulfilled(
         self,
