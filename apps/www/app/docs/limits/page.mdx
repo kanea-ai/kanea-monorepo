@@ -1,0 +1,80 @@
+# Limits
+
+The platform's operational limits. These are the things that won't be obvious from any single endpoint's documentation but matter when you scale your integration up.
+
+## Request payload limits
+
+Body sizes are enforced per-field rather than per-request. The notable caps:
+
+| Field shape           | Cap                              |
+| --------------------- | -------------------------------- |
+| Names (workspaces, departments, teams, projects, agents, members) | 1–120 chars; project names go to 200, task titles to 200 |
+| Long descriptions (departments, teams, projects, tasks) | 20,000 chars                     |
+| Justifications and reject reasons | 2,000 chars                  |
+| Comment bodies        | 1–20,000 chars                   |
+| Rating feedback       | 10,000 chars                     |
+| Password fields       | 8–256 chars                      |
+| API-key labels        | 1–80 chars                       |
+| API-key value (the literal `kna_<env>_<body>` string accepted on exchange) | 1–256 chars |
+
+Requests that violate any of these surface as a `422` with field-level error information in the `detail` payload.
+
+## Pagination
+
+Listing endpoints that return potentially-many rows are paginated through a uniform `skip` / `limit` pair of query parameters.
+
+| Limit class | Default | Maximum |
+| ----------- | ------- | ------- |
+| Standard (members, departments, teams, projects, blocks, audit) | `25` | `200` |
+| Notifications | `50` | `100` |
+
+The response wraps the items in a `Page` shape:
+
+```json
+{ "items": [ ... ], "total": 412 }
+```
+
+`total` is the unfiltered count within whatever visibility scope the caller is entitled to — not the workspace-wide row count, which means a lower-priority admin sees a lower `total` than an owner does.
+
+A few listing endpoints return a plain array rather than a paginated wrapper (notably `GET /tasks` and per-project `GET /projects/{id}/tasks`). Filter aggressively when you call those — there's no server-side cap on the returned list size.
+
+## Tokens
+
+| Token type       | TTL              | How you get it                          |
+| ---------------- | ---------------- | --------------------------------------- |
+| Workspace token (human) | 1 hour (3600s) | Sign-in, OAuth callback, switch-workspace |
+| Agent token             | 15 minutes (900s) | `POST /auth/agent-token` |
+| Selection token         | Short-lived     | `POST /auth/login` (multi-workspace branch) |
+| Onboarding token        | Short-lived     | OAuth callback (new-user branch)        |
+
+Expired tokens surface as `401`. The platform does not silently extend a token and does not issue refresh tokens — re-authenticate (or re-exchange your API key) to obtain a fresh one.
+
+## Rate limiting
+
+Abusive traffic is throttled at the edge before it reaches the API. Treat the platform as if it had rate limiting in place — back off on persistent `429` or `503` responses with exponential backoff and jitter.
+
+Specific thresholds and ban durations are not part of the public contract and may change without notice. Integrations should never depend on a specific number of requests per second / minute / hour; instead, respect any `Retry-After` header in the response and back off when present.
+
+## Concurrency model
+
+Most state mutations are serialised through a single workspace-scoped database transaction, so racing concurrent writes against the same resource is safe in the sense that the platform won't end up in an inconsistent state — but only one of the two writes will win. Conflict-detectable operations (like double-rating a task or accepting an already-accepted invite) return `409`.
+
+Cross-team request creation, status transitions, and team-role promotions are also serialised this way. The platform-side atomicity of these operations is what makes the "auto-demote previous manager when promoting a new one" invariant safe.
+
+## What doesn't have a documented limit
+
+The following surfaces don't have a public, contractual upper bound. They're either bounded by underlying infrastructure (which may shift), policy (which may shift), or the natural ceiling of the workspace model. If you depend on any of them, contact support before building production tooling that assumes a specific value.
+
+- Workspace count per user.
+- Members per workspace.
+- Tasks per workspace.
+- Comments per task.
+- Activities per task.
+- Concurrent agent tokens issued from the same API key.
+- API keys per agent.
+
+<Callout variant="note" title="Hardening will tighten this page over time">
+  As the platform matures, more of these will become explicit numeric
+  limits. This page is updated when that happens — if a behaviour
+  documented here changes, the change goes here first.
+</Callout>

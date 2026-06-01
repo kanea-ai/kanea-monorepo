@@ -1,0 +1,110 @@
+# Departments
+
+Endpoints under `/api/v1/departments/*`. Five routes — list, read, and full CRUD for departments.
+
+A department groups one or more teams under a single department **head**. See [Concepts → Departments and teams](/docs/concepts) for the model, including the head isolation rule (heads cannot simultaneously be on a team).
+
+## Reads
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/departments"
+  auth="Signed in"
+  summary="Paginated list of departments in the workspace. Any signed-in member can read."
+>
+  <p><strong>Query parameters:</strong> <code>name</code> (case-insensitive substring filter, max 120 chars), <code>skip</code> (default 0), <code>limit</code> (default 25, max 200).</p>
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "items": [
+    {
+      "id": "<uuid>",
+      "workspace_id": "<uuid>",
+      "name": "Engineering",
+      "description": "...",
+      "head_id": "<uuid or null>",
+      "head": { "id": "<uuid>", "name": "Alice Example" },
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total": 4
+}
+```
+
+  <p><code>head</code> is a denormalised summary of the head member, embedded so a directory view can render department + head in one round-trip.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/departments/{department_id}"
+  auth="Signed in"
+  summary="Single department fetch."
+>
+  <p><strong>Response (200):</strong> the same shape as a single item from the list endpoint.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the department doesn't exist in the caller's workspace.</p>
+</EndpointCard>
+
+## Mutations
+
+The CRUD mutations are gated on a **priority-bounded admin** rule, not just the workspace-admin role. The audience label below reflects the strictest version of the gate.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/departments"
+  auth="Workspace admin (priority ≤ 2)"
+  summary="Create a new department. Optionally appoint a head in the same call — if the head is currently on a team, their team assignment is cleared atomically (the platform never leaves a member as both head and team member)."
+>
+  <p><strong>Runtime RBAC:</strong> the calling member must be a workspace owner, OR a workspace admin with priority ≤ 2. Workspace users and lower-priority admins are refused.</p>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars>",
+  "description": "<up to 20000 chars, optional>",
+  "head_id": "<uuid or null>"
+}
+```
+
+  <p><strong>Response (201):</strong> the created <code>DepartmentResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>409</code> if the name is already taken in the workspace OR if the proposed head already heads another department; <code>422</code> if <code>head_id</code> isn't a member of the workspace; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/departments/{department_id}"
+  auth="Workspace admin (priority ≤ 2)"
+  summary="Update a department's name, description, and/or head. Setting head_id to a new member clears their team assignment atomically. Setting head_id to null removes the head; the department continues to exist."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars or omit>",
+  "description": "<up to 20000 chars or null or omit>",
+  "head_id": "<uuid or null or omit>"
+}
+```
+
+  <p>Fields can be omitted to leave untouched, or explicitly set to <code>null</code> to clear.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>DepartmentResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the department doesn't exist; <code>409</code> on a name conflict or if the proposed head already heads another department; <code>422</code> if <code>head_id</code> isn't a workspace member; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/departments/{department_id}"
+  auth="Workspace admin (priority ≤ 2)"
+  summary="Hard delete the department. Teams that pointed to it survive with department_id set to null; the workspace's department-less teams behave normally."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the department doesn't exist; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>

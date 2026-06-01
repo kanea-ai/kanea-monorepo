@@ -1,0 +1,90 @@
+# Cross-team requests
+
+Endpoints under `/api/v1/teams/{team_id}/requests` and `/api/v1/requests/{request_id}/*`. Three routes covering the team inbox view and the manual fulfil / reject paths for `PENDING` requests.
+
+For filing a new cross-team request, see [`POST /tasks/{task_id}/requests`](/docs/api/tasks) — that endpoint auto-fulfils on creation and is the primary path. The endpoints on this page exist for the manual-fulfilment lifecycle when a `PENDING` request is staged through some other route. See [Features → Cross-team requests](/docs/features) for the model.
+
+## Team inbox
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/teams/{team_id}/requests"
+  auth="Signed in"
+  summary="The team's inbox view: cross-team requests filed against tasks owned by this team. Readable by any workspace member — useful for showing the inbox in any UI surface, not just leadership tools."
+>
+  <p><strong>Query parameters:</strong> <code>status_filter</code> — optional, one of <code>PENDING</code> / <code>FULFILLED</code> / <code>REJECTED</code>. Pass <code>?status_filter=PENDING</code> to scope to actionable items.</p>
+
+  <p><strong>Response (200):</strong> a plain JSON array of <code>TaskRequestResponse</code>:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "source_task_id": "<uuid>",
+  "requested_team_id": "<uuid or null if team later deleted>",
+  "requester_member_id": "<uuid or null>",
+  "requester_name": "Alice",
+  "suggested_title": "...",
+  "suggested_description": "...",
+  "justification": "...",
+  "status": "PENDING",
+  "fulfilled_task_id": null,
+  "reject_reason": null,
+  "resolver_member_id": null,
+  "resolver_name": null,
+  "created_at": "...",
+  "resolved_at": null
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the team doesn't exist in the caller's workspace.</p>
+</EndpointCard>
+
+## Manual fulfilment
+
+These two endpoints are gated on the **source task's** team leadership, not the target team's. The rule:
+
+- A workspace owner or admin can always fulfil or reject.
+- A `MANAGER` or `LEAD` on the source task's team can fulfil or reject.
+- The head of the source team's department can fulfil or reject.
+- Anyone else is refused with `403`.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/requests/{request_id}/fulfill"
+  auth="Source-team leadership"
+  summary="Manually fulfil a PENDING request — mint the target task on the requested team and link it back to the source task with BLOCKS."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "title": "<1-200 chars, optional override of suggested_title>",
+  "description": "<up to 20000 chars, optional override of suggested_description>",
+  "priority": 0,
+  "assignee_id": "<uuid, optional>"
+}
+```
+
+  <p>Omitting <code>title</code> / <code>description</code> uses the values the requester suggested. <code>priority</code> defaults to 0; <code>assignee_id</code> can be left null to mint the target task unassigned.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>TaskRequestResponse</code> with <code>status: "FULFILLED"</code> and <code>fulfilled_task_id</code> populated.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the request doesn't exist; <code>409</code> if it has already been resolved (fulfilled or rejected); <code>403</code> per the leadership rule above; <code>422</code> if the source task no longer exists.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/requests/{request_id}/reject"
+  auth="Source-team leadership"
+  summary="Manually reject a PENDING request with an optional reason."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "reason": "<up to 2000 chars, optional>" }
+```
+
+  <p><strong>Response (200):</strong> the updated <code>TaskRequestResponse</code> with <code>status: "REJECTED"</code> and <code>reject_reason</code> populated.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the request doesn't exist; <code>409</code> if it has already been resolved; <code>403</code> per the leadership rule.</p>
+</EndpointCard>

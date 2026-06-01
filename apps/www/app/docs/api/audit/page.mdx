@@ -1,0 +1,58 @@
+# Audit
+
+A single endpoint at `/api/v1/audit/logs`. The workspace's audit log — every administrative state change in an append-only stream.
+
+The endpoint is admin-gated at the audience layer, with **further visibility narrowing** applied per the caller's role and priority. See [Concepts → Audit log](/docs/concepts) for the hierarchy.
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/audit/logs"
+  auth="Workspace admin"
+  summary="Paginated audit log. Visibility narrows server-side according to the caller's priority — owners see every row; admins see rows scoped to the part of the workspace they administer. Ordinary members get 403 at the audience gate."
+>
+  <p><strong>Visibility scope (applied server-side):</strong></p>
+
+  <ul>
+    <li><strong>Workspace owner</strong> — every row.</li>
+    <li><strong>Admin, priority ≤ 2</strong> — rows of type <code>DEPARTMENT</code>, <code>TEAM</code>, and <code>MEMBER</code>.</li>
+    <li><strong>Admin, priority ≤ 3</strong> — only <code>TEAM</code> rows for teams they directly oversee (as a team manager, or as the head of the containing department).</li>
+  </ul>
+
+  <p>The caller never sees rows their priority doesn't cover. Your integration does not need to re-filter — the rows that come back are exactly the rows the caller is entitled to see.</p>
+
+  <p><strong>Query parameters:</strong> <code>skip</code> (default 0), <code>limit</code> (default 25, max 200). The list is ordered newest-first by <code>created_at</code>.</p>
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "items": [
+    {
+      "id": "<uuid>",
+      "workspace_id": "<uuid>",
+      "actor_member_id": "<uuid or null if actor was deleted>",
+      "actor_name": "Alice Example",
+      "action": "ROLE_CHANGED",
+      "resource_type": "MEMBER",
+      "resource_id": "<uuid>",
+      "changes": { "from": "WORKSPACE_USER", "to": "WORKSPACE_ADMIN" },
+      "created_at": "..."
+    }
+  ],
+  "total": 412
+}
+```
+
+  <p><strong>Field details:</strong></p>
+
+  <ul>
+    <li><code>action</code> — one of <code>CREATED</code> / <code>UPDATED</code> / <code>DELETED</code> / <code>SUSPENDED</code> / <code>SUSPENSION_REVOKED</code> / <code>ROLE_CHANGED</code> / <code>TEAM_ASSIGNED</code> / <code>TEAM_UNASSIGNED</code>.</li>
+    <li><code>resource_type</code> — one of <code>WORKSPACE</code> / <code>DEPARTMENT</code> / <code>TEAM</code> / <code>MEMBER</code>.</li>
+    <li><code>changes</code> — a free-form JSON object whose shape depends on the action. For <code>ROLE_CHANGED</code> it's <code>{'{ from, to }'}</code>; for <code>SUSPENDED</code> it's empty; for <code>UPDATED</code> it's a field-level diff.</li>
+    <li><code>actor_member_id</code> and <code>actor_name</code> are denormalised — the row remains readable even if the acting member has since been deleted from the workspace.</li>
+  </ul>
+
+  <p><code>total</code> is the count <em>within the caller's visibility scope</em>, not the workspace-wide row count — so a priority-3 admin's <code>total</code> is the number of rows they're entitled to see, not the absolute total.</p>
+
+  <p><strong>Failure modes:</strong> <code>403</code> if the caller isn't a workspace admin or owner.</p>
+</EndpointCard>

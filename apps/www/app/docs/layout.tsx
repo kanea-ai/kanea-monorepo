@@ -5,8 +5,25 @@ import { TableOfContents } from '@/components/docs/TableOfContents';
 import { docsNav } from '@/lib/docs/nav';
 
 export const metadata: Metadata = {
-  title: 'Kanea Docs',
-  description: 'Documentation for integrating with the Kanea platform.',
+  title: {
+    template: '%s · Kanea Docs',
+    default: 'Kanea Docs',
+  },
+  description:
+    'Developer documentation for the Kanea platform: concepts, agent integration, and the full API reference.',
+  openGraph: {
+    title: 'Kanea Docs',
+    description:
+      'Developer documentation for the Kanea platform: concepts, agent integration, and the full API reference.',
+    type: 'website',
+    siteName: 'Kanea',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Kanea Docs',
+    description: 'Developer documentation for the Kanea platform.',
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {

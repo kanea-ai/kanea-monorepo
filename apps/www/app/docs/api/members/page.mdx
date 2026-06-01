@@ -1,0 +1,203 @@
+# Members
+
+Endpoints under `/api/v1/tenants/members/*`. Eight routes covering the workspace member directory: list, single fetch, the priority-scoped profile view, per-member stats, and the admin-side mutations (profile edit, suspension toggle, team assignment, password reset).
+
+For invites (how new members enter the workspace), see [Workspaces](/docs/api/workspaces). For the calling member's own profile, see [Current user](/docs/api/me).
+
+## Member directory
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tenants/members"
+  auth="Signed in"
+  summary="Paginated member listing. Workspace admins see everyone; regular members see only their teammates and themselves. Filters narrow the result within whatever scope the caller is entitled to."
+>
+  <p><strong>Query parameters:</strong></p>
+
+  <ul>
+    <li><code>name</code> — case-insensitive substring filter, max 120 chars.</li>
+    <li><code>member_id</code> — UUID filter; useful when you want a single row and don't want to fetch it via the detail endpoint.</li>
+    <li><code>role</code> — one of <code>WORKSPACE_OWNER</code> / <code>WORKSPACE_ADMIN</code> / <code>WORKSPACE_USER</code>.</li>
+    <li><code>team_id</code> — UUID filter.</li>
+    <li><code>project_id</code> — UUID filter; returns members with tasks in that project.</li>
+    <li><code>humans_only</code> — boolean, default <code>false</code>. When <code>true</code>, agents are excluded from the listing.</li>
+    <li><code>skip</code>, <code>limit</code> — pagination, default 0 / 25, max <code>limit</code> 200.</li>
+  </ul>
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "items": [
+    {
+      "id": "<uuid>",
+      "workspace_id": "<uuid>",
+      "name": "Alice Example",
+      "email": "alice@example.com",
+      "type": "HUMAN",
+      "role": "WORKSPACE_ADMIN",
+      "priority": 2,
+      "team_id": "<uuid or null>",
+      "team_role": "MANAGER",
+      "is_suspended": false,
+      "department": { "id": "<uuid>", "name": "Engineering" }
+    }
+  ],
+  "total": 47
+}
+```
+
+  <p><code>total</code> is the unfiltered count for the caller's visibility scope — useful for rendering page-number controls.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tenants/members/{member_id}"
+  auth="Signed in"
+  summary="Single-member fetch. Workspace admins can fetch any member; regular members can fetch themselves or a teammate."
+>
+  <p><strong>Response (200):</strong> the same shape as a single item from the list endpoint above.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the member doesn't exist; <code>403</code> if the caller isn't allowed to see them.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tenants/members/{member_id}/profile"
+  auth="Signed in"
+  summary="Priority-scoped profile view. The response is full for owners and same-or-higher-rank admins; reduced (id / name / email / type only) for lower-rank viewers. This is the endpoint behind clickable actor names in the audit log."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "name": "Alice Example",
+  "email": "alice@example.com",
+  "type": "HUMAN",
+  "is_limited_view": false,
+  "role": "WORKSPACE_ADMIN",
+  "priority": 2,
+  "team_id": "<uuid>",
+  "team_role": "MANAGER",
+  "is_suspended": false
+}
+```
+
+  <p>When <code>is_limited_view: true</code>, the role / priority / team_id / team_role / is_suspended fields are <code>null</code> — the caller doesn't have the reach to see them.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the member isn't in the caller's workspace; <code>403</code> if the caller can't see them at all (not even the limited view).</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tenants/members/{member_id}/stats"
+  auth="Signed in"
+  summary="Per-member task stats. Same visibility rule as the single-member fetch — admins can see anyone, regular members can see only themselves or a teammate."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "assigned_count": 12,
+  "completed_count": 47,
+  "avg_resolution_seconds": 3214.5,
+  "accuracy_percent": 86.4,
+  "last_activity_at": "...",
+  "total_tokens_used": 184523
+}
+```
+
+  <p><code>avg_resolution_seconds</code>, <code>accuracy_percent</code>, and <code>last_activity_at</code> are <code>null</code> for members with no completed work or no ratings yet.</p>
+</EndpointCard>
+
+## Admin mutations
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tenants/members/{member_id}"
+  auth="Workspace admin"
+  summary="Edit a member's display name, workspace role, and/or priority. Owners and admins can call this. The last-owner invariant is enforced server-side — you cannot demote the only WORKSPACE_OWNER."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars or null to leave unchanged>",
+  "role": "WORKSPACE_ADMIN",
+  "priority": 3
+}
+```
+
+  <p>All fields are optional; omit a field to leave it untouched. Priority range is 1–100.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>MemberResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the member isn't in the workspace; <code>403</code> if the caller isn't a workspace admin or the operation would violate the last-owner invariant.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tenants/members/{member_id}/suspension"
+  auth="Workspace admin"
+  summary="Toggle a member's suspension flag. A suspended member cannot use their workspace token (the suspension is enforced at the auth gate). You cannot suspend yourself; the last active owner cannot be suspended either."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "is_suspended": true }
+```
+
+  <p><strong>Response (200):</strong> the updated <code>MemberResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>403</code> if the caller isn't a workspace admin, is suspending themselves, or is suspending the last active owner; <code>404</code> if the member isn't in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tenants/members/{member_id}/team"
+  auth="Signed in"
+  summary="Assign a member to a team and set their intra-team role. The runtime RBAC is more nuanced than the audience label — see below."
+>
+  <p><strong>Runtime RBAC:</strong> workspace owners and admins can move any member. A department head can move members into teams under their own department. Anyone else is refused.</p>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "team_id": "<uuid or null to unassign>",
+  "team_role": "MEMBER"
+}
+```
+
+  <p><code>team_role</code> must be one of <code>MANAGER</code> / <code>LEAD</code> / <code>MEMBER</code> when <code>team_id</code> is set, and <code>null</code> when <code>team_id</code> is <code>null</code>.</p>
+
+  <p><strong>Atomic invariants enforced server-side:</strong></p>
+
+  <ul>
+    <li>Promoting a member to <code>MANAGER</code> or <code>LEAD</code> on a team that already has one auto-demotes the previous holder to <code>MEMBER</code> in the same transaction.</li>
+    <li>A member who is currently a department head cannot be assigned a team (<code>409</code>). Clear them as head first via the departments API.</li>
+  </ul>
+
+  <p><strong>Response (200):</strong> the updated <code>MemberResponse</code>, with the resolved <code>department</code> embedded so a client can refresh the org tree without a follow-up call.</p>
+
+  <p><strong>Failure modes:</strong> <code>409</code> if the member is currently a department head; <code>404</code> if the member isn't in the workspace; <code>403</code> if the caller doesn't have reach.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tenants/members/{member_id}/password"
+  auth="Workspace admin"
+  summary="Admin-side password reset. Useful after an invite when the underlying user record is fresh. The admin cannot reset their own password through this endpoint — use POST /me/password — and the operation refuses for users that exist in other workspaces (where the credential isn't this admin's to overwrite)."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "new_password": "<8-256 chars>" }
+```
+
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>403</code> for self-reset attempts, cross-workspace identities, or non-admin callers; <code>404</code> if the member isn't in the workspace.</p>
+</EndpointCard>

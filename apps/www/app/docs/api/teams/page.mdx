@@ -1,0 +1,99 @@
+# Teams
+
+Endpoints under `/api/v1/teams/*`. Four routes — list and full CRUD for teams.
+
+A team groups workspace members who collaborate on a shared backlog. Teams optionally belong to a department; see [Concepts → Departments and teams](/docs/concepts) for the model.
+
+## Reads
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/teams"
+  auth="Signed in"
+  summary="Paginated list of teams in the workspace. Any signed-in member can read. Optional scope to a single department."
+>
+  <p><strong>Query parameters:</strong> <code>department_id</code> (optional UUID — when set, only teams in that department), <code>skip</code> (default 0), <code>limit</code> (default 25, max 200).</p>
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "items": [
+    {
+      "id": "<uuid>",
+      "workspace_id": "<uuid>",
+      "name": "Backend",
+      "description": "...",
+      "department_id": "<uuid or null>",
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total": 12
+}
+```
+</EndpointCard>
+
+## Mutations
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/teams"
+  auth="Workspace admin (priority ≤ 3)"
+  summary="Create a new team. Optionally attach it to a department in the same call."
+>
+  <p><strong>Runtime RBAC:</strong> workspace owners, OR workspace admins with priority ≤ 3.</p>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars>",
+  "description": "<up to 20000 chars, optional>",
+  "department_id": "<uuid, optional>"
+}
+```
+
+  <p><strong>Response (201):</strong> the created <code>TeamResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>409</code> if a team with that name already exists in the workspace; <code>404</code> if <code>department_id</code> doesn't exist; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/teams/{team_id}"
+  auth="Workspace admin (priority ≤ 3)"
+  summary="Update a team's name, description, and/or department assignment. Setting department_id to null detaches the team."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars or omit>",
+  "description": "<up to 20000 chars or null or omit>",
+  "department_id": "<uuid or null or omit>"
+}
+```
+
+  <p><strong>Response (200):</strong> the updated <code>TeamResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the team or the new department doesn't exist; <code>409</code> on a name conflict; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/teams/{team_id}"
+  auth="Workspace admin (priority ≤ 3)"
+  summary="Hard delete the team."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the team doesn't exist; <code>403</code> per the RBAC rule.</p>
+</EndpointCard>
+
+<Callout variant="note" title="Member team assignment lives elsewhere">
+  Moving a member onto or off a team is a member-level operation,
+  not a team-level one. See [`PATCH /tenants/members/{member_id}/team`](/docs/api/members)
+  — that endpoint also enforces the one-`MANAGER` / one-`LEAD` invariants
+  with automatic demotion.
+</Callout>

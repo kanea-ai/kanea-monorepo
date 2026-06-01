@@ -1,0 +1,162 @@
+# Projects
+
+Endpoints under `/api/v1/projects/*`. Seven routes covering project CRUD, an aggregated history bundle, and a project-scoped task listing.
+
+A project is a logical grouping of tasks — a feature, an initiative, a customer commitment. A task can optionally belong to one project.
+
+## Listing and CRUD
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/projects"
+  auth="Signed in"
+  summary="Paginated list of projects in the caller's workspace. Archived projects are hidden by default."
+>
+  <p><strong>Query parameters:</strong> <code>include_archived</code> (boolean, default <code>false</code>), <code>skip</code> (default 0), <code>limit</code> (default 25, max 200).</p>
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "items": [
+    {
+      "id": "<uuid>",
+      "workspace_id": "<uuid>",
+      "name": "OAuth refresh refactor",
+      "description": "...",
+      "status": "ACTIVE",
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "total": 14
+}
+```
+
+  <p><code>status</code> is one of <code>ACTIVE</code> or <code>ARCHIVED</code>.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/projects"
+  auth="Signed in"
+  summary="Create a new project in the workspace."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-200 chars>",
+  "description": "<up to 20000 chars, optional>"
+}
+```
+
+  <p><strong>Response (201):</strong> the created <code>ProjectResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>409</code> if a project with that name already exists in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/projects/{project_id}"
+  auth="Signed in"
+  summary="Fetch a single project. Cross-workspace lookups surface as 404."
+>
+  <p><strong>Response (200):</strong> a single <code>ProjectResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the project doesn't exist in the caller's workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/projects/{project_id}"
+  auth="Signed in"
+  summary="Partial update — name, description, and/or status. Fields omitted from the body are left untouched."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-200 chars or omit>",
+  "description": "<up to 20000 chars or omit>",
+  "status": "ARCHIVED"
+}
+```
+
+  <p><strong>Response (200):</strong> the updated <code>ProjectResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the project doesn't exist; <code>409</code> if the new name conflicts with another project in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/projects/{project_id}"
+  auth="Signed in"
+  summary="Hard delete a project."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the project doesn't exist.</p>
+</EndpointCard>
+
+## Project task listings
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/projects/{project_id}/tasks"
+  auth="Signed in"
+  summary="Tasks scoped to this project. Tenant isolation is enforced — a project from another workspace surfaces as 404 without further inspection."
+>
+  <p><strong>Response (200):</strong> a plain JSON array of the same <code>TaskResponse</code> shape documented on the <a href="/docs/api/tasks">Tasks</a> page.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the project isn't in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/projects/{project_id}/history"
+  auth="Signed in"
+  summary="Single-shot bundle for an agent analysing a project. Returns the project, aggregate summary stats, and per-task history (activities, comments, ratings) — saves N round-trips when reconstructing context."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "project": { /* ProjectResponse */ },
+  "summary": {
+    "total_tasks": 47,
+    "by_status": { "DONE": 32, "IN_PROGRESS": 8, "IN_REVIEW": 4, "PENDING": 3 },
+    "blocked_now": 1,
+    "avg_resolution_seconds": 4218.5,
+    "total_tokens_used": 924013,
+    "rated_count": 32,
+    "avg_rating": 82.4
+  },
+  "tasks": [
+    {
+      "id": "<uuid>",
+      "public_id": "WS-141",
+      "title": "...",
+      "status": "DONE",
+      "is_blocked": false,
+      "blocked_reason": null,
+      "description": "...",
+      "priority": 3,
+      "assignee_id": "<uuid>",
+      "project_id": "<uuid>",
+      "team_id": "<uuid>",
+      "tokens_used": 19453,
+      "created_at": "...",
+      "completed_at": "...",
+      "rating": { /* TaskRatingResponse — see /docs/api/tasks */ },
+      "activities": [ /* list of activity entries — see /docs/api/tasks */ ],
+      "comments": [ /* list of comments — see /docs/api/tasks */ ]
+    }
+  ]
+}
+```
+
+  <p>The <code>summary.by_status</code> map only includes statuses that have non-zero counts.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the project doesn't exist in the workspace.</p>
+</EndpointCard>

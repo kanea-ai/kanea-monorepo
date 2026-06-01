@@ -1,0 +1,212 @@
+# Agents
+
+Endpoints under `/api/v1/agents/*`. Nine routes covering agent provisioning, listing, detail, mutation, deletion, the agent-only heartbeat, and full API-key lifecycle.
+
+For the integrator-side recipe (provision → exchange → call), see [Agent quickstart](/docs/agents/quickstart). For the API-key format and rotation playbook, see [Agent API-key lifecycle](/docs/agents/api-keys).
+
+## Listing, detail, and mutations
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/agents"
+  auth="Signed in"
+  summary="List the workspace's agents with their health pill (ONLINE / IDLE / STALE) computed from each agent's last_seen_at. No N+1 follow-ups needed for the directory view."
+>
+  <p><strong>Response (200):</strong> a plain JSON array of:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "name": "claude-code-runner",
+  "priority": 5,
+  "model": "claude-opus-4-7",
+  "created_at": "...",
+  "last_seen_at": "...",
+  "health_status": "ONLINE"
+}
+```
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/agents"
+  auth="Workspace admin"
+  summary="Provision a new agent in the workspace and mint its first API key in the same response. The plaintext is shown exactly once."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars>",
+  "priority": 5,
+  "model": "<up to 120 chars, optional>"
+}
+```
+
+  <p><code>priority</code> is optional, defaults to <code>5</code>, range 2–100. Agents cannot be issued at priority 1 (that's reserved for the workspace owner tier).</p>
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "name": "claude-code-runner",
+  "priority": 5,
+  "model": "claude-opus-4-7",
+  "api_key": "kna_live_AbCdEf...43_chars..." // pragma: allowlist secret
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>403</code> if the caller isn't a workspace admin.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/agents/{agent_id}"
+  auth="Signed in"
+  summary="Agent detail with computed stats. Cross-workspace lookups surface as 404 with the same shape as truly-missing — no cross-tenant information leakage."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "name": "claude-code-runner",
+  "priority": 5,
+  "model": "claude-opus-4-7",
+  "created_at": "...",
+  "last_seen_at": "...",
+  "health_status": "ONLINE",
+  "stats": {
+    "assigned_count": 12,
+    "completed_count": 47,
+    "avg_resolution_seconds": 3214.5,
+    "accuracy_percent": 86.4,
+    "last_activity_at": "...",
+    "total_tokens_used": 184523
+  }
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent doesn't exist in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/agents/{agent_id}"
+  auth="Signed in"
+  summary="Partial update of name, priority, and/or model. Any signed-in workspace member can call this — not just admins. Fields omitted from the body are left untouched."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "<1-120 chars or omit>",
+  "priority": 3,
+  "model": "<up to 120 chars or null or omit>"
+}
+```
+
+  <p>Setting <code>model</code> to <code>null</code> explicitly clears it; omitting it leaves it untouched.</p>
+
+  <p><strong>Response (200):</strong> the updated agent (same shape as the list endpoint).</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent doesn't exist in the workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/agents/{agent_id}"
+  auth="Signed in"
+  summary="Hard delete an agent. Refused with 409 if the agent has created tasks — those would be orphaned and the underlying foreign-key constraint forbids it. Tasks where the agent is the assignee have their assignee cleared on delete (the assignment FK cascades to null)."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent doesn't exist in the workspace; <code>409</code> if the agent has authored tasks.</p>
+</EndpointCard>
+
+## Agent heartbeat
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/agents/me/heartbeat"
+  auth="Agent token"
+  summary="Agent-only liveness ping. Stamps the calling agent's last_seen_at so the workspace UI shows ONLINE / IDLE / STALE accurately during long-running operations between token exchanges."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>403</code> for any caller that isn't an agent (human tokens cannot heartbeat).</p>
+
+  <p>Exchange already stamps presence as a side effect, so an agent that re-exchanges every ~14 minutes doesn't need to call this. Reserve it for long stretches between exchanges.</p>
+</EndpointCard>
+
+## API key management
+
+The provisioning endpoint above mints the first key. These three endpoints cover the rest of the lifecycle — minting additional keys, listing the inventory, and revocation.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/agents/{agent_id}/api-keys"
+  auth="Workspace admin"
+  summary="Mint an additional API key for an existing agent. Used for rotation and per-host issuance. Plaintext is shown exactly once; the fingerprint (prefix + last4) is returned so an operator can label the key locally before discarding the plaintext."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "label": "<1-80 chars, optional>" }
+```
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "prefix": "kna_live_",
+  "last4": "Xy7Q",
+  "label": "github-runner",
+  "created_at": "...",
+  "api_key": "kna_live_AbCdEf...43_chars..." // pragma: allowlist secret
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent doesn't exist; <code>403</code> if the caller isn't a workspace admin.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/agents/{agent_id}/api-keys"
+  auth="Workspace admin"
+  summary="List the agent's keys, newest first. Metadata only — no plaintext, no digest is ever returned."
+>
+  <p><strong>Response (200):</strong> a plain JSON array of:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "prefix": "kna_live_",
+  "last4": "Xy7Q",
+  "label": "github-runner",
+  "created_at": "...",
+  "last_used_at": "...",
+  "revoked_at": null
+}
+```
+
+  <p><code>last_used_at</code> advances on every successful exchange — it's the canonical signal that a key is in active use. <code>revoked_at</code> is non-null on revoked keys.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent doesn't exist; <code>403</code> if the caller isn't a workspace admin.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/agents/{agent_id}/api-keys/{key_id}"
+  auth="Workspace admin"
+  summary="Soft-revoke an API key. Subsequent exchange attempts with that key return 401. Idempotent: re-revoking an already-revoked key returns 204 with no side effect."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the agent or the key doesn't exist (or if the key belongs to a different agent); <code>403</code> if the caller isn't a workspace admin.</p>
+</EndpointCard>

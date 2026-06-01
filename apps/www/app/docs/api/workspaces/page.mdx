@@ -1,0 +1,115 @@
+# Workspaces
+
+Endpoints under `/api/v1/workspaces/*` and `/api/v1/tenants/invites/*`. Four routes covering the one workspace-level mutation (rename) and the invite lifecycle (create, preview, accept).
+
+For member management *inside* a workspace, see [Members](/docs/api/members). For self-service workspace creation by an already-signed-in user, see [`POST /me/workspaces`](/docs/api/me).
+
+## Workspace settings
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/workspaces/{id}"
+  auth="Signed in"
+  summary="Rename the workspace. Only the workspace owner can rename their workspace; other callers get 404 (so a stranger cannot probe for the existence of workspaces they don't belong to)."
+>
+  <p><strong>Runtime RBAC:</strong> the calling member must be the workspace's <code>WORKSPACE_OWNER</code> AND the target <code>id</code> must be the caller's own workspace. Either condition failing surfaces as <code>404</code>.</p>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "name": "<1-120 chars>" }
+```
+
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "name": "New Name",
+  "slug": "new-name",
+  "task_prefix": "NN",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the workspace doesn't exist or the caller can't see it; <code>403</code> if the caller is in the workspace but isn't the owner; <code>409</code> if the new name is already taken platform-wide.</p>
+</EndpointCard>
+
+## Invites
+
+The invite flow is the standard way to bring a new member into an existing workspace. An admin mints an invite, sends the URL to the prospective member, and the prospective member completes their signup by accepting it.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tenants/invites"
+  auth="Workspace admin"
+  summary="Create an invite for a new workspace member. The response carries a one-time token + an accept URL — the token cannot be read back later (subsequent fetches hash it before lookup)."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "email": "newmember@example.com",
+  "role": "WORKSPACE_USER"
+}
+```
+
+  <p><code>role</code> is optional and defaults to <code>WORKSPACE_USER</code>. It can be <code>WORKSPACE_ADMIN</code> or <code>WORKSPACE_USER</code>. Owners cannot be invited — additional owners are added by promoting an existing admin via the members API.</p>
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "email": "newmember@example.com",
+  "role": "WORKSPACE_USER",
+  "expires_at": "...",
+  "accept_url": "https://app.kanea.ai/invite/<token>",
+  "token": "<one-time token, shown once>"
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>403</code> if the caller isn't a workspace admin.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tenants/invites/{token}"
+  auth="Public"
+  summary="Reveal minimal information about an invite — workspace name, the invited email, the role, the expiry. Knowing the token is the only check; a leaked token reveals nothing more than these fields."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "workspace_name": "Example Workspace",
+  "email": "newmember@example.com",
+  "role": "WORKSPACE_USER",
+  "expires_at": "..."
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the token doesn't match any invite; <code>410</code> if the invite has expired; <code>409</code> if the invite has already been accepted.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tenants/invites/{token}/accept"
+  auth="Public"
+  summary="Anonymous accept flow. Creates the user record if it doesn't exist, sets the supplied password, joins them to the workspace at the invited role, and returns a workspace token. The caller is signed in to the new workspace by the time the response lands."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "full_name": "New Member",
+  "password": "<8-256 chars>"
+}
+```
+
+  <p><strong>Response (201):</strong> a workspace-scoped token bundle.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> for an unknown token; <code>410</code> for an expired invite; <code>409</code> if the invite has already been accepted OR the email is registered under a conflicting global identity.</p>
+</EndpointCard>

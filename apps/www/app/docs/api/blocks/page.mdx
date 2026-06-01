@@ -1,0 +1,31 @@
+# Blocks
+
+A single endpoint at `/api/v1/blocks`. A workspace-wide view of currently-blocked tasks, optimised for top-down review by team leadership.
+
+This is distinct from `GET /api/v1/tasks?blocked_only=true` — the Tasks listing is intended for unpaginated board consumption, while the Blocks listing is paginated and sort-controllable for the leadership exception queue.
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/blocks"
+  auth="Signed in"
+  summary="Paginated, filterable, sortable list of blocked tasks. Visibility mirrors GET /tasks: workspace admins see everyone's blocked tasks; regular members see only their own assignments — passing a different assignee_id from a regular member's token is silently overridden."
+>
+  <p><strong>Query parameters:</strong></p>
+
+  <ul>
+    <li><code>skip</code> — default 0, ≥ 0.</li>
+    <li><code>limit</code> — default 25, range 1–200.</li>
+    <li><code>status</code> — one of <code>PENDING</code> / <code>IN_PROGRESS</code> / <code>IN_REVIEW</code> / <code>DONE</code> / <code>CANCELLED</code>; optional.</li>
+    <li><code>team_id</code>, <code>project_id</code>, <code>assignee_id</code> — UUID filters, all optional.</li>
+    <li><code>sort</code> — one of <code>priority</code> (default) / <code>newest</code> / <code>oldest</code>.</li>
+  </ul>
+
+  <p><strong>Response (200):</strong> a <code>Page</code> wrapping the same <code>TaskResponse</code> shape documented on the <a href="/docs/api/tasks">Tasks</a> page:</p>
+
+```json
+{
+  "items": [ /* TaskResponse objects */ ],
+  "total": 23
+}
+```
+</EndpointCard>

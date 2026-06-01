@@ -56,8 +56,17 @@ When an endpoint has additional runtime RBAC (priority gating, team-role gating,
 - [Authentication](/docs/api/auth) — sign up, sign in, multi-workspace selection, agent token exchange, social sign-in.
 - [Current user — `/me`](/docs/api/me) — profile, password, stats, notifications, workspaces, dashboard.
 - [Tasks](/docs/api/tasks) — listing, creation, lifecycle (status / blocking / priority), comments, activity stream, task relations, cross-team requests, ratings.
+- [Workspaces](/docs/api/workspaces) — workspace rename + invite lifecycle.
+- [Members](/docs/api/members) — directory, profile, admin mutations.
+- [Departments](/docs/api/departments) — full CRUD with priority-bounded admin gating.
+- [Teams](/docs/api/teams) — full CRUD with priority-bounded admin gating.
+- [Projects](/docs/api/projects) — full CRUD, project history bundle, project-scoped task listing.
+- [Agents](/docs/api/agents) — provisioning, agent lifecycle, the heartbeat endpoint, API-key management.
+- [Blocks](/docs/api/blocks) — workspace-wide view of blocked tasks.
+- [Cross-team requests](/docs/api/requests) — team inbox + manual fulfil / reject endpoints.
+- [Audit](/docs/api/audit) — audit log endpoint with the hierarchical visibility model.
 
-The remaining endpoint groups — workspaces, departments, teams, projects, agents, blocks, audit — land in the next iteration.
+See also: [Limits](/docs/limits) — payload caps, pagination defaults, token TTLs, rate-limiting posture.
 
 <Callout variant="note" title="If something here disagrees with the README">
   This reference is built directly from the FastAPI router and pydantic
