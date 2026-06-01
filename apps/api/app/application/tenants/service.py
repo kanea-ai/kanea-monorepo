@@ -376,6 +376,12 @@ class InviteService:
         if target is None or target.workspace_id != principal.workspace_id:
             raise InvalidMemberTypeError("member not found")
 
+        # Rank gate (#51): an ADMIN may only mutate a member of equal-or-
+        # lower rank. Owners bypass. Equal-rank ADMINs CAN act on each
+        # other (inclusive >=); the workspace owner is the structural
+        # backstop for the mutual-lockout edge case.
+        self._enforce_admin_rank(principal, target)
+
         # Last-owner protection: don't allow a role change that would
         # leave the workspace without any OWNER. We only need this
         # check when the target IS currently OWNER and the new role
@@ -483,6 +489,15 @@ class InviteService:
         target = await self.members.get_by_id(member_id)
         if target is None or target.workspace_id != principal.workspace_id:
             raise InvalidMemberTypeError("member not found")
+
+        # Rank gate (#51): admins cannot reassign / re-role an up-rank
+        # member. Owners bypass. DELIBERATELY APPLIED ONLY TO THE ADMIN
+        # BRANCH — dept-head reach is a separate scope-based mechanism
+        # (the inheritance check below). Whether dept-heads should be
+        # subject to a rank gate too is a different product question;
+        # this commit doesn't smuggle it in.
+        if is_admin:
+            self._enforce_admin_rank(principal, target)
 
         # The team must belong to the same workspace; the FK alone
         # accepts cross-tenant ids so we add an explicit check.
@@ -642,6 +657,10 @@ class InviteService:
         if target is None or target.workspace_id != principal.workspace_id:
             raise InvalidMemberTypeError("member not found")
 
+        # Rank gate (#51): admins cannot suspend up-rank members.
+        # Owners bypass.
+        self._enforce_admin_rank(principal, target)
+
         if request.is_suspended and target.id == principal.member_id:
             raise ForbiddenError("you cannot suspend your own membership")
 
@@ -716,6 +735,13 @@ class InviteService:
             # they auth via agent_secret.
             raise InvalidMemberTypeError("agents do not have a password to set")
 
+        # Rank gate (#51): admins cannot reset an up-rank member's
+        # password. Owners bypass. Applied here BEFORE the org-scope
+        # check so the failure surface is "you cannot act on a higher-
+        # rank member" rather than the less-specific org-scope message
+        # when both would fail.
+        self._enforce_admin_rank(principal, target)
+
         # Org-scope check for non-owner admins. Owners skip this —
         # they have authority over the whole workspace.
         if principal.role is MemberRole.WORKSPACE_ADMIN:
@@ -729,6 +755,38 @@ class InviteService:
             )
 
         await self.users.update_password(target.user_id, self.hasher.hash(new_password))
+
+    @staticmethod
+    def _enforce_admin_rank(principal: Principal, target: Member) -> None:
+        """Admin-power rank gate for member-mutation paths (#51).
+
+        Rule (INCLUSIVE >=): an ADMIN may mutate a member whose
+        priority is numerically >= their own — i.e. equal-or-lower
+        rank. Anyone strictly higher rank (smaller priority number)
+        is off-limits. WORKSPACE_OWNER bypasses entirely; the owner
+        is the top of the access tree and the structural backstop
+        for the equal-rank mutual-action edge case.
+
+        DELIBERATELY DISTINCT from
+        ``tasks.service.TaskService._enforce_hierarchy``, which uses
+        STRICT > for delegation (work flows strictly down-rank). Two
+        rules, two helpers — do NOT unify them. Delegation handing
+        work down is a different mechanism from administrative
+        authority covering peers, and a future reader is likely to be
+        tempted to merge them on syntactic similarity. See #51 for
+        the design rationale on the asymmetry.
+
+        Equal-rank consequence: under inclusive >=, two priority-2
+        admins can act on each other, including mutually. This is
+        intentional. The owner-always-exists invariant (workspace
+        creation mints OWNER + last-owner protection + last-active-
+        owner protection + HUMAN-owner CHECK constraint) guarantees
+        a structural backstop to un-stick a mutual lockout.
+        """
+        if principal.role is MemberRole.WORKSPACE_OWNER:
+            return
+        if target.priority < principal.priority:
+            raise ForbiddenError("you cannot act on a member of higher rank than yourself")
 
     async def _require_org_scope_match(self, principal: Principal, target: Member) -> None:
         """Admin scope check: principal and target must share a team

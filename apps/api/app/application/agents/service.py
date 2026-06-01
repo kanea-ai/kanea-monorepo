@@ -145,7 +145,15 @@ class AgentService:
         self, agent_id: UUID, request: UpdateAgentRequest, principal: Principal
     ) -> AgentResponse:
         """Partial update of name/priority/model. id stays immutable; an
-        empty body is a 200 no-op (Pydantic happily accepts {})."""
+        empty body is a 200 no-op (Pydantic happily accepts {}).
+
+        Admin-gating is at the route layer (WorkspaceAdminDep, per #46);
+        the service re-asserts the role here as belt-and-braces, same
+        pattern as ``create_agent``. Agents must not be reconfigured
+        by non-admin members regardless of how the route is wired.
+        """
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
         await self._load_workspace_agent(agent_id, principal)
 
         # Distinguish "model omitted from body" (leave alone) from "model
@@ -167,7 +175,13 @@ class AgentService:
         so attempting the delete would IntegrityError anyway — we surface
         the precondition failure with a clearer error). Tasks where the
         agent is the *assignee* get assignee_id set to NULL via the FK
-        cascade, preserving their history."""
+        cascade, preserving their history.
+
+        Admin-gating is at the route layer (WorkspaceAdminDep, per #46);
+        the service re-asserts the role here as belt-and-braces.
+        """
+        if principal.role not in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
+            raise ForbiddenError("workspace owner or admin role required")
         await self._load_workspace_agent(agent_id, principal)
         if await self.members_for_listing.has_created_tasks(agent_id):
             raise AgentHasCreatedTasksError(

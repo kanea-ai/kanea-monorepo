@@ -241,10 +241,23 @@ resource "google_cloud_run_v2_service" "svc" {
     ]
   }
 
+  # Cloud Run resolves each ``secret_key_ref`` mount eagerly at
+  # revision creation time; if the API service account hasn't been
+  # granted ``secretmanager.secretAccessor`` on the underlying secret
+  # by then, the revision fails to boot with a 503 instead of waiting
+  # for the IAM binding to propagate. On a fresh apply Terraform has
+  # to be told which accessors must exist BEFORE this service is
+  # rolled out — implicit FK-style ordering isn't enough across
+  # different resource types. Missing one entry here = first-apply
+  # boot failure on the affected revision. Every secret mounted on
+  # the API service (see ``api`` env block above) needs its accessor
+  # listed below. (#48)
   depends_on = [
     google_secret_manager_secret_iam_member.api_db_url_accessor,
     google_secret_manager_secret_iam_member.api_google_oauth_accessor,
     google_secret_manager_secret_iam_member.api_github_oauth_accessor,
+    google_secret_manager_secret_iam_member.api_agent_api_key_pepper_accessor,
+    google_secret_manager_secret_iam_member.api_jwt_secret_accessor,
   ]
 }
 
