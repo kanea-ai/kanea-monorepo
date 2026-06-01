@@ -218,6 +218,48 @@ async def test_delegate_emits_delegated(
     assert persisted.payload == {"from": None, "to": str(target_id)}
 
 
+async def test_delegate_reassign_emits_previous_assignee_in_from(
+    service: TaskService,
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    activities: AsyncMock,
+) -> None:
+    """Reassignment (assignee_id was already set) records the previous
+    assignee uuid in the payload's ``from`` field — distinct from the
+    first-assignment case where ``from`` is None. The activity-timeline
+    UI uses this to render 'delegated from <name> to <name>' rather
+    than 'assigned to <name>', giving the reader the full transition."""
+    from app.domain.entities import Member
+    from app.domain.enums import MemberType
+
+    p = make_principal(priority=1)
+    previous_assignee_id = uuid4()
+    new_target_id = uuid4()
+    task = make_task(workspace_id=p.workspace_id, assignee_id=previous_assignee_id)
+
+    members.get_by_id.return_value = Member(
+        id=new_target_id,
+        workspace_id=p.workspace_id,
+        type=MemberType.AGENT,
+        name="new-bot",
+        priority=5,
+        email=None,
+    )
+    task_repo.get_by_id.return_value = task
+    task_repo.assign.return_value = make_task(
+        task_id=task.id, workspace_id=p.workspace_id, assignee_id=new_target_id
+    )
+
+    await service.delegate(task.id, DelegateTaskRequest(member_id=new_target_id), p)
+
+    persisted = activities.create.await_args.args[0]
+    assert persisted.event_type is TaskActivityType.DELEGATED
+    assert persisted.payload == {
+        "from": str(previous_assignee_id),
+        "to": str(new_target_id),
+    }
+
+
 # ---------- PROJECT_CHANGED / TEAM_CHANGED ----------
 
 
@@ -305,3 +347,139 @@ async def test_rate_emits_rated(
         if call.args[0].event_type is TaskActivityType.RATED
     )
     assert rated_activity.payload == {"score": 85, "feedback": "solid"}
+
+
+# ---------- Read-time name resolution on DELEGATED rows ----------
+#
+# These pin the contract the UI consumes: the activity feed renders
+# "delegated from <name> to <name>" off the denormalised fields the
+# server populates at read time, bypassing the per-row /tenants/members
+# lookup that 403s for non-admin cross-team callers. Mirrors the
+# TaskResponse.assignee_name pattern one component over.
+
+
+async def test_activity_response_resolves_delegated_member_names(
+    service: TaskService,
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    activities: AsyncMock,
+) -> None:
+    """When the activity feed returns a DELEGATED row, the response
+    carries ``from_member_name`` and ``to_member_name`` populated from
+    the members repo — driving the named link in the timeline UI."""
+    from app.domain.entities import Member, TaskActivity
+    from app.domain.enums import MemberType
+
+    p = make_principal(priority=1)
+    task = make_task(workspace_id=p.workspace_id)
+    task_repo.get_by_id.return_value = task
+    from_id = uuid4()
+    to_id = uuid4()
+    actor_id = p.member_id
+
+    def _member(member_id, name):
+        return Member(
+            id=member_id,
+            workspace_id=p.workspace_id,
+            type=MemberType.HUMAN,
+            name=name,
+            priority=3,
+            email=f"{name}@kanea.ai",
+        )
+
+    by_id = {
+        from_id: _member(from_id, "alice"),
+        to_id: _member(to_id, "bob"),
+        actor_id: _member(actor_id, "ceo"),
+    }
+    members.get_by_id.side_effect = lambda mid: by_id.get(mid)
+
+    row = TaskActivity(
+        id=uuid4(),
+        task_id=task.id,
+        actor_member_id=actor_id,
+        event_type=TaskActivityType.DELEGATED,
+        payload={"from": str(from_id), "to": str(to_id)},
+        created_at=datetime.now(UTC),
+    )
+    activities.list_for_task.return_value = [row]
+
+    [response] = await service.list_activity(task.id, p)
+
+    assert response.event_type is TaskActivityType.DELEGATED
+    assert response.actor_name == "ceo"
+    assert response.from_member_name == "alice"
+    assert response.to_member_name == "bob"
+
+
+async def test_activity_response_delegated_name_is_null_when_member_missing(
+    service: TaskService,
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    activities: AsyncMock,
+) -> None:
+    """Defensive: a DELEGATED row whose member id can no longer be
+    resolved (deleted, legacy) yields ``to_member_name=None`` on the
+    response. The UI falls back to a truncated uuid label (matches the
+    'Former member' shape A2 introduced on the assignee cell)."""
+    from app.domain.entities import TaskActivity
+
+    p = make_principal(priority=1)
+    task = make_task(workspace_id=p.workspace_id)
+    task_repo.get_by_id.return_value = task
+    orphan_to_id = uuid4()
+    members.get_by_id.return_value = None  # every lookup misses
+
+    row = TaskActivity(
+        id=uuid4(),
+        task_id=task.id,
+        actor_member_id=None,
+        event_type=TaskActivityType.DELEGATED,
+        payload={"from": None, "to": str(orphan_to_id)},
+        created_at=datetime.now(UTC),
+    )
+    activities.list_for_task.return_value = [row]
+
+    [response] = await service.list_activity(task.id, p)
+
+    assert response.event_type is TaskActivityType.DELEGATED
+    assert response.from_member_name is None
+    assert response.to_member_name is None
+
+
+async def test_activity_response_non_delegated_skips_assignee_name_resolution(
+    service: TaskService,
+    task_repo: AsyncMock,
+    members: AsyncMock,
+    activities: AsyncMock,
+) -> None:
+    """Non-DELEGATED rows leave from_member_name / to_member_name as
+    None and don't trigger payload-id lookups. Pins that we don't try
+    to interpret another event type's payload as if it held assignee
+    uuids — e.g. STATUS_CHANGED's {from, to} are status strings, not
+    member ids."""
+    from app.domain.entities import TaskActivity
+
+    p = make_principal(priority=1)
+    task = make_task(workspace_id=p.workspace_id)
+    task_repo.get_by_id.return_value = task
+
+    row = TaskActivity(
+        id=uuid4(),
+        task_id=task.id,
+        actor_member_id=None,
+        event_type=TaskActivityType.STATUS_CHANGED,
+        payload={"from": "PENDING", "to": "IN_PROGRESS"},
+        created_at=datetime.now(UTC),
+    )
+    activities.list_for_task.return_value = [row]
+
+    [response] = await service.list_activity(task.id, p)
+
+    assert response.event_type is TaskActivityType.STATUS_CHANGED
+    assert response.from_member_name is None
+    assert response.to_member_name is None
+    # Actor lookup is allowed (actor_member_id=None here → not called);
+    # what we're pinning is that the payload's "from"/"to" strings
+    # weren't shoved into the members repo as uuid candidates.
+    members.get_by_id.assert_not_called()

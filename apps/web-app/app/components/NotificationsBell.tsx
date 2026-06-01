@@ -16,7 +16,23 @@ import {
 } from '../lib/queries';
 import type { NotificationItem } from '../lib/api';
 
-export function NotificationsBell() {
+/** Where the dropdown panel anchors relative to the bell.
+ *  - 'right' (default): the panel's right edge aligns with the bell —
+ *    use when the bell sits near the RIGHT edge of the viewport (mobile
+ *    top bar). The 22rem panel extends leftward.
+ *  - 'left': the panel's left edge aligns with the bell — use when the
+ *    bell sits in a LEFT-side surface (desktop sidebar) where the
+ *    default 'right' anchor would overflow the left of the screen.
+ *  The component does not pick this dynamically because the bell's
+ *  surrounding layout dictates which side has space; callers pass the
+ *  right one for their context. */
+type Alignment = 'left' | 'right';
+
+interface NotificationsBellProps {
+  align?: Alignment;
+}
+
+export function NotificationsBell({ align = 'right' }: NotificationsBellProps = {}) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const { data: count } = useUnreadCount();
@@ -55,7 +71,11 @@ export function NotificationsBell() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-40 mt-2 w-[22rem] rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div
+          className={`absolute z-40 mt-2 w-[22rem] max-w-[calc(100vw-1rem)] rounded-lg border border-slate-200 bg-white shadow-xl ${
+            align === 'left' ? 'left-0' : 'right-0'
+          }`}
+        >
           <header className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
             <span className="text-sm font-semibold text-slate-900">Notifications</span>
             <button
@@ -95,7 +115,11 @@ export function NotificationsBell() {
 }
 
 function Row({ item, onOpen }: { item: NotificationItem; onOpen: () => void }) {
-  const verb = item.type === 'MENTION_COMMENT' ? 'commented' : 'mentioned you';
+  // CROSS_TEAM_REQUEST rows deep-link to the newly-minted target task
+  // (source_task_id on the notification points at the target task —
+  // where the recipient's triage action happens, the Delegate control
+  // is right there). For mention rows the existing behaviour stands.
+  const verb = describeNotificationVerb(item.type);
   const actor = item.source_member_name ?? 'Someone';
   const target = item.source_task_id ? `/tasks/${item.source_task_id}` : '#';
 
@@ -123,6 +147,17 @@ function Row({ item, onOpen }: { item: NotificationItem; onOpen: () => void }) {
       </Link>
     </li>
   );
+}
+
+function describeNotificationVerb(type: NotificationItem['type']): string {
+  switch (type) {
+    case 'MENTION_COMMENT':
+      return 'commented';
+    case 'MENTION_TASK':
+      return 'mentioned you';
+    case 'CROSS_TEAM_REQUEST':
+      return 'asked your team for work';
+  }
 }
 
 function BellIcon() {

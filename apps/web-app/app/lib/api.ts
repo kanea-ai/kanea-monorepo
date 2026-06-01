@@ -35,6 +35,14 @@ export const MAX_PAGE_SIZE = 200;
 
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE' | 'CANCELLED';
 
+export interface CrossTeamOrigin {
+  request_id: string;
+  source_task_id: string;
+  source_task_public_id: string;
+  requester_member_id: string;
+  requester_name: string | null;
+}
+
 export interface Task {
   id: string;
   workspace_id: string;
@@ -48,6 +56,21 @@ export interface Task {
   public_id: string;
   description: string | null;
   assignee_id: string | null;
+  // Denormalised assignee display name (resolved server-side from
+  // assignee_id). Null when the task is unassigned, or in the rare
+  // legacy-data case where the FK didn't cascade (ON DELETE SET NULL
+  // on the assignee column normally nulls assignee_id when the
+  // member is deleted). Read this directly; don't try to resolve the
+  // name from /tenants/members/{id}, which 403s for non-admin
+  // cross-team lookups.
+  assignee_name: string | null;
+  // Denormalised pointer to the cross-team request that birthed this
+  // task. Populated server-side when this task is the
+  // ``fulfilled_task_id`` of some TaskRequest; null for tasks created
+  // through the standard POST /tasks endpoint. Drives the "↗ from
+  // <source-public-id>" chip on the board card and the Cross-team
+  // origin row on the task detail side panel.
+  cross_team_origin: CrossTeamOrigin | null;
   // Workspace -> Project -> Task -> Team links. Both nullable: a
   // backlog task can live without a project, an unowned task without
   // a team. Server SET-NULLs them when the parent is deleted.
@@ -154,6 +177,13 @@ export interface TaskActivity {
   // treats it as Record<string, unknown>; consumers that need stricter
   // typing should narrow on event_type.
   payload: Record<string, unknown>;
+  // Denormalised display names for DELEGATED rows: payload.from / .to
+  // hold member uuids and these are the resolved names the server
+  // looked up at read time. Null for non-DELEGATED rows or for legacy
+  // rows whose member id no longer resolves — the UI then falls back
+  // to a truncated-uuid label. Same shape as Task.assignee_name.
+  from_member_name: string | null;
+  to_member_name: string | null;
   created_at: string;
 }
 
@@ -512,7 +542,7 @@ export interface CreateMyWorkspaceResponse {
   expires_in: number;
 }
 
-export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT';
+export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT' | 'CROSS_TEAM_REQUEST';
 
 export interface NotificationItem {
   id: string;
@@ -753,6 +783,17 @@ export const tasksApi = {
     request<Task>(`${V1}/tasks/${id}/priority`, {
       method: 'PATCH',
       body: JSON.stringify({ priority }),
+    }),
+  /** Delegate a task to a workspace member. Server enforces the
+   *  strict-greater priority rule (caller can only assign to a target
+   *  with priority numerically greater than their own). Drives both
+   *  first-time assignment and subsequent reassignment — there is no
+   *  separate /assign endpoint. Returns the updated Task with
+   *  ``assignee_id`` + ``assignee_name`` already populated. */
+  delegate: (id: string, memberId: string) =>
+    request<Task>(`${V1}/tasks/${id}/delegate`, {
+      method: 'POST',
+      body: JSON.stringify({ member_id: memberId }),
     }),
   updateLinks: (id: string, payload: UpdateTaskLinksPayload) =>
     request<Task>(`${V1}/tasks/${id}/links`, {
@@ -1043,9 +1084,25 @@ export interface UpdateTeamPayload {
 }
 
 export const requestsApi = {
-  listInbox: (teamId: string, status?: RequestStatus) => {
-    const qs = status ? `?status_filter=${status}` : '';
-    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs}`);
+  /** Team inbox of cross-team requests.
+   *  - direction='incoming' (default): requests where requested_team_id
+   *    is this team. The "someone asked us for work" view.
+   *  - direction='outgoing': requests anchored to a source task on this
+   *    team. The "what have we asked for?" view.
+   *
+   *  status defaults to unset (all statuses) because under the
+   *  auto-fulfilment lifecycle (issue #50 tracks the approval-gate
+   *  alternative) new requests are born FULFILLED, so a default
+   *  PENDING filter would silently hide everything. */
+  listInbox: (
+    teamId: string,
+    opts: { status?: RequestStatus; direction?: 'incoming' | 'outgoing' } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.status) params.set('status_filter', opts.status);
+    if (opts.direction) params.set('direction', opts.direction);
+    const qs = params.toString();
+    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs ? `?${qs}` : ''}`);
   },
   fulfill: (requestId: string, payload: FulfillRequestPayload) =>
     request<TaskRequest>(`${V1}/requests/${requestId}/fulfill`, {

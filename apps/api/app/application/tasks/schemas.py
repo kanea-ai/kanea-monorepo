@@ -127,6 +127,32 @@ class UpdateTaskLinksRequest(BaseModel):
     team_id: UUID | None = None
 
 
+class CrossTeamOriginRef(BaseModel):
+    """Denormalised pointer to the cross-team request that birthed this
+    task. Present on ``TaskResponse.cross_team_origin`` when the task
+    was auto-minted by ``POST /tasks/{id}/requests`` (the source-task
+    team handed work to the target team); absent on tasks created
+    through the standard ``/tasks`` endpoint.
+
+    Mirrors the actor_name / author_name / requester_name shape: the UI
+    renders this directly without needing access to the source task or
+    the requester member (both of which may be on another team / behind
+    the priority-scoped /tenants/members lookup that 403s for non-
+    admin cross-team callers).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: UUID
+    source_task_id: UUID
+    # e.g. "ENG-101". Built from the source workspace's prefix + seq.
+    source_task_public_id: str
+    requester_member_id: UUID
+    # Denormalised name of the workspace member who filed the request.
+    # None when the requester member has been deleted (legacy / cascade).
+    requester_name: str | None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -143,6 +169,25 @@ class TaskResponse(BaseModel):
     public_id: str
     description: str | None
     assignee_id: UUID | None
+    # Denormalised display name for the assignee. Resolved server-side
+    # by the task service from ``assignee_id``; ``None`` either when
+    # the task is unassigned (assignee_id is null) or in the rare
+    # legacy-data case where the assignee row was lost without the
+    # ON DELETE SET NULL cascade firing. Mirrors the actor_name /
+    # author_name / requester_name pattern on activity, comment, and
+    # task-request responses — UIs render this directly and don't need
+    # the priority-gated member endpoints (which 403 for non-admins on
+    # cross-team lookups). Field is server-populated only; callers do
+    # not supply it on create / update payloads.
+    assignee_name: str | None = None
+    # When this task was auto-minted by a cross-team request, this
+    # field points at the originating request + source task so the
+    # board card can render a "↗ from <source-public-id>" marker
+    # without a per-task /tasks/{id}/requests round-trip. Null for
+    # tasks created the normal way. Resolved server-side from
+    # ``task_requests`` where ``fulfilled_task_id == task.id``;
+    # batched in list flows.
+    cross_team_origin: CrossTeamOriginRef | None = None
     project_id: UUID | None
     team_id: UUID | None
     due_at: datetime | None
@@ -152,7 +197,14 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_entity(cls, task: Task, *, prefix: str) -> TaskResponse:
+    def from_entity(
+        cls,
+        task: Task,
+        *,
+        prefix: str,
+        assignee_name: str | None = None,
+        cross_team_origin: CrossTeamOriginRef | None = None,
+    ) -> TaskResponse:
         return cls(
             id=task.id,
             workspace_id=task.workspace_id,
@@ -164,6 +216,8 @@ class TaskResponse(BaseModel):
             public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
+            assignee_name=assignee_name,
+            cross_team_origin=cross_team_origin,
             project_id=task.project_id,
             team_id=task.team_id,
             due_at=task.due_at,
@@ -289,6 +343,13 @@ class TaskDetailResponse(BaseModel):
     public_id: str
     description: str | None
     assignee_id: UUID | None
+    # See ``TaskResponse.assignee_name`` for the rationale; same
+    # denormalisation path on the detail endpoint.
+    assignee_name: str | None = None
+    # See ``TaskResponse.cross_team_origin``; populated for auto-minted
+    # cross-team tasks so the detail page can render an origin row
+    # without a follow-up lookup.
+    cross_team_origin: CrossTeamOriginRef | None = None
     due_at: datetime | None
     project_id: UUID | None
     team_id: UUID | None
@@ -313,6 +374,16 @@ class ActivityResponse(BaseModel):
     event_type: TaskActivityType
     # JSON payload, shape-per-event (see TaskActivityType docstring).
     payload: dict
+    # Denormalised display names for events that carry assignee ids in
+    # the payload (currently only DELEGATED — payload.from / payload.to
+    # hold member uuids). Populated server-side by ``_activity_to_response``
+    # so the UI can render "delegated to <name>" without a per-row
+    # /tenants/members lookup (which 403s for non-admins on cross-team
+    # members — see TaskResponse.assignee_name for the same rationale).
+    # Both None for event types that don't carry assignee ids, and
+    # selectively None when the legacy data path can't resolve a name.
+    from_member_name: str | None = None
+    to_member_name: str | None = None
     created_at: datetime
 
 

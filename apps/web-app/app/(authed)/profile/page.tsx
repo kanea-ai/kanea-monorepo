@@ -10,12 +10,13 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { HeadOverseesTeamsGrid } from '../../components/HeadOverseesTeamsGrid';
-import { ApiError, type TeamRole } from '../../lib/api';
+import { ApiError, type MemberRole, type TeamRole } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import {
   useChangePassword,
   useDepartments,
   useMe,
+  useMember,
   useMeStats,
   useTeams,
   useUpdateMe,
@@ -52,6 +53,8 @@ export default function ProfilePage() {
         oauthProvider={me.oauth_provider}
       />
 
+      <WorkspaceStandingSection memberId={me.member_id} role={me.role} />
+
       <PasswordSection hasPassword={me.has_password} />
 
       <HierarchySection memberId={me.member_id} teamId={me.team_id} teamRole={me.team_role} />
@@ -67,6 +70,51 @@ export default function ProfilePage() {
       <SignOutSection />
     </div>
   );
+}
+
+function WorkspaceStandingSection({ memberId, role }: { memberId: string; role: MemberRole }) {
+  // /me doesn't carry priority today; fetch the full member record to
+  // surface it. The cache key is shared with the directory + entity
+  // panels so this is usually a hit. Showing role alongside priority
+  // gives the user a complete picture of their standing in this
+  // workspace; both are read-only here — workspace admins manage these
+  // from the directory, not from /profile.
+  const { data: member, isLoading } = useMember(memberId);
+  return (
+    <Section
+      title="Workspace standing"
+      subtitle="Your role and priority in this workspace. Admins manage these from the Directory."
+    >
+      <dl className="grid gap-2 text-xs sm:grid-cols-[8rem_1fr]">
+        <dt className="text-slate-500">Role</dt>
+        <dd className="text-slate-700">{formatRole(role)}</dd>
+        <dt className="text-slate-500">Priority</dt>
+        <dd className="text-slate-700">
+          {isLoading ? (
+            <span className="italic text-slate-500">Loading…</span>
+          ) : member ? (
+            <>
+              <span className="font-medium tabular-nums text-slate-900">P{member.priority}</span>
+              <span className="ml-2 text-slate-500">(1 = highest rank)</span>
+            </>
+          ) : (
+            '—'
+          )}
+        </dd>
+      </dl>
+    </Section>
+  );
+}
+
+function formatRole(role: MemberRole): string {
+  switch (role) {
+    case 'WORKSPACE_OWNER':
+      return 'Workspace owner';
+    case 'WORKSPACE_ADMIN':
+      return 'Workspace admin';
+    case 'WORKSPACE_USER':
+      return 'Workspace user';
+  }
 }
 
 function HierarchySection({

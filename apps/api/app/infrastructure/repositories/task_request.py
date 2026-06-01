@@ -52,9 +52,13 @@ class SqlAlchemyTaskRequestRepository:
         *,
         status: RequestStatus | None = None,
     ) -> list[TaskRequest]:
-        """Leadership inbox: requests filed against tasks living on
-        this team. Joined through tasks so only requests anchored to a
-        source task on this team surface."""
+        """Outgoing-direction view: requests anchored to a source task
+        on this team — what this team has asked other teams to do.
+
+        Joined through ``tasks`` so the filter is on the source's
+        ``team_id``, not the request's ``requested_team_id``. Use
+        ``list_for_target_team`` for the incoming-direction inbox
+        (requests targeting this team)."""
         stmt = (
             select(TaskRequestModel)
             .join(TaskModel, TaskModel.id == TaskRequestModel.source_task_id)
@@ -63,6 +67,34 @@ class SqlAlchemyTaskRequestRepository:
         if status is not None:
             stmt = stmt.where(TaskRequestModel.status == status.value)
         stmt = stmt.order_by(TaskRequestModel.created_at.desc(), TaskRequestModel.id)
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
+    async def list_for_target_team(
+        self,
+        team_id: UUID,
+        *,
+        status: RequestStatus | None = None,
+    ) -> list[TaskRequest]:
+        """Incoming-direction inbox: requests whose ``requested_team_id``
+        is this team — someone asked us for work.
+
+        Uses the ``ix_task_requests_requested_team_id_status`` index on
+        the ``task_requests`` table directly; no join needed."""
+        stmt = select(TaskRequestModel).where(TaskRequestModel.requested_team_id == team_id)
+        if status is not None:
+            stmt = stmt.where(TaskRequestModel.status == status.value)
+        stmt = stmt.order_by(TaskRequestModel.created_at.desc(), TaskRequestModel.id)
+        result = await self._session.execute(stmt)
+        return [_to_entity(row) for row in result.scalars().all()]
+
+    async def list_fulfilled_by_task_ids(self, task_ids: list[UUID]) -> list[TaskRequest]:
+        """Batch helper for the cross_team_origin denormalisation on
+        TaskResponse. Returns every request whose ``fulfilled_task_id``
+        is in ``task_ids`` — one round-trip regardless of list size."""
+        if not task_ids:
+            return []
+        stmt = select(TaskRequestModel).where(TaskRequestModel.fulfilled_task_id.in_(task_ids))
         result = await self._session.execute(stmt)
         return [_to_entity(row) for row in result.scalars().all()]
 

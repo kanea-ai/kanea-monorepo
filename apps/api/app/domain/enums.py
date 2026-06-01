@@ -172,6 +172,16 @@ class NotificationType(StrEnum):
 
     MENTION_TASK = "MENTION_TASK"
     MENTION_COMMENT = "MENTION_COMMENT"
+    # Fired on the target team's leadership when a cross-team request is
+    # filed via POST /tasks/{id}/requests. Under the auto-fulfilment
+    # model (the only path today — issue #50 tracks the approval-gate
+    # alternative) the task is already on their board by the time this
+    # notification lands; the recipient's action is triage (delegate,
+    # cancel, or let it sit). Leaderless-team fallback: if the target
+    # team has no MANAGER / LEAD / dept head, the notification goes to
+    # the workspace owners so a request to a leaderless team is never
+    # invisible.
+    CROSS_TEAM_REQUEST = "CROSS_TEAM_REQUEST"
 
 
 class BlocksSort(StrEnum):

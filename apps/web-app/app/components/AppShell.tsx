@@ -131,7 +131,10 @@ function AppShellInner({ children }: { children: ReactNode }) {
           <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
             Kanea
           </Link>
-          <NotificationsBell />
+          {/* Sidebar bell anchors LEFT-aligned: the bell sits at the
+              right edge of the 224px sidebar, so the default right-
+              aligned panel would extend leftward off the viewport. */}
+          <NotificationsBell align="left" />
         </div>
         {/* Middle band: workspace switcher + nav. ``min-h-0`` is the
             flexbox idiom that lets ``overflow-y-auto`` actually take

@@ -10,9 +10,13 @@ For filing a new cross-team request, see [`POST /tasks/{task_id}/requests`](/doc
   method="GET"
   path="/api/v1/teams/{team_id}/requests"
   auth="Signed in"
-  summary="The team's inbox view: cross-team requests filed against tasks owned by this team. Readable by any workspace member — useful for showing the inbox in any UI surface, not just leadership tools."
+  summary="Team inbox of cross-team requests. Direction defaults to incoming (requests targeting this team) — the natural inbox view. Readable by any workspace member."
 >
-  <p><strong>Query parameters:</strong> <code>status_filter</code> — optional, one of <code>PENDING</code> / <code>FULFILLED</code> / <code>REJECTED</code>. Pass <code>?status_filter=PENDING</code> to scope to actionable items.</p>
+  <p><strong>Query parameters:</strong></p>
+  <ul>
+    <li><code>direction</code> — <code>incoming</code> (default) returns requests whose <code>requested_team_id</code> is this team (someone asked us for work). <code>outgoing</code> returns requests anchored to a source task on this team (what we've asked others for). <code>422</code> for any other value.</li>
+    <li><code>status_filter</code> — optional, one of <code>PENDING</code> / <code>FULFILLED</code> / <code>REJECTED</code>. <strong>Default is unset (all statuses).</strong> Auto-fulfilled requests are born <code>FULFILLED</code> under the standard create_request path, so a default <code>PENDING</code> filter would silently show nothing.</li>
+  </ul>
 
   <p><strong>Response (200):</strong> a plain JSON array of <code>TaskRequestResponse</code>:</p>
 

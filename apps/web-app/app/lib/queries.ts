@@ -732,8 +732,8 @@ export function useDeleteDepartment() {
 export const requestKeys = {
   all: ['requests'] as const satisfies QueryKey,
   forTask: (id: string) => ['requests', 'task', id] as const satisfies QueryKey,
-  inbox: (teamId: string, status?: RequestStatus) =>
-    ['requests', 'team', teamId, status ?? 'ALL'] as const satisfies QueryKey,
+  inbox: (teamId: string, status: RequestStatus | null, direction: 'incoming' | 'outgoing') =>
+    ['requests', 'team', teamId, direction, status ?? 'ALL'] as const satisfies QueryKey,
 };
 
 export function useTaskRequests(taskId: string) {
@@ -743,10 +743,20 @@ export function useTaskRequests(taskId: string) {
   });
 }
 
-export function useTeamInboxRequests(teamId: string, status: RequestStatus = 'PENDING') {
+export function useTeamInboxRequests(
+  teamId: string,
+  opts: { status?: RequestStatus; direction?: 'incoming' | 'outgoing' } = {},
+) {
+  // Direction defaults to 'incoming' — the meaningful inbox for a
+  // target team. ``status`` defaults to undefined (all statuses)
+  // because auto-fulfilled requests are born FULFILLED; a default
+  // 'PENDING' filter would silently hide everything that arrives via
+  // the standard create_request path.
+  const direction = opts.direction ?? 'incoming';
+  const status = opts.status;
   return useQuery<TaskRequest[]>({
-    queryKey: requestKeys.inbox(teamId, status),
-    queryFn: () => requestsApi.listInbox(teamId, status),
+    queryKey: requestKeys.inbox(teamId, status ?? null, direction),
+    queryFn: () => requestsApi.listInbox(teamId, { status, direction }),
     enabled: !!teamId,
     refetchInterval: 30_000,
   });
@@ -817,6 +827,27 @@ export function useDeleteTeam() {
       // Members previously on the team go to "no team" — refresh the
       // directory so the side panel doesn't show stale assignments.
       qc.invalidateQueries({ queryKey: tenantKeys.members });
+    },
+  });
+}
+
+// ---------- Task delegation ----------
+
+/** Delegate a task to another workspace member. Server enforces the
+ *  strict-greater priority rule (caller can only assign to a target
+ *  with priority numerically greater than their own). The UI's member
+ *  picker is expected to filter to eligible targets; this hook is
+ *  agnostic to which member id is passed and lets the server be the
+ *  authority. Used by both the "Delegate" affordance on /tasks/{id}
+ *  (first-time assignment and subsequent reassignment go through the
+ *  same endpoint) and any future quick-action surface. */
+export function useDelegateTask(id: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, { memberId: string }>({
+    mutationFn: ({ memberId }) => tasksApi.delegate(id, memberId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: taskKeys.all });
+      qc.invalidateQueries({ queryKey: taskKeys.detail(id) });
     },
   });
 }
