@@ -48,6 +48,14 @@ export interface Task {
   public_id: string;
   description: string | null;
   assignee_id: string | null;
+  // Denormalised assignee display name (resolved server-side from
+  // assignee_id). Null when the task is unassigned, or in the rare
+  // legacy-data case where the FK didn't cascade (ON DELETE SET NULL
+  // on the assignee column normally nulls assignee_id when the
+  // member is deleted). Read this directly; don't try to resolve the
+  // name from /tenants/members/{id}, which 403s for non-admin
+  // cross-team lookups.
+  assignee_name: string | null;
   // Workspace -> Project -> Task -> Team links. Both nullable: a
   // backlog task can live without a project, an unowned task without
   // a team. Server SET-NULLs them when the parent is deleted.

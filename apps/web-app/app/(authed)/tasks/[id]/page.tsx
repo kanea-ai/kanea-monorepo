@@ -11,6 +11,7 @@ import { RenderWithMentions } from '../../../components/RenderWithMentions';
 import { TaskRelationsPanel } from '../../../components/TaskRelationsPanel';
 import { ApiError, type Task, type TaskComment } from '../../../lib/api';
 import { useCurrentPrincipal } from '../../../lib/auth';
+import { userHref } from '../../../lib/links';
 import {
   useMembers,
   usePostComment,
@@ -233,9 +234,7 @@ function SidePanel({ task }: { task: Task }) {
             </span>
           </Row>
           <Row label="Assignee">
-            <span className="font-mono text-[11px] text-slate-500">
-              {task.assignee_id ? `${task.assignee_id.slice(0, 8)}…` : 'Unassigned'}
-            </span>
+            <AssigneeCell assigneeId={task.assignee_id} assigneeName={task.assignee_name} />
           </Row>
           <Row label="Project">
             <select
@@ -329,6 +328,45 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</dt>
       <dd>{children}</dd>
     </div>
+  );
+}
+
+// Renders the task's assignee from the denormalised assignee_name
+// field on the Task response. Three paths:
+//   - assignee_id is null → "Unassigned" plain italic (no link).
+//   - assignee_id is set but assignee_name is null → "Former member"
+//     italic link (defensive fallback for legacy data; under normal
+//     flow the ON DELETE SET NULL cascade on tasks.assignee_id zeroes
+//     the FK when a member is deleted, so this case shouldn't occur).
+//   - both set → indigo link with the name.
+// The link target is the standard entity-navigation mesh helper.
+function AssigneeCell({
+  assigneeId,
+  assigneeName,
+}: {
+  assigneeId: string | null;
+  assigneeName: string | null;
+}) {
+  if (assigneeId == null) {
+    return <span className="text-[11px] italic text-slate-500">Unassigned</span>;
+  }
+  if (assigneeName == null) {
+    return (
+      <Link
+        href={userHref(assigneeId)}
+        className="text-[11px] italic text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline"
+      >
+        Former member
+      </Link>
+    );
+  }
+  return (
+    <Link
+      href={userHref(assigneeId)}
+      className="text-[11px] text-indigo-700 underline-offset-2 hover:underline"
+    >
+      {assigneeName}
+    </Link>
   );
 }
 

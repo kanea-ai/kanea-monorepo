@@ -143,6 +143,17 @@ class TaskResponse(BaseModel):
     public_id: str
     description: str | None
     assignee_id: UUID | None
+    # Denormalised display name for the assignee. Resolved server-side
+    # by the task service from ``assignee_id``; ``None`` either when
+    # the task is unassigned (assignee_id is null) or in the rare
+    # legacy-data case where the assignee row was lost without the
+    # ON DELETE SET NULL cascade firing. Mirrors the actor_name /
+    # author_name / requester_name pattern on activity, comment, and
+    # task-request responses — UIs render this directly and don't need
+    # the priority-gated member endpoints (which 403 for non-admins on
+    # cross-team lookups). Field is server-populated only; callers do
+    # not supply it on create / update payloads.
+    assignee_name: str | None = None
     project_id: UUID | None
     team_id: UUID | None
     due_at: datetime | None
@@ -152,7 +163,9 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_entity(cls, task: Task, *, prefix: str) -> TaskResponse:
+    def from_entity(
+        cls, task: Task, *, prefix: str, assignee_name: str | None = None
+    ) -> TaskResponse:
         return cls(
             id=task.id,
             workspace_id=task.workspace_id,
@@ -164,6 +177,7 @@ class TaskResponse(BaseModel):
             public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
+            assignee_name=assignee_name,
             project_id=task.project_id,
             team_id=task.team_id,
             due_at=task.due_at,
@@ -289,6 +303,9 @@ class TaskDetailResponse(BaseModel):
     public_id: str
     description: str | None
     assignee_id: UUID | None
+    # See ``TaskResponse.assignee_name`` for the rationale; same
+    # denormalisation path on the detail endpoint.
+    assignee_name: str | None = None
     due_at: datetime | None
     project_id: UUID | None
     team_id: UUID | None

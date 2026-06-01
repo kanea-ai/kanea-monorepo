@@ -136,7 +136,8 @@ class TaskService:
             },
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(updated, prefix=prefix)
+        assignee_name = await self._resolve_assignee_name(updated.assignee_id)
+        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
 
     async def list_blocks(
         self,
@@ -180,10 +181,14 @@ class TaskService:
             limit=limit,
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return Page[TaskResponse](
-            items=[TaskResponse.from_entity(r, prefix=prefix) for r in rows],
-            total=total,
-        )
+        # Cache assignee-name lookups so the page hits the members repo
+        # once per unique assignee rather than once per row.
+        assignee_cache: dict[UUID, str | None] = {}
+        items: list[TaskResponse] = []
+        for r in rows:
+            name = await self._resolve_assignee_name(r.assignee_id, cache=assignee_cache)
+            items.append(TaskResponse.from_entity(r, prefix=prefix, assignee_name=name))
+        return Page[TaskResponse](items=items, total=total)
 
     async def list_for_workspace(
         self,
@@ -215,7 +220,13 @@ class TaskService:
             priority_max=priority_max,
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return [TaskResponse.from_entity(row, prefix=prefix) for row in rows]
+        # Cache assignee-name lookups (board / project tasks views).
+        assignee_cache: dict[UUID, str | None] = {}
+        out: list[TaskResponse] = []
+        for row in rows:
+            name = await self._resolve_assignee_name(row.assignee_id, cache=assignee_cache)
+            out.append(TaskResponse.from_entity(row, prefix=prefix, assignee_name=name))
+        return out
 
     async def get_by_id(self, task_id: UUID, requester: Principal) -> TaskDetailResponse:
         """Returns the task plus its full relation graph. Agents reading
@@ -241,6 +252,7 @@ class TaskService:
                 relates_to=[],
             )
 
+        assignee_name = await self._resolve_assignee_name(task.assignee_id)
         return TaskDetailResponse(
             id=task.id,
             workspace_id=task.workspace_id,
@@ -252,6 +264,7 @@ class TaskService:
             public_id=f"{prefix}-{task.seq:03d}" if task.seq else f"{prefix}-000",
             description=task.description,
             assignee_id=task.assignee_id,
+            assignee_name=assignee_name,
             project_id=task.project_id,
             team_id=task.team_id,
             due_at=task.due_at,
@@ -264,10 +277,15 @@ class TaskService:
 
     async def create(self, request: CreateTaskRequest, requester: Principal) -> TaskResponse:
         # If an assignee is supplied, it must belong to the same workspace.
+        # We capture the resolved name here so the response's
+        # ``assignee_name`` field can be populated without a second
+        # members.get_by_id() round-trip downstream.
+        assignee_name: str | None = None
         if request.assignee_id is not None:
             assignee = await self.members.get_by_id(request.assignee_id)
             if assignee is None or assignee.workspace_id != requester.workspace_id:
                 raise TaskNotFoundError("assignee not found")
+            assignee_name = assignee.name
 
         # Same-workspace check for project + team. We surface
         # ProjectNotFoundError / TeamNotFoundError on cross-tenant ids
@@ -319,7 +337,7 @@ class TaskService:
                 task_id=created.id,
                 actor=requester,
             )
-        return TaskResponse.from_entity(created, prefix=prefix)
+        return TaskResponse.from_entity(created, prefix=prefix, assignee_name=assignee_name)
 
     async def update_links(
         self,
@@ -376,7 +394,8 @@ class TaskService:
             )
 
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(updated, prefix=prefix)
+        assignee_name = await self._resolve_assignee_name(updated.assignee_id)
+        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
 
     async def _record(
         self,
@@ -407,6 +426,41 @@ class TaskService:
         await self._load_task(task_id, requester)
         rows = await self.activities.list_for_task(task_id)
         return [await self._activity_to_response(r) for r in rows]
+
+    async def _resolve_assignee_name(
+        self,
+        assignee_id: UUID | None,
+        *,
+        cache: dict[UUID, str | None] | None = None,
+    ) -> str | None:
+        """Resolve an assignee's display name for the denormalised
+        ``TaskResponse.assignee_name`` field. Returns None when the task
+        is unassigned, or when the member can't be looked up (under
+        normal flow the ON DELETE SET NULL cascade on ``tasks.assignee_id``
+        zeroes the FK when a member is deleted, so a non-null
+        assignee_id with a missing member is legacy-data / dead-code
+        territory — left as a defensive fallback).
+
+        Mirrors the actor_name / author_name / requester_name shape on
+        activity, comment, and task-request responses; sidesteps the
+        priority-gated /tenants/members endpoint that 403s for non-
+        admins on cross-team lookups, since the display name is not
+        sensitive.
+
+        The optional ``cache`` argument lets list flows reuse the
+        resolved name across rows that share an assignee (one DB hit
+        per unique assignee instead of one per row); single-task flows
+        skip it.
+        """
+        if assignee_id is None:
+            return None
+        if cache is not None and assignee_id in cache:
+            return cache[assignee_id]
+        member = await self.members.get_by_id(assignee_id)
+        name = member.name if member is not None else None
+        if cache is not None:
+            cache[assignee_id] = name
+        return name
 
     async def _activity_to_response(self, row: TaskActivity) -> ActivityResponse:
         actor_name: str | None = None
@@ -820,7 +874,8 @@ class TaskService:
         # keeps the audit log tidy.
         if request.status is task.status:
             prefix = await self._workspace_prefix(requester.workspace_id)
-            return TaskResponse.from_entity(task, prefix=prefix)
+            assignee_name = await self._resolve_assignee_name(task.assignee_id)
+            return TaskResponse.from_entity(task, prefix=prefix, assignee_name=assignee_name)
 
         updated = await self.tasks.update_status(
             task_id=task.id,
@@ -834,7 +889,8 @@ class TaskService:
             payload={"from": task.status.value, "to": request.status.value},
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(updated, prefix=prefix)
+        assignee_name = await self._resolve_assignee_name(updated.assignee_id)
+        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
 
     async def update_priority(
         self,
@@ -849,7 +905,8 @@ class TaskService:
         task = await self._load_task(task_id, requester)
         if task.priority == request.priority:
             prefix = await self._workspace_prefix(requester.workspace_id)
-            return TaskResponse.from_entity(task, prefix=prefix)
+            assignee_name = await self._resolve_assignee_name(task.assignee_id)
+            return TaskResponse.from_entity(task, prefix=prefix, assignee_name=assignee_name)
 
         await self._require_priority_editor(requester, task)
 
@@ -861,7 +918,8 @@ class TaskService:
             payload={"from": task.priority, "to": request.priority},
         )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(updated, prefix=prefix)
+        assignee_name = await self._resolve_assignee_name(updated.assignee_id)
+        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
 
     async def _require_priority_editor(self, requester: Principal, task: Task) -> None:
         if requester.role in (MemberRole.WORKSPACE_OWNER, MemberRole.WORKSPACE_ADMIN):
@@ -917,7 +975,8 @@ class TaskService:
                 event_type=TaskActivityType.UNBLOCKED,
             )
         prefix = await self._workspace_prefix(requester.workspace_id)
-        return TaskResponse.from_entity(updated, prefix=prefix)
+        assignee_name = await self._resolve_assignee_name(updated.assignee_id)
+        return TaskResponse.from_entity(updated, prefix=prefix, assignee_name=assignee_name)
 
     async def rate_task(
         self,
