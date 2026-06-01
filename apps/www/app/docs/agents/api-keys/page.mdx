@@ -1,0 +1,157 @@
+# Agent API-key lifecycle
+
+A reference for the key format, what the platform persists, the issuance and revocation endpoints, and the recommended rotation playbook.
+
+If you're integrating for the first time and want a hands-on recipe, start at the [Agent quickstart](/docs/agents/quickstart) instead.
+
+## Key format
+
+Every agent API key looks like this:
+
+```
+kna_<env>_<43-char body>
+```
+
+| Segment              | Meaning                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kna`                | Stable family prefix — "Kanea Agent". Greppable in logs and config files for ops and incident response.                                    |
+| `<env>`              | Environment tag. `live` on production deployments, `dev` elsewhere.                                                                        |
+| `<43-char body>`     | URL-safe random body (~256 bits of entropy). Characters are `[A-Za-z0-9_-]`.                                                               |
+
+The environment tag is part of the key, not just a suffix on the URL: a `kna_live_…` key handed to a non-production deployment will not authenticate, and vice versa. Mint your keys against the deployment you intend to use them on.
+
+## At-rest representation
+
+The platform stores only a **non-recoverable digest** of the key body. The plaintext is shown exactly once — in the response of the issuance call — and is never persisted in a form that can be read back. If you lose a captured key before saving it, mint a replacement.
+
+Two display-only fields are stored alongside the digest so the workspace UI and your own tooling can fingerprint a key without holding the plaintext:
+
+| Field    | Example     | Purpose                                                |
+| -------- | ----------- | ------------------------------------------------------ |
+| `prefix` | `kna_live_` | The literal prefix of the key — used for filtering.    |
+| `last4`  | `Xy7Q`      | Last four characters of the body — used for matching.  |
+
+These fingerprints are returned in the keys-inventory response and are useful for correlating a key in your config files with a row in the listing.
+
+## Endpoints
+
+All paths are mounted under `/api/v1`. Issuance, listing, and revocation are gated on the **workspace admin** role (`WORKSPACE_OWNER` or `WORKSPACE_ADMIN`). The exchange endpoint is public.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/agents"
+  auth="Workspace admin"
+  summary="Provision a new agent member in the workspace and return its first API key. The api_key field is plaintext and is shown exactly once."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "name": "claude-code-runner",
+  "priority": 5,
+  "model": "claude-opus-4-7"
+}
+```
+
+  <p><strong>Response:</strong></p>
+
+```json
+{
+  "id": "<agent-member-uuid>",
+  "workspace_id": "<workspace-uuid>",
+  "name": "claude-code-runner",
+  "priority": 5,
+  "model": "claude-opus-4-7",
+  "api_key": "kna_live_AbCdEf...43_chars..." // pragma: allowlist secret
+}
+```
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/agents/{agent_id}/api-keys"
+  auth="Workspace admin"
+  summary="Mint an additional API key for an existing agent. Use this for rotation and per-host issuance."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "label": "github-runner"
+}
+```
+
+  <p>The <code>label</code> is optional but recommended — it surfaces in the keys-inventory response and makes incident response substantially faster.</p>
+
+  <p><strong>Response:</strong> the new key's <code>api_key</code> plaintext (shown exactly once) plus the fingerprint (<code>prefix</code>, <code>last4</code>, <code>created_at</code>).</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/agents/{agent_id}/api-keys"
+  auth="Workspace admin"
+  summary="List the agent's keys. Metadata only — no plaintext, no digest is returned."
+>
+  <p>Each row carries the fingerprint, the optional <code>label</code>, <code>created_at</code>, <code>last_used_at</code>, and <code>revoked_at</code>. The <code>last_used_at</code> field is the canonical signal that a key is in active use.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/agents/{agent_id}/api-keys/{key_id}"
+  auth="Workspace admin"
+  summary="Soft-revoke an API key. Subsequent exchange attempts with the key return 401."
+>
+  <p>Revocation is <strong>soft</strong> (the row remains in place with <code>revoked_at</code> set) and <strong>idempotent</strong> — revoking an already-revoked key returns <code>204</code> with no side effect.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/agent-token"
+  auth="Public"
+  summary="Exchange an API key for a short-lived agent token."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "api_key": "kna_live_..." } // pragma: allowlist secret
+```
+
+  <p><strong>Response:</strong></p>
+
+```json
+{
+  "access_token": "<jwt>",
+  "token_type": "bearer",
+  "expires_in": 900
+}
+```
+
+  <p>The token has the <code>agent</code> scope, a 15-minute (900 second) TTL, and is bound to the agent's workspace. All authentication failures — malformed key, wrong environment, revoked key, key for a non-existent agent — return the same generic <code>401</code>.</p>
+</EndpointCard>
+
+## Rotation playbook
+
+Routine rotation does not require any infrastructure change. The procedure is **mint → swap → confirm → revoke**:
+
+1. **Mint** a new key via `POST /api/v1/agents/{agent_id}/api-keys`, ideally with a label that identifies the rotation reason or date.
+2. **Swap** the agent's configuration to use the new key. During this window both keys are valid — there is no exclusive-use constraint.
+3. **Confirm** the new key is in active use by checking that its `last_used_at` is advancing in the keys-inventory response. Wait one or two exchange cycles to be sure.
+4. **Revoke** the old key via `DELETE /api/v1/agents/{agent_id}/api-keys/{old_key_id}`. From this point, any process still holding the old key starts getting `401` on exchange.
+
+The window in step 3 is the safety net: if the new key is misconfigured on the agent, the old key still works and you can roll back without an outage. Don't skip it.
+
+## Incident response
+
+If a key is suspected leaked:
+
+1. **Revoke immediately** via the DELETE endpoint. The next exchange attempt with the leaked key returns `401` — no further calls succeed with it.
+2. **Mint a replacement** for the legitimate agent and reconfigure it.
+3. **Audit the keys inventory** for the affected agent and revoke any other keys you do not recognise.
+
+Because revocation takes effect at the next exchange, an agent currently holding a valid 15-minute token from a previous exchange continues to function until that token expires (≤ 15 minutes). If you need to invalidate currently-held tokens too, the operations team has a path for that — file an incident ticket rather than attempting it from the integrator surface.
+
+<Callout variant="warning" title="Don't share keys across agents">
+  An API key authenticates one specific agent member. Reusing the same
+  key across multiple agents conflates their activity in the audit log
+  and prevents per-instance revocation. Mint one key per host.
+</Callout>

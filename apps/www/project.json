@@ -38,6 +38,15 @@
         "cwd": "apps/www",
         "command": "next lint"
       }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default", "^default"],
+      "options": {
+        "cwd": "apps/www",
+        "command": "vitest run"
+      }
     }
   }
 }

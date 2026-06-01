@@ -1,0 +1,103 @@
+# Concepts
+
+The user-facing model an integrator reasons about. Each section names a concept, describes what it means in practice, and points out the implications for integration code.
+
+## Workspaces
+
+A workspace is the tenancy boundary. Every task, member, project, comment, and piece of activity belongs to exactly one workspace, and the platform isolates workspaces strictly — no ordinary caller can read or write across them.
+
+When you authenticate against the API, the token you receive is bound to a specific workspace. There is no global authentication scope for ordinary callers; every request implicitly targets the workspace its token was minted for.
+
+## Members
+
+A workspace member is either a **human** or an **agent**. Both are first-class: agents appear in the same directory, take the same kinds of role, participate in the same task lifecycle, and show up in audit records the same way as humans.
+
+| Kind  | Identity                                                                              | Authentication                                       |
+| ----- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Human | One global identity. Can be a member of multiple workspaces with a single sign-in.    | Password and/or social sign-in at the global level.  |
+| Agent | Bound to exactly one workspace. No global identity. No password.                      | One or more API keys, each exchangeable for a token. |
+
+An agent's API key proves it is _this_ agent in _this_ workspace, and nothing else. A leaked agent key cannot be used to reach any other workspace's data.
+
+## Workspace roles
+
+Every member carries a workspace-level role:
+
+| Role               | Intent                                                              |
+| ------------------ | ------------------------------------------------------------------- |
+| `WORKSPACE_OWNER`  | Runs the workspace. Sole authority over ownership-only operations.  |
+| `WORKSPACE_ADMIN`  | Administers the workspace without owner-only operations.            |
+| `WORKSPACE_USER`   | Participates without administrative reach.                          |
+
+These role strings appear in API responses verbatim.
+
+## Priority
+
+Layered on top of the role is a numeric **priority**: a small integer where lower numbers outrank higher numbers (`1` is the highest rank, `5` is the new-member default).
+
+Priority is the actual gate for many administrative operations — not the role alone — and it drives two reach rules:
+
+- **Administrative reach.** A higher-ranked admin can administer a lower-ranked admin. Two members can both hold `WORKSPACE_ADMIN`, but if one has `priority=1` and the other has `priority=3`, the priority-1 admin has reach over operations the priority-3 admin does not.
+- **Delegation reach.** A member can delegate a task to anyone whose priority is greater than or equal to their own (equal-or-lower rank). An agent at priority `5` cannot delegate to a human at priority `2`.
+
+When you build integrations that move work around, the priority of the acting member determines what's reachable.
+
+## Departments and teams
+
+Inside a workspace, work is organised hierarchically:
+
+- A **department** groups one or more teams under a single department **head**.
+- A **team** groups members who collaborate on a shared backlog.
+- A member belongs to **at most one team**, and (separately) can be the head of at most one department.
+
+This hierarchy is independent of workspace roles — a workspace admin can sit on any team, and a workspace user can be a team manager.
+
+### Team roles
+
+Within a team, each member carries a team role:
+
+| Team role | Intent                                                                                        |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `MANAGER` | Leads the team. Fulfils or rejects incoming cross-team requests. Highest team-level authority. |
+| `LEAD`    | Second-in-command. Same cross-team-request authority as the manager.                          |
+| `MEMBER`  | Regular contributor.                                                                          |
+
+There is **at most one `MANAGER` and at most one `LEAD` per team**. Promoting a member to `MANAGER` on a team that already has one auto-demotes the previous manager to `MEMBER` in the same operation — you never end up with two managers by racing two concurrent promotions. The same applies to `LEAD`.
+
+The platform surfaces this to operators as a confirm prompt ("team already has a manager — promote X and demote Y?"), so integrations that perform team-role promotions should be ready to handle that transition atomically rather than expecting two separate state changes.
+
+### Department head isolation
+
+A department's head is exactly one human member of the workspace. The head sits **above** the teams in the department rather than inside any one of them:
+
+- A member who is a department head has no team.
+- A member with a team cannot be promoted to head — they must leave the team first.
+- The platform handles the transition transactionally when you move a team-bound member into a head role, so you never observe an intermediate state where the member is both.
+
+Practical implication: when you read a member record, treating "department head" and "team member" as mutually exclusive states is safe.
+
+<Callout variant="note" title="Agents and team roles">
+  An agent member can hold any team role — including `MANAGER` and
+  `LEAD` — but cannot be a department head (heads are humans by
+  definition). The same one-manager / one-lead invariants apply to
+  agents as they do to humans.
+</Callout>
+
+## Audit log
+
+Every administrative operation in a workspace appends a row to an append-only **audit log**. The log is the canonical record of who did what — workspace renames, member role changes, department reshuffles, agent provisioning, key revocations, and so on.
+
+Visibility is **hierarchical**, following the workspace organisation:
+
+```
+workspace ⊃ department ⊃ team ⊃ member
+```
+
+What this means in practice:
+
+- A workspace owner sees every audit row in the workspace.
+- A higher-ranked admin sees rows scoped to the departments, teams, and members they oversee.
+- A lower-ranked admin sees only rows scoped to the teams they oversee directly (those they lead or whose department they head).
+- Ordinary members have no access to the audit endpoint — it is gated to workspace admins and above.
+
+Integrations that mirror audit activity into an external system (SIEM, compliance archive, internal dashboard) read the log through the audit endpoints. The hierarchy rule is enforced server-side, so the rows returned to a caller are always the subset that caller is entitled to see — your integration does not need to re-filter.

@@ -1,0 +1,425 @@
+# Tasks
+
+Endpoints under `/api/v1/tasks/*`. Seventeen routes covering the task lifecycle: listing and creation, status / blocking / priority mutations, comments, the activity stream, task relations, cross-team requests, and ratings.
+
+A task is the core unit of work an integrator interacts with. Every endpoint here returns or accepts the `TaskResponse` shape unless noted otherwise.
+
+## The `TaskResponse` shape
+
+```json
+{
+  "id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "created_by_id": "<uuid>",
+  "title": "Implement OAuth refresh handling",
+  "status": "IN_PROGRESS",
+  "priority": 3,
+  "seq": 142,
+  "public_id": "WORKSPACE-142",
+  "description": "…",
+  "assignee_id": "<uuid>",
+  "project_id": "<uuid>",
+  "team_id": "<uuid>",
+  "due_at": "2026-06-15T17:00:00Z",
+  "is_blocked": false,
+  "blocked_reason": null,
+  "created_at": "2026-05-20T09:00:00Z",
+  "updated_at": "2026-05-30T14:22:00Z"
+}
+```
+
+Fields that can be `null`: `description`, `assignee_id`, `project_id`, `team_id`, `due_at`, `blocked_reason`.
+
+The `public_id` is a stable human-readable identifier (workspace prefix + a per-workspace sequence) and is the form you use when surfacing a task to a person; for API calls, always use the UUID `id`.
+
+## Listing and creation
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks"
+  auth="Signed in"
+  summary="List tasks in the caller's workspace. Workspace owners and admins see everything; ordinary members see only tasks where they are the assignee (the assignee_id filter is forced server-side)."
+>
+  <p><strong>Query parameters:</strong></p>
+
+  <ul>
+    <li><code>status_filter</code> — one of the <code>TaskStatus</code> values (<code>PENDING</code>, <code>IN_PROGRESS</code>, <code>IN_REVIEW</code>, <code>DONE</code>, <code>CANCELLED</code>).</li>
+    <li><code>blocked_only</code> — boolean, default <code>false</code>; when <code>true</code>, only tasks with <code>is_blocked: true</code> are returned.</li>
+    <li><code>project_id</code>, <code>team_id</code>, <code>assignee_id</code> — UUID filters, all optional.</li>
+    <li><code>priority_min</code>, <code>priority_max</code> — integer range filter, both optional.</li>
+  </ul>
+
+  <p><strong>Response (200):</strong> a plain JSON array of <code>TaskResponse</code> objects. The endpoint is not paginated — for very large workspaces, filter aggressively.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks"
+  auth="Signed in"
+  summary="Create a new task. The workspace and creator are derived from the token — never supplied in the body."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "title": "<1-200 chars>",
+  "description": "<up to 20000 chars, optional>",
+  "priority": 0,
+  "assignee_id": "<uuid or null>",
+  "project_id": "<uuid or null>",
+  "team_id": "<uuid or null>",
+  "due_at": "<ISO 8601 or null>"
+}
+```
+
+  <p><strong>Response (201):</strong> the created <code>TaskResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>422</code> if any of <code>assignee_id</code>, <code>project_id</code>, or <code>team_id</code> point at a resource that doesn't exist in the caller's workspace; <code>403</code> if the resulting placement would violate a cross-team constraint.</p>
+</EndpointCard>
+
+## Single task
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks/{task_id}"
+  auth="Signed in"
+  summary="Fetch a single task with its task-relation buckets embedded. One round-trip gives you the task plus everything it blocks, is blocked by, mitigates, duplicates, and so on — no second call to /relations needed."
+>
+  <p><strong>Response (200):</strong> a <code>TaskDetailResponse</code> = <code>TaskResponse</code> + a <code>relations</code> object:</p>
+
+```json
+{
+  "...TaskResponse fields...": "",
+  "relations": {
+    "blocks":        [ { "relation_id": "<uuid>", "task_id": "<uuid>", "public_id": "...", "title": "...", "status": "PENDING", "is_blocked": false } ],
+    "blocked_by":    [ /* same shape */ ],
+    "mitigates":     [ /* … */ ],
+    "mitigated_by":  [ /* … */ ],
+    "duplicates":    [ /* … */ ],
+    "duplicated_by": [ /* … */ ],
+    "relates_to":    [ /* … */ ]
+  }
+}
+```
+
+  <p>The seven buckets are derived from the four stored relation types: <code>BLOCKS</code>, <code>MITIGATES</code>, <code>DUPLICATES</code> are directional (the inverse buckets are computed at read time), and <code>RELATES_TO</code> is symmetric.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist in the caller's workspace.</p>
+</EndpointCard>
+
+## Lifecycle mutations
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks/{task_id}/delegate"
+  auth="Signed in"
+  summary="Reassign the task to another workspace member. Subject to the delegation reach rule — see Concepts."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "member_id": "<uuid>" }
+```
+
+  <p><strong>Response (200):</strong> the updated <code>TaskResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist; <code>403</code> if the caller's priority does not permit delegating to the target member.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tasks/{task_id}/status"
+  auth="Signed in"
+  summary="Transition the task between the five canonical statuses. Optionally bump the cumulative tokens-spent counter on the same call — agents typically do this when marking DONE."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "status": "IN_REVIEW",
+  "tokens_used": 1240
+}
+```
+
+  <p><code>tokens_used</code> is optional (≥ 0); if present it adds to the task's running cumulative total.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>TaskResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tasks/{task_id}/links"
+  auth="Signed in"
+  summary="Move the task between projects and teams. Set a field to null to clear it; omit the field entirely to leave it untouched."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "project_id": "<uuid or null>",
+  "team_id":    "<uuid or null>"
+}
+```
+
+  <p><strong>Response (200):</strong> the updated <code>TaskResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist; <code>422</code> if the supplied project or team isn't in the workspace; <code>403</code> if the move would cross a team boundary the caller can't cross.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tasks/{task_id}/priority"
+  auth="Signed in"
+  summary="Adjust the task's priority. Range 1–10, lower numbers outrank higher (1 is most urgent). RBAC is stricter than the audience label suggests — see below."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "priority": 2 }
+```
+
+  <p><strong>Runtime RBAC:</strong> workspace owners and admins can edit any task's priority. A team's manager or the head of its department can edit priority on tasks the team owns. Anyone else gets <code>403</code>.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>TaskResponse</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist; <code>403</code> per the RBAC rule above.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/tasks/{task_id}/block"
+  auth="Signed in"
+  summary="Set or clear the orthogonal is_blocked flag. The task's status is untouched — a blocked task can still be PENDING or IN_PROGRESS."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "is_blocked": true,
+  "reason": "Waiting on infra team approval"
+}
+```
+
+  <p><code>reason</code> is required when blocking (max 2000 chars) and ignored when unblocking.</p>
+
+  <p><strong>Response (200):</strong> the updated <code>TaskResponse</code>.</p>
+
+  <p>Setting <code>is_blocked: true</code> emits a <code>BLOCKED</code> activity row; clearing it emits an <code>UNBLOCKED</code> activity row. See the activity stream below.</p>
+</EndpointCard>
+
+## Comments
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks/{task_id}/comments"
+  auth="Signed in"
+  summary="The task's comment thread, oldest first. Visible to anyone in the workspace."
+>
+  <p><strong>Response (200):</strong> a list of:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "task_id": "<uuid>",
+  "author_member_id": "<uuid or null>",
+  "author_name": "Alice",
+  "body": "Ran the test suite, 4 failures attached.",
+  "created_at": "2026-05-30T10:00:00Z"
+}
+```
+
+  <p><code>author_member_id</code> and <code>author_name</code> go <code>null</code> when the author has been deleted from the workspace; the body persists.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks/{task_id}/comments"
+  auth="Signed in"
+  summary="Append a comment. Author is the calling member; agents can post too. @-mentions in the body produce notifications for the mentioned members."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "body": "<1-20000 chars>" }
+```
+
+  <p><strong>Response (201):</strong> the created comment.</p>
+</EndpointCard>
+
+## Activity stream
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks/{task_id}/activity"
+  auth="Signed in"
+  summary="The append-only activity log for the task — every state change since creation. Activity entries only; comments are served from the /comments endpoint and merged client-side if you need a unified view."
+>
+  <p><strong>Response (200):</strong> a list of:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "task_id": "<uuid>",
+  "actor_member_id": "<uuid or null>",
+  "actor_name": "Alice",
+  "event_type": "STATUS_CHANGED",
+  "payload": { "from": "IN_PROGRESS", "to": "IN_REVIEW" },
+  "created_at": "2026-05-30T14:22:00Z"
+}
+```
+
+  <p>The <code>event_type</code> is one of the ten <code>TaskActivityType</code> values documented in <a href="/docs/features">Features</a>. The <code>payload</code> shape varies by event type.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task doesn't exist.</p>
+</EndpointCard>
+
+## Task relations
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks/{task_id}/relations"
+  auth="Signed in"
+  summary="The task's relations, grouped into the seven UI buckets. Identical to the relations object embedded in GET /tasks/{task_id} — fetch this endpoint when you only need the relations and not the full task."
+>
+  <p><strong>Response (200):</strong> the same <code>relations</code> object as <code>{'GET /tasks/{task_id}'}</code> returns embedded.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks/{task_id}/relations"
+  auth="Signed in"
+  summary="Create a directed relation from this task to another. BLOCKS, MITIGATES, and DUPLICATES are directional; RELATES_TO is symmetric."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "relation_type": "BLOCKS",
+  "target_task_id": "<uuid>"
+}
+```
+
+  <p><strong>Response (201):</strong> empty body. Re-fetch the task or call <code>{'GET /tasks/{task_id}/relations'}</code> to see the new state.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if either task is missing; <code>400</code> on a self-link (<code>{'task_id == target_task_id'}</code>); <code>409</code> if the same relation already exists.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="DELETE"
+  path="/api/v1/tasks/{task_id}/relations/{relation_id}"
+  auth="Signed in"
+  summary="Remove a relation."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the task or relation is missing.</p>
+</EndpointCard>
+
+## Cross-team requests
+
+A cross-team request is the way a member pulls work from another team. The standard endpoint auto-mints the target task and the dependency relation; see [Features → Cross-team requests](/docs/features) for the model.
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks/{task_id}/requests"
+  auth="Signed in"
+  summary="File a cross-team request anchored to this task. Mints the target task on the requested team immediately and creates the relation linking source and target (default BLOCKS) — no separate approval step."
+>
+  <p><strong>Caller eligibility:</strong> the calling member must be a workspace admin OR the source task's assignee OR the source task's creator.</p>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "requested_team_id": "<uuid>",
+  "suggested_title": "<1-200 chars>",
+  "suggested_description": "<up to 20000 chars, optional>",
+  "justification": "<up to 2000 chars, optional>",
+  "relation_type": "BLOCKS"
+}
+```
+
+  <p><code>relation_type</code> defaults to <code>BLOCKS</code> and can be any of the four <code>TaskRelationType</code> values.</p>
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "id": "<uuid>",
+  "source_task_id": "<uuid>",
+  "requested_team_id": "<uuid or null if team later deleted>",
+  "requester_member_id": "<uuid or null>",
+  "requester_name": "Alice",
+  "suggested_title": "...",
+  "suggested_description": "...",
+  "justification": "...",
+  "status": "FULFILLED",
+  "fulfilled_task_id": "<the newly-minted target task uuid>",
+  "reject_reason": null,
+  "resolver_member_id": "<same as requester for the auto-fulfil path>",
+  "resolver_name": "Alice",
+  "created_at": "...",
+  "resolved_at": "..."
+}
+```
+
+  <p>The request is filed as <code>FULFILLED</code> immediately and the target task is already created — there is no <code>PENDING</code> stage on this path.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the source task is missing; <code>422</code> if the requested team doesn't exist in the workspace; <code>403</code> if the caller doesn't meet the eligibility rule above.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/tasks/{task_id}/requests"
+  auth="Signed in"
+  summary="List the cross-team requests filed against this task."
+>
+  <p><strong>Response (200):</strong> a list of the same shape as the POST response above.</p>
+</EndpointCard>
+
+## Ratings
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/tasks/{task_id}/rate"
+  auth="Signed in"
+  summary="Rate a completed task. Creator-only, single-shot, DONE-state required."
+>
+  <p><strong>Runtime RBAC and preconditions:</strong></p>
+
+  <ul>
+    <li><strong>Creator-only.</strong> Only the member who created the task can rate it. <code>403</code> for anyone else.</li>
+    <li><strong>DONE-only.</strong> The task must be in <code>DONE</code>. <code>409</code> if it isn't.</li>
+    <li><strong>Single-shot.</strong> A task can be rated exactly once. <code>409</code> on the second attempt.</li>
+  </ul>
+
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "score": 85,
+  "feedback": "Clean implementation. Caught the edge case I missed in the spec."
+}
+```
+
+  <p><code>score</code> is an integer 0–100. <code>feedback</code> is optional, up to 10,000 chars.</p>
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "task_id": "<uuid>",
+  "rated_by_id": "<creator's member uuid>",
+  "rated_member_id": "<assignee's member uuid, or null if unassigned>",
+  "score": 85,
+  "feedback": "…",
+  "created_at": "…"
+}
+```
+
+  <p>Posting a rating also emits a <code>RATED</code> entry on the task's activity stream.</p>
+</EndpointCard>

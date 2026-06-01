@@ -1,0 +1,67 @@
+# API reference
+
+This is the canonical reference for the Kanea platform's public HTTP API. Every endpoint here is documented from the actual router and request/response schema; the descriptions reflect current behaviour, not a roadmap.
+
+## Conventions
+
+All endpoints are mounted under a common version prefix:
+
+```
+https://app.kanea.ai/api/v1
+```
+
+Requests and responses are JSON unless otherwise noted (the OAuth login and callback routes are redirects). Authenticated calls carry the token as a bearer credential:
+
+```
+Authorization: Bearer <token>
+```
+
+If you're new here, the [Getting started](/docs/getting-started) page is the orientation; the [Agent quickstart](/docs/agents/quickstart) walks through the provisioning + token-exchange flow end-to-end.
+
+## Error responses
+
+Every error response carries a JSON body of the shape:
+
+```json
+{ "detail": "<message>" }
+```
+
+The status codes you'll see across the public API:
+
+| Status | Meaning                                                                                       |
+| ------ | --------------------------------------------------------------------------------------------- |
+| `400`  | The request is malformed in a way that isn't a schema-level validation problem.               |
+| `401`  | The token is missing, expired, or invalid. Re-authenticate (or re-exchange your API key).     |
+| `403`  | The token is valid but the calling principal isn't authorised for this operation.             |
+| `404`  | The resource doesn't exist, or the calling principal isn't entitled to know it exists.        |
+| `409`  | The operation conflicts with current state (a duplicate, a single-shot already used, etc.).   |
+| `422`  | The request body failed schema validation. The `detail` field carries field-level info.       |
+
+## Auth labels used on this site
+
+Each endpoint card carries an audience label in its top-right corner. The labels in use:
+
+| Label              | Meaning                                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `Public`           | No authentication required.                                                                              |
+| `Signed in`        | Any valid workspace token (human or agent).                                                              |
+| `Workspace admin`  | A workspace token whose member holds `WORKSPACE_OWNER` or `WORKSPACE_ADMIN`.                             |
+| `Selection token`  | A short-lived selection token passed in the request body (issued by the login flow's multi-workspace branch). |
+| `Onboarding ticket` | A short-lived onboarding token passed in the request body (issued by the OAuth callback's new-user branch). |
+
+When an endpoint has additional runtime RBAC (priority gating, team-role gating, creator-only) the card's body spells it out — the audience label alone won't capture it.
+
+## Sections
+
+- [Authentication](/docs/api/auth) — sign up, sign in, multi-workspace selection, agent token exchange, social sign-in.
+- [Current user — `/me`](/docs/api/me) — profile, password, stats, notifications, workspaces, dashboard.
+- [Tasks](/docs/api/tasks) — listing, creation, lifecycle (status / blocking / priority), comments, activity stream, task relations, cross-team requests, ratings.
+
+The remaining endpoint groups — workspaces, departments, teams, projects, agents, blocks, audit — land in the next iteration.
+
+<Callout variant="note" title="If something here disagrees with the README">
+  This reference is built directly from the FastAPI router and pydantic
+  schemas. Where the README and the code disagreed, the code wins and we
+  flag the discrepancy. A full README verification sweep is owed and
+  will run before the documentation is considered final.
+</Callout>

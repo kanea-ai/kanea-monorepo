@@ -1,0 +1,233 @@
+# Current user — `/me`
+
+Endpoints under `/api/v1/me/*`. Eleven routes covering the signed-in caller's own data: profile, password, stats, notifications, workspace memberships, and the role-scoped dashboard payload. Every endpoint here requires a workspace token.
+
+## Profile
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me"
+  auth="Signed in"
+  summary="The calling principal's identity and active workspace membership. Drives the avatar menu and the profile page."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "user_id": "<uuid>",
+  "email": "you@example.com",
+  "full_name": "Your Name",
+  "has_password": true,
+  "oauth_provider": null,
+  "member_id": "<uuid>",
+  "workspace_id": "<uuid>",
+  "workspace_name": "Your Workspace",
+  "role": "WORKSPACE_OWNER",
+  "type": "HUMAN",
+  "team_id": null,
+  "team_role": null
+}
+```
+
+  <p><code>oauth_provider</code> is <code>null</code> for password accounts; <code>GOOGLE</code> or <code>GITHUB</code> for accounts created via social sign-in. <code>team_id</code> and <code>team_role</code> are <code>null</code> for members not currently on a team (including department heads).</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the underlying member record has been deleted out from under the token.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="PATCH"
+  path="/api/v1/me"
+  auth="Signed in"
+  summary="Self-edit of the user-side display name. The per-workspace member name follows the user unless an admin overrode it elsewhere."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "full_name": "<1-120 chars>" }
+```
+
+  <p><strong>Response (200):</strong> the same shape as <code>GET /me</code>.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/me/password"
+  auth="Signed in"
+  summary="Change the caller's own password. The current password must be supplied for verification — this is not a reset path."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "current_password": "<1-256 chars>",
+  "new_password": "<8-256 chars>"
+}
+```
+
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>400</code> if the current password is wrong — deliberately not <code>401</code>, since the token itself is valid; <code>404</code> if the underlying member record is gone.</p>
+</EndpointCard>
+
+## Stats
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me/stats"
+  auth="Signed in"
+  summary="The calling member's task stats. Aggregates across the current workspace only."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "assigned_count": 12,
+  "completed_count": 47,
+  "avg_resolution_seconds": 3214.5,
+  "last_activity_at": "2026-05-30T10:14:22Z",
+  "total_tokens_used": 184523
+}
+```
+
+  <p><code>avg_resolution_seconds</code> and <code>last_activity_at</code> are <code>null</code> for members with no completed work yet.</p>
+</EndpointCard>
+
+## Notifications
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me/notifications"
+  auth="Signed in"
+  summary="List notifications, newest first. Paginated; defaults return up to 50 rows."
+>
+  <p><strong>Query parameters:</strong> <code>limit</code> (1–100, default 50), <code>offset</code> (≥ 0, default 0).</p>
+
+  <p><strong>Response (200):</strong> a list of:</p>
+
+```json
+{
+  "id": "<uuid>",
+  "type": "MENTION_TASK",
+  "source_task_id": "<uuid>",
+  "source_comment_id": null,
+  "source_member_id": "<uuid>",
+  "source_member_name": "Alice",
+  "preview": "Alice mentioned you on …",
+  "read_at": null,
+  "created_at": "2026-05-30T10:00:00Z"
+}
+```
+
+  <p>The <code>preview</code> field is denormalised — the inbox stays readable even if the source task or comment was later deleted, in which case the corresponding <code>source_*_id</code> goes <code>null</code> but the preview survives.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me/notifications/unread-count"
+  auth="Signed in"
+  summary="Unread count for the sidebar bell. Cheap — call it often."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{ "unread": 3 }
+```
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/me/notifications/{notification_id}/read"
+  auth="Signed in"
+  summary="Mark a single notification as read."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> if the notification doesn't exist or doesn't belong to the caller.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/me/notifications/read-all"
+  auth="Signed in"
+  summary="Mark every notification for the caller as read in one operation."
+>
+  <p><strong>Response (204):</strong> no body.</p>
+</EndpointCard>
+
+## Workspaces
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me/workspaces"
+  auth="Signed in"
+  summary="The workspaces the calling user belongs to. Drives the sidebar workspace switcher and the post-login picker."
+>
+  <p><strong>Response (200):</strong> a list of:</p>
+
+```json
+{
+  "workspace_id": "<uuid>",
+  "name": "Your Workspace",
+  "role": "WORKSPACE_OWNER",
+  "member_id": "<uuid>",
+  "is_current": true
+}
+```
+
+  <p><code>is_current: true</code> marks the workspace the active token is bound to.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/me/workspaces"
+  auth="Signed in"
+  summary="Authenticated user creates a new workspace and lands in it as OWNER. The response includes a fresh access token bound to the new membership so the caller can swap context without re-signing-in."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "name": "<1-200 chars>" }
+```
+
+  <p><strong>Response (201):</strong></p>
+
+```json
+{
+  "workspace_id": "<uuid>",
+  "name": "Your New Workspace",
+  "member_id": "<uuid>",
+  "access_token": "<jwt bound to the new workspace>",
+  "expires_in": 3600
+}
+```
+
+  <p><strong>Failure modes:</strong> <code>409</code> if the caller already has a workspace with the same name.</p>
+</EndpointCard>
+
+## Dashboard
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/me/dashboard"
+  auth="Signed in"
+  summary="The role-scoped dashboard payload — a single task list scoped to what the caller is entitled to see, plus a scope descriptor. The client buckets it into status / blocked / recent-activity views however it likes."
+>
+  <p><strong>Response (200):</strong></p>
+
+```json
+{
+  "scope": {
+    "label": "Showing all",
+    "is_admin": true,
+    "member_id": null,
+    "team_id": null,
+    "project_count": 4
+  },
+  "tasks": [
+    { /* full TaskResponse — see /docs/api/tasks */ }
+  ]
+}
+```
+
+  <p>The server scopes the task list according to the caller's role and priority: an admin sees everything, a regular member sees only their own assignments, a team-leadership member sees their team's backlog. The <code>scope.label</code> field carries a human-readable summary you can show in the UI.</p>
+</EndpointCard>

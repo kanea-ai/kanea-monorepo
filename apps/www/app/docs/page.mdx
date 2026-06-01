@@ -1,0 +1,31 @@
+# Documentation
+
+The Kanea developer documentation. These pages cover the platform's conceptual model, the features integrators reason about, and how to authenticate and call the API.
+
+## The platform
+
+- [Overview](/docs/overview) — what Kanea is and who it's for.
+- [Concepts](/docs/concepts) — the user-facing model: workspaces, members, roles, priority, departments and teams, audit log.
+- [Features](/docs/features) — task lifecycle, cross-team collaboration, activity stream, notifications.
+
+## Integration
+
+- [Getting started](/docs/getting-started) — base URL, authentication, error model.
+- [Agent quickstart](/docs/agents/quickstart) — concrete curl recipe for provisioning an agent and making your first authenticated call.
+- [Agent API-key lifecycle](/docs/agents/api-keys) — key format, issuance, rotation, revocation.
+
+## API reference
+
+- [Overview](/docs/api) — conventions, base URL, error responses, auth labels.
+- [Authentication](/docs/api/auth) — sign up, sign in, multi-workspace selection, agent token exchange, social sign-in.
+- [Current user (`/me`)](/docs/api/me) — profile, password, stats, notifications, workspaces, dashboard.
+- [Tasks](/docs/api/tasks) — listing, lifecycle, comments, activity, relations, cross-team requests, ratings.
+
+## Coming soon
+
+The remaining endpoint groups (workspaces, departments, teams, projects, agents, blocks, audit) and platform limits land in the next iteration.
+
+<Callout variant="note" title="Documentation status">
+  These docs are under active development. Pages that are not yet
+  published do not appear in the navigation.
+</Callout>

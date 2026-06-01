@@ -1,0 +1,192 @@
+# Authentication
+
+Endpoints under `/api/v1/auth/*`. Eight routes covering self-service signup, password sign-in, multi-workspace selection, workspace switching, agent-token exchange, and the social sign-in flow.
+
+The standard authenticated response is the **token bundle**:
+
+```json
+{
+  "access_token": "<jwt>",
+  "token_type": "bearer",
+  "expires_in": 3600
+}
+```
+
+`expires_in` is in seconds. Workspace tokens (human) last an hour; agent tokens last 15 minutes (900 seconds).
+
+## Sign up + sign in
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/register"
+  auth="Public"
+  summary="Self-service signup — provisions a user, a workspace, and the inaugural OWNER member in one transaction. Returns the bundled access token; the caller is signed in to the new workspace."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "email": "you@example.com",
+  "password": "<8-256 chars>",
+  "full_name": "Your Name",
+  "workspace_name": "Your Workspace"
+}
+```
+
+  <p><strong>Response (201):</strong> token bundle.</p>
+
+  <p><strong>Failure modes:</strong> <code>409</code> if the email is already taken; <code>409</code> if a workspace with that name already exists for this user; <code>422</code> if the body fails schema validation.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/login"
+  auth="Public"
+  summary="Email + password login. The response is branched — one of three shapes depending on the account's state."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "email": "you@example.com", "password": "<password>" }
+```
+
+  <p><strong>Response (200):</strong> a <code>LoginResponse</code> with two boolean flags the caller switches on:</p>
+
+```json
+{
+  "requires_selection": false,
+  "requires_onboarding": false,
+  "access_token": "<jwt>",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "selection_token": null,
+  "workspaces": null,
+  "onboarding_token": null,
+  "suggested_workspace_name": null
+}
+```
+
+  <p>The three branches:</p>
+
+  <ul>
+    <li><strong>Single-workspace account.</strong> <code>requires_selection: false</code>, <code>requires_onboarding: false</code>, <code>access_token</code> populated. Use it.</li>
+    <li><strong>Multi-workspace account.</strong> <code>requires_selection: true</code>, <code>selection_token</code> + <code>workspaces</code> list populated. Show the user a picker, then call <code>POST /auth/select-workspace</code>.</li>
+    <li><strong>New SSO user.</strong> <code>requires_onboarding: true</code>, <code>onboarding_token</code> + <code>suggested_workspace_name</code> populated. Have the user pick a workspace name, then call <code>POST /auth/complete-oauth-onboarding</code>.</li>
+  </ul>
+
+  <p><strong>Failure modes:</strong> <code>401</code> for wrong credentials (response carries a <code>WWW-Authenticate: Bearer</code> header).</p>
+</EndpointCard>
+
+## Multi-workspace tokens
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/select-workspace"
+  auth="Selection token"
+  summary="Second leg of a multi-workspace login. Exchange the selection token plus a chosen workspace for a workspace-scoped access token."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "selection_token": "<from /auth/login>", "workspace_id": "<uuid>" }
+```
+
+  <p><strong>Response (200):</strong> token bundle bound to <code>workspace_id</code>.</p>
+
+  <p><strong>Failure modes:</strong> <code>401</code> if the selection token is expired or invalid, or if the caller has no membership in the target workspace.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/switch-workspace"
+  auth="Signed in"
+  summary="An already-signed-in caller reissues their token bound to a different workspace they belong to. This is the sidebar workspace switcher path; it is not the multi-workspace login picker."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "workspace_id": "<uuid>" }
+```
+
+  <p><strong>Response (200):</strong> token bundle bound to the new workspace.</p>
+
+  <p><strong>Failure modes:</strong> <code>401</code> if the caller has no active membership in the requested workspace.</p>
+</EndpointCard>
+
+## Agent token exchange
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/agent-token"
+  auth="Public"
+  summary="Exchange an agent API key for a short-lived agent token. Full lifecycle in the Agent API-key page."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{ "api_key": "kna_live_..." } // pragma: allowlist secret
+```
+
+  <p><strong>Response (200):</strong> token bundle. The minted token has the <code>agent</code> scope and a 900-second TTL.</p>
+
+  <p><strong>Failure modes:</strong> <code>401</code> for every failure (malformed key, wrong-environment key, unknown key, revoked key, deleted agent). The single generic error means an attacker can't distinguish the cause.</p>
+</EndpointCard>
+
+## Social sign-in
+
+The OAuth flow is a redirect-based, three-step exchange. The browser is the active client; backend integrations rarely use these endpoints directly.
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/auth/oauth/{provider}/login"
+  auth="Public"
+  summary="Begin the OAuth flow. Generates a CSRF state, stores it in an httpOnly cookie, and 302s to the provider's authorize URL."
+>
+  <p><strong>Path parameter:</strong> <code>provider</code> is one of <code>google</code> or <code>github</code> (case-insensitive in the URL).</p>
+
+  <p><strong>Response (302):</strong> redirect to the provider, with a <code>kanea_oauth_state</code> cookie set on the response (10-minute TTL, httpOnly, samesite-lax, secure).</p>
+
+  <p><strong>Failure modes:</strong> <code>404</code> for an unsupported provider; <code>503</code> if the provider is not configured on this deployment.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="GET"
+  path="/api/v1/auth/oauth/{provider}/callback"
+  auth="Public"
+  summary="OAuth callback. Verifies the CSRF state against the cookie, exchanges the authorization code, and 302s to the frontend with one of four payload shapes encoded as query parameters."
+>
+  <p><strong>Path parameter:</strong> <code>provider</code> (same as login).</p>
+
+  <p><strong>Query parameters:</strong> the provider's standard <code>code</code> and <code>state</code>, plus an optional <code>error</code> field for provider-side denials.</p>
+
+  <p><strong>Response (302):</strong> the redirect target carries one of:</p>
+
+  <ul>
+    <li><code>?token=&lt;jwt&gt;</code> — single-workspace SSO user; ready to use.</li>
+    <li><code>?selection_token=&lt;token&gt;&amp;workspaces=&lt;base64url JSON list&gt;</code> — multi-workspace SSO user; show a picker.</li>
+    <li><code>?onboarding_token=&lt;token&gt;&amp;suggested_workspace_name=&lt;name&gt;</code> — new SSO user; collect a workspace name and call the onboarding completion endpoint.</li>
+    <li><code>?error=&lt;message&gt;</code> — the provider returned an error or the user denied consent.</li>
+  </ul>
+
+  <p><strong>Failure modes:</strong> <code>400</code> if <code>code</code> or <code>state</code> is missing, or if the state doesn't match the cookie (CSRF); <code>404</code> for an unsupported provider; <code>502</code> if the provider rejects the code exchange.</p>
+</EndpointCard>
+
+<EndpointCard
+  method="POST"
+  path="/api/v1/auth/complete-oauth-onboarding"
+  auth="Onboarding ticket"
+  summary="Second leg of SSO signup. The caller supplies the workspace name the new user picked. Provisions a user, a workspace, and the OWNER member."
+>
+  <p><strong>Request body:</strong></p>
+
+```json
+{
+  "onboarding_token": "<from oauth callback>",
+  "workspace_name": "Your Workspace"
+}
+```
+
+  <p><strong>Response (201):</strong> token bundle bound to the new workspace.</p>
+
+  <p><strong>Failure modes:</strong> <code>401</code> if the onboarding token is expired or invalid; <code>409</code> if the workspace name is already taken.</p>
+</EndpointCard>

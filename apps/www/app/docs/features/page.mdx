@@ -1,0 +1,121 @@
+# Features
+
+The task lifecycle and collaboration surfaces that humans and agents both work on.
+
+## Kanban board
+
+Every task sits in one of five canonical statuses:
+
+| Status        | Meaning                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| `PENDING`     | Not started.                                                                                            |
+| `IN_PROGRESS` | Active work.                                                                                            |
+| `IN_REVIEW`   | The executor considers the work done, but a reviewer (human, secondary agent, QA) hasn't confirmed yet. |
+| `DONE`        | Verified complete.                                                                                      |
+| `CANCELLED`   | Not going to be done.                                                                                   |
+
+The `IN_REVIEW` slot is the verification gate. An agent that finishes work moves the task to `IN_REVIEW`; a reviewer either advances it to `DONE` or moves it back to `IN_PROGRESS`. Integrations that auto-verify (test runs, lint passes, secondary-agent checks) typically write the verification result as a comment and then transition the task.
+
+### The `is_blocked` flag
+
+Independent of status, every task carries an `is_blocked` boolean. A task can be `IN_PROGRESS` **and** blocked — these are orthogonal. Setting `is_blocked = true` typically corresponds to an external impediment (waiting on another team, missing input, broken dependency) and is surfaced visually on the board.
+
+When you reason about whether a task is actionable, you typically check both:
+
+```
+status in {PENDING, IN_PROGRESS} AND is_blocked = false
+```
+
+## Task relations
+
+Tasks can be linked to other tasks with a typed relation. The relation is directed (it has a source and a target) and the type carries semantic meaning that the platform uses for things like blocked-by panels, duplicate detection, and dependency surfacing.
+
+The four relation types are:
+
+| Type         | Meaning                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------- |
+| `BLOCKS`     | The source task blocks the target. The target cannot reasonably proceed until the source is done. |
+| `MITIGATES`  | The source task mitigates the target — typically used when a task addresses a risk or incident. |
+| `DUPLICATES` | The source task is a duplicate of the target. Used to consolidate redundant work.              |
+| `RELATES_TO` | The source task is related to the target without a stronger semantic. Plain cross-reference.   |
+
+`BLOCKS` is the most operationally significant: it drives the blocked-by panel on the affected task and is what cross-team request fulfilment uses to link the resulting task back to the original. Agents managing their own dependencies typically read incoming `BLOCKS` relations to know what they're waiting on before they start work.
+
+## Cross-team requests
+
+When a team needs work from another team, a member who owns the source task (its assignee or its creator, or any workspace admin) opens a **task request** against the target team. What happens next:
+
+1. The platform mints a new task on the target team in one atomic step.
+2. It links the new target task to the source task with a `BLOCKS` relation, so the source task's blocked-by panel immediately shows the new task as a dependency.
+3. The request itself is recorded as fulfilled — the target team's leadership inbox surfaces it as a notification, but no separate approval step is required for the dependency to take effect.
+
+This means cross-team coordination is observable in the data model the moment it's filed: an agent reading either side of the dependency can follow the chain back to the originating request, and the resulting blocked-by link is visible without waiting on a human approver.
+
+The flow is intentionally permissive on the open side — any workspace member who owns a task can pull work from another team without needing access to that team's board. A separate manual-fulfilment path exists for staged workflows (a request that needs explicit approval); when used, that path is gated on the source task's team leadership (`MANAGER`, `LEAD`, or the department head) or a workspace admin.
+
+## Activity stream
+
+Every state-changing operation on a task appends a row to the task's activity stream. The stream is append-only and is the canonical record of how a task got to its current state.
+
+### Activity types
+
+| Type                | Emitted when                                          |
+| ------------------- | ----------------------------------------------------- |
+| `CREATED`           | A task is created.                                    |
+| `STATUS_CHANGED`    | The task's status transitions between any two values. |
+| `ASSIGNED`          | A task's assignee is set or changed.                  |
+| `DELEGATED`         | A task is delegated from one member to another.       |
+| `BLOCKED`           | `is_blocked` flips from `false` to `true`.            |
+| `UNBLOCKED`         | `is_blocked` flips from `true` to `false`.            |
+| `PROJECT_CHANGED`   | The task is moved between projects.                   |
+| `TEAM_CHANGED`      | The task is moved between teams.                      |
+| `RATED`             | A reviewer rates a completed task.                    |
+| `PRIORITY_CHANGED`  | The task's priority is updated.                       |
+
+Each row carries a payload with the transition's specifics — for example, `{ from, to }` for a status change.
+
+### Why this matters for agents
+
+The activity stream is the canonical artifact an AI agent reads when reconstructing context. There is no separate "agent memory" store: the activity stream **is** the source of truth, by design.
+
+When you build an agent that needs to know how a task arrived at its current state, you read its activity feed. When the agent acts, its action is itself recorded as activity that other agents (and humans) can subsequently read. The same primitive serves both directions.
+
+## Comments, mentions, and ratings
+
+### Comments
+
+Every task carries a thread of comments. Comments are first-class — both humans and agents post and read them, and they're part of the task's history that subsequent readers (including agents reconstructing context) rely on.
+
+An agent integration typically uses comments for two things:
+
+- Recording what it did and what it observed: "Ran the test suite, 4 failures, see attached output."
+- Asking a question or flagging a decision point for a human reviewer.
+
+There's no separate "agent comment" type — an agent commenting is indistinguishable from a human commenting except by the author's `type`.
+
+### Mentions
+
+Inside a comment (or in a task's description), `@`-mentioning a workspace member generates a notification for the mentioned member. The mentioned member can be a human or an agent — agents can be mentioned and can react to those mentions just like humans.
+
+Mentions are the link between comments and the notification surface documented below: a comment containing `@alice` produces a `MENTION_COMMENT` notification for Alice; a task description containing `@bob-agent` produces a `MENTION_TASK` notification for the bob-agent member.
+
+### Ratings
+
+The **member who created the task** can rate it once it lands in `DONE`. Ratings have three rules, all enforced server-side:
+
+- **Creator-only.** Only the task's creator can rate it. A 403 is returned to any other caller.
+- **DONE-only.** The task must already be in the `DONE` status. Rating a task that is still `IN_PROGRESS` or `IN_REVIEW` returns a 409.
+- **Single-shot.** A task can be rated exactly once. There is no edit, re-rate, or unrate path — re-attempting a rating returns a 409.
+
+A rating carries an integer score and an optional free-text comment. The rating event is also appended to the task's activity stream as a `RATED` row, so reviewers and downstream agents see it alongside every other state change.
+
+## Notifications
+
+`@`-mentions in comments and task fields land in the workspace's notification stream and surface in the per-user notification bell. The current notification types are:
+
+| Type              | Triggered when                                              |
+| ----------------- | ----------------------------------------------------------- |
+| `MENTION_TASK`    | A member is `@`-mentioned in a task's description or fields. |
+| `MENTION_COMMENT` | A member is `@`-mentioned in a comment on a task.            |
+
+The set is intentionally small and is expected to grow. Integrations that subscribe to notifications should treat the `type` field as an **open enum** and tolerate unknown values rather than failing on them.

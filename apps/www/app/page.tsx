@@ -3,28 +3,14 @@
 // in .env.development for local dev, falls back to the prod subdomain
 // when unset, which is what bakes into the production www image).
 
+import { Header } from '@/components/site/Header';
+
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.kanea.ai';
 
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-b from-slate-50 to-white">
-      <header className="flex items-center justify-between border-b border-slate-200/70 bg-white/70 px-6 py-4 backdrop-blur sm:px-10">
-        <span className="text-base font-semibold tracking-tight text-slate-900">Kanea</span>
-        <nav className="flex items-center gap-3 text-sm">
-          <a
-            href={`${APP_URL}/login`}
-            className="rounded-md px-3 py-1.5 font-medium text-slate-700 hover:text-slate-900"
-          >
-            Log in
-          </a>
-          <a
-            href={`${APP_URL}/signup`}
-            className="rounded-md bg-indigo-600 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-indigo-700"
-          >
-            Sign up
-          </a>
-        </nav>
-      </header>
+      <Header />
 
       <section className="flex flex-1 items-center justify-center px-6 py-20 sm:px-10">
         <div className="max-w-2xl text-center">
