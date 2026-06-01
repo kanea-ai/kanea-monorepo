@@ -115,7 +115,11 @@ export function NotificationsBell({ align = 'right' }: NotificationsBellProps = 
 }
 
 function Row({ item, onOpen }: { item: NotificationItem; onOpen: () => void }) {
-  const verb = item.type === 'MENTION_COMMENT' ? 'commented' : 'mentioned you';
+  // CROSS_TEAM_REQUEST rows deep-link to the newly-minted target task
+  // (source_task_id on the notification points at the target task —
+  // where the recipient's triage action happens, the Delegate control
+  // is right there). For mention rows the existing behaviour stands.
+  const verb = describeNotificationVerb(item.type);
   const actor = item.source_member_name ?? 'Someone';
   const target = item.source_task_id ? `/tasks/${item.source_task_id}` : '#';
 
@@ -143,6 +147,17 @@ function Row({ item, onOpen }: { item: NotificationItem; onOpen: () => void }) {
       </Link>
     </li>
   );
+}
+
+function describeNotificationVerb(type: NotificationItem['type']): string {
+  switch (type) {
+    case 'MENTION_COMMENT':
+      return 'commented';
+    case 'MENTION_TASK':
+      return 'mentioned you';
+    case 'CROSS_TEAM_REQUEST':
+      return 'asked your team for work';
+  }
 }
 
 function BellIcon() {

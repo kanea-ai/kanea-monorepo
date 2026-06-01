@@ -35,6 +35,14 @@ export const MAX_PAGE_SIZE = 200;
 
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE' | 'CANCELLED';
 
+export interface CrossTeamOrigin {
+  request_id: string;
+  source_task_id: string;
+  source_task_public_id: string;
+  requester_member_id: string;
+  requester_name: string | null;
+}
+
 export interface Task {
   id: string;
   workspace_id: string;
@@ -56,6 +64,13 @@ export interface Task {
   // name from /tenants/members/{id}, which 403s for non-admin
   // cross-team lookups.
   assignee_name: string | null;
+  // Denormalised pointer to the cross-team request that birthed this
+  // task. Populated server-side when this task is the
+  // ``fulfilled_task_id`` of some TaskRequest; null for tasks created
+  // through the standard POST /tasks endpoint. Drives the "↗ from
+  // <source-public-id>" chip on the board card and the Cross-team
+  // origin row on the task detail side panel.
+  cross_team_origin: CrossTeamOrigin | null;
   // Workspace -> Project -> Task -> Team links. Both nullable: a
   // backlog task can live without a project, an unowned task without
   // a team. Server SET-NULLs them when the parent is deleted.
@@ -527,7 +542,7 @@ export interface CreateMyWorkspaceResponse {
   expires_in: number;
 }
 
-export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT';
+export type NotificationKind = 'MENTION_TASK' | 'MENTION_COMMENT' | 'CROSS_TEAM_REQUEST';
 
 export interface NotificationItem {
   id: string;
@@ -1069,9 +1084,25 @@ export interface UpdateTeamPayload {
 }
 
 export const requestsApi = {
-  listInbox: (teamId: string, status?: RequestStatus) => {
-    const qs = status ? `?status_filter=${status}` : '';
-    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs}`);
+  /** Team inbox of cross-team requests.
+   *  - direction='incoming' (default): requests where requested_team_id
+   *    is this team. The "someone asked us for work" view.
+   *  - direction='outgoing': requests anchored to a source task on this
+   *    team. The "what have we asked for?" view.
+   *
+   *  status defaults to unset (all statuses) because under the
+   *  auto-fulfilment lifecycle (issue #50 tracks the approval-gate
+   *  alternative) new requests are born FULFILLED, so a default
+   *  PENDING filter would silently hide everything. */
+  listInbox: (
+    teamId: string,
+    opts: { status?: RequestStatus; direction?: 'incoming' | 'outgoing' } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.status) params.set('status_filter', opts.status);
+    if (opts.direction) params.set('direction', opts.direction);
+    const qs = params.toString();
+    return request<TaskRequest[]>(`${V1}/teams/${teamId}/requests${qs ? `?${qs}` : ''}`);
   },
   fulfill: (requestId: string, payload: FulfillRequestPayload) =>
     request<TaskRequest>(`${V1}/requests/${requestId}/fulfill`, {

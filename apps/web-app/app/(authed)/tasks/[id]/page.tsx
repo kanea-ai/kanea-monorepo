@@ -237,6 +237,23 @@ function SidePanel({ task }: { task: Task }) {
           <Row label="Assignee">
             <DelegateControl task={task} members={members} />
           </Row>
+          {task.cross_team_origin ? (
+            <Row label="Cross-team origin">
+              <div className="flex flex-col items-end gap-0.5 text-[11px]">
+                <Link
+                  href={`/tasks/${task.cross_team_origin.source_task_id}`}
+                  className="text-indigo-700 underline-offset-2 hover:underline"
+                >
+                  ↗ {task.cross_team_origin.source_task_public_id}
+                </Link>
+                {task.cross_team_origin.requester_name ? (
+                  <span className="text-slate-500">
+                    Requested by {task.cross_team_origin.requester_name}
+                  </span>
+                ) : null}
+              </div>
+            </Row>
+          ) : null}
           <Row label="Project">
             <select
               value={task.project_id ?? ''}

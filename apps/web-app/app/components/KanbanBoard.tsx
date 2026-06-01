@@ -573,6 +573,11 @@ function Column({
                             Blocked
                           </p>
                         ) : null}
+                        {task.cross_team_origin ? (
+                          <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
+                            ↗ from {task.cross_team_origin.source_task_public_id}
+                          </p>
+                        ) : null}
                         {task.description ? (
                           <p className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">
                             {task.description}

@@ -732,8 +732,8 @@ export function useDeleteDepartment() {
 export const requestKeys = {
   all: ['requests'] as const satisfies QueryKey,
   forTask: (id: string) => ['requests', 'task', id] as const satisfies QueryKey,
-  inbox: (teamId: string, status?: RequestStatus) =>
-    ['requests', 'team', teamId, status ?? 'ALL'] as const satisfies QueryKey,
+  inbox: (teamId: string, status: RequestStatus | null, direction: 'incoming' | 'outgoing') =>
+    ['requests', 'team', teamId, direction, status ?? 'ALL'] as const satisfies QueryKey,
 };
 
 export function useTaskRequests(taskId: string) {
@@ -743,10 +743,20 @@ export function useTaskRequests(taskId: string) {
   });
 }
 
-export function useTeamInboxRequests(teamId: string, status: RequestStatus = 'PENDING') {
+export function useTeamInboxRequests(
+  teamId: string,
+  opts: { status?: RequestStatus; direction?: 'incoming' | 'outgoing' } = {},
+) {
+  // Direction defaults to 'incoming' — the meaningful inbox for a
+  // target team. ``status`` defaults to undefined (all statuses)
+  // because auto-fulfilled requests are born FULFILLED; a default
+  // 'PENDING' filter would silently hide everything that arrives via
+  // the standard create_request path.
+  const direction = opts.direction ?? 'incoming';
+  const status = opts.status;
   return useQuery<TaskRequest[]>({
-    queryKey: requestKeys.inbox(teamId, status),
-    queryFn: () => requestsApi.listInbox(teamId, status),
+    queryKey: requestKeys.inbox(teamId, status ?? null, direction),
+    queryFn: () => requestsApi.listInbox(teamId, { status, direction }),
     enabled: !!teamId,
     refetchInterval: 30_000,
   });

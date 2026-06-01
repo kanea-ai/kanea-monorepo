@@ -24,6 +24,7 @@ import {
   ApiError,
   type Department,
   type Member,
+  type RequestStatus,
   type TaskRequest,
   type TeamRecord,
   type TeamRole,
@@ -40,9 +41,7 @@ import {
   useCreateTeam,
   useDeleteTeam,
   useDepartments,
-  useFulfillRequest,
   useMembers,
-  useRejectRequest,
   useSetMemberTeam,
   useTeamInboxRequests,
   useTeams,
@@ -283,9 +282,12 @@ function TeamRow({
   department: Department | null;
   onOpen: () => void;
 }) {
-  // Pending cross-team-request count surfaces inline so admins know
-  // there's something to action without opening the drawer.
-  const { data: pending } = useTeamInboxRequests(team.id, 'PENDING');
+  // Incoming-request count surfaces inline so admins know there's
+  // something to look at without opening the drawer. Counts all
+  // statuses (the default) — under the auto-fulfilment model in
+  // production, new rows are born FULFILLED, so a 'PENDING' filter
+  // would silently show 0 even when there's real recent activity.
+  const { data: pending } = useTeamInboxRequests(team.id);
   const pendingCount = pending?.length ?? 0;
   return (
     <li>
@@ -1005,7 +1007,11 @@ function AddMembersSection({
 }
 
 function TeamInboxBlock({ teamId }: { teamId: string }) {
-  const { data: requests, isLoading } = useTeamInboxRequests(teamId, 'PENDING');
+  // Default direction is incoming (other teams asking us); show all
+  // statuses. The per-row badge surfaces FULFILLED vs PENDING vs
+  // REJECTED so the reader can scan recent activity without a chip
+  // filter (deferred to follow-up).
+  const { data: requests, isLoading } = useTeamInboxRequests(teamId);
   const count = requests?.length ?? 0;
 
   return (
@@ -1013,13 +1019,13 @@ function TeamInboxBlock({ teamId }: { teamId: string }) {
       <div className="mb-2 flex items-baseline justify-between">
         <h3 className="text-xs font-semibold text-slate-900">Cross-team requests</h3>
         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
-          {count} pending
+          {count} incoming
         </span>
       </div>
       {isLoading ? (
         <p className="text-[11px] text-slate-500">Loading…</p>
       ) : count === 0 ? (
-        <p className="text-[11px] italic text-slate-500">Nothing to action.</p>
+        <p className="text-[11px] italic text-slate-500">No incoming requests.</p>
       ) : (
         <ul className="space-y-2">
           {(requests ?? []).map((r) => (
@@ -1031,64 +1037,49 @@ function TeamInboxBlock({ teamId }: { teamId: string }) {
   );
 }
 
+function StatusBadge({ status }: { status: RequestStatus }) {
+  const tone =
+    status === 'PENDING'
+      ? 'bg-amber-100 text-amber-800'
+      : status === 'FULFILLED'
+        ? 'bg-emerald-100 text-emerald-800'
+        : 'bg-slate-200 text-slate-700';
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${tone}`}
+    >
+      {status}
+    </span>
+  );
+}
+
 function InboxRequestRow({ request }: { request: TaskRequest }) {
-  const fulfill = useFulfillRequest(request.id);
-  const reject = useRejectRequest(request.id);
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const onFulfill = async () => {
-    setError(null);
-    try {
-      await fulfill.mutateAsync({});
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to fulfill');
-    }
-  };
-
-  const onReject = async () => {
-    setError(null);
-    try {
-      await reject.mutateAsync({ reason: reason.trim() || null });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'Failed to reject');
-    }
-  };
-
+  // Pure visibility: title + status badge + requester + a link to the
+  // auto-minted task. No approval controls — under Model 1 the inbox's
+  // job is "make the request visible," not "approve it." Whether the
+  // target team should be able to reject after the fact is the product
+  // question tracked in #50; this branch deliberately does not
+  // prejudge that decision by shipping dormant approval UI.
   return (
     <li className="rounded-md border border-slate-200 bg-white p-2 text-[12px]">
-      <p className="font-medium text-slate-900">{request.suggested_title}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-medium text-slate-900">{request.suggested_title}</p>
+        <StatusBadge status={request.status} />
+      </div>
       {request.justification ? (
         <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-600">{request.justification}</p>
       ) : null}
-      <div className="mt-2 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onFulfill}
-          disabled={fulfill.isPending || reject.isPending}
-          className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
-          Accept
-        </button>
-        <input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Reject reason (optional)"
-          className="flex-1 rounded border border-slate-300 px-2 py-1 text-[11px]"
-        />
-        <button
-          type="button"
-          onClick={onReject}
-          disabled={fulfill.isPending || reject.isPending}
-          className="rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
-        >
-          Reject
-        </button>
-      </div>
-      {error ? (
-        <p role="alert" className="mt-1 text-[11px] text-red-600">
-          {error}
+      {request.requester_name ? (
+        <p className="mt-0.5 text-[10px] text-slate-500">From {request.requester_name}</p>
+      ) : null}
+      {request.fulfilled_task_id ? (
+        <p className="mt-1 text-[10px]">
+          <Link
+            href={`/tasks/${request.fulfilled_task_id}`}
+            className="text-indigo-700 underline-offset-2 hover:underline"
+          >
+            View the task →
+          </Link>
         </p>
       ) : null}
     </li>
