@@ -99,6 +99,17 @@ class SqlAlchemyTaskRequestRepository:
         return [_to_entity(row) for row in result.scalars().all()]
 
     async def create(self, request: TaskRequest) -> TaskRequest:
+        # NOTE: persist the resolution columns too. The auto-fulfil path
+        # (TaskService.create_request) mints the target task and hands us
+        # a TaskRequest already in the FULFILLED state, carrying
+        # fulfilled_task_id / resolver_member_id / resolved_at. Omitting
+        # them here stored the row as FULFILLED with a NULL
+        # fulfilled_task_id, which broke (a) the team-inbox link to the
+        # minted task and (b) the cross_team_origin marker resolution
+        # (it joins tasks on fulfilled_task_id). The manual fulfil path
+        # set these via mark_fulfilled(), so the gap only ever bit the
+        # auto-fulfil-on-create path — see the integration test
+        # test_task_request_repository.py.
         row = TaskRequestModel(
             id=request.id,
             source_task_id=request.source_task_id,
@@ -108,6 +119,10 @@ class SqlAlchemyTaskRequestRepository:
             suggested_description=request.suggested_description,
             justification=request.justification,
             status=request.status.value,
+            fulfilled_task_id=request.fulfilled_task_id,
+            reject_reason=request.reject_reason,
+            resolver_member_id=request.resolver_member_id,
+            resolved_at=request.resolved_at,
         )
         self._session.add(row)
         await self._session.flush()
