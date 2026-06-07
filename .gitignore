@@ -71,3 +71,8 @@ override.tf.json
 !**/.terraform.lock.hcl
 .claude/
 worktrees/
+
+# Cloud SQL Proxy binary — a downloaded local dev tool (~32 MB, platform-
+# specific). Re-fetch per machine with gcloud / the install script; never
+# commit it. Exact path so this can't mask anything else.
+apps/api/cloud-sql-proxy
