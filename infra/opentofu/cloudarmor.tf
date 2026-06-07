@@ -31,12 +31,39 @@ locals {
       expression  = "request.path.matches('^/api/v1/auth/oauth/[^/]+/callback')"
       src_ranges  = []
     },
+    # Scoped exclusion of the SQLi + RCE rules on authenticated API WRITE
+    # paths (POST/PATCH/PUT under /api/v1). Same rationale as the OAuth
+    # bypass above, applied to a different surface:
+    #
+    # Kanea is shared by humans and code-writing AI agents, so comment and
+    # task/description bodies LEGITIMATELY contain SQL and code. The sqli/
+    # rce rules match those bodies as injection payloads and deny(403) at
+    # the edge — a silent, content-dependent failure of the core
+    # collaboration interaction (issue #62).
+    #
+    # On these paths the edge sqli/rce body-screening protects nothing the
+    # app is actually exposed to, so it is pure false-positive surface:
+    #   - SQLi: every DB access is SQLAlchemy-parameterized; there is no raw
+    #     SQL string-building of request data anywhere in the repos. A SQL
+    #     string in a body is stored as text via a parameterized INSERT and
+    #     never executed.
+    #   - RCE: the app has no eval/exec/os.system/subprocess on request data.
+    #     Bodies are stored as text and rendered as React-escaped plain text
+    #     (no markdown/HTML parser, no dangerouslySetInnerHTML) — inert.
+    #   - Pydantic v2 types/validates every field before the service layer.
+    #
+    # Scope is deliberately minimal: ONLY sqli + rce, ONLY on /api/v1 write
+    # methods. xss / lfi / rfi / scanner / protocolattack stay armed on
+    # these paths; ALL rules stay armed on reads and on the entire non-API
+    # surface (marketing site, app/admin frontends, OAuth, static). If xss
+    # or lfi later false-positive on legitimate code, extend the same guard
+    # to them — on evidence, not preemptively.
     {
       kind        = "waf"
       action      = "deny(403)"
       priority    = 1000
-      description = "OWASP: SQL injection"
-      expression  = "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
+      description = "OWASP: SQL injection (excluded on /api/v1 writes — see comment + #62)"
+      expression  = "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1}) && !(request.path.startsWith('/api/v1/') && (request.method == 'POST' || request.method == 'PATCH' || request.method == 'PUT'))"
       src_ranges  = []
     },
     {
@@ -64,11 +91,12 @@ locals {
       src_ranges  = []
     },
     {
+      # Same scoped /api/v1-writes exclusion as the SQLi rule above (#62).
       kind        = "waf"
       action      = "deny(403)"
       priority    = 1400
-      description = "OWASP: remote code execution"
-      expression  = "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1})"
+      description = "OWASP: remote code execution (excluded on /api/v1 writes — see SQLi comment + #62)"
+      expression  = "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 1}) && !(request.path.startsWith('/api/v1/') && (request.method == 'POST' || request.method == 'PATCH' || request.method == 'PUT'))"
       src_ranges  = []
     },
     {
